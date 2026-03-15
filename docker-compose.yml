@@ -17,7 +17,7 @@ services:
       - "59000:3000"
     volumes:
       # 宿主机工作区整体挂载，路径与宿主机保持一致，claude 需要写权限
-      - /home/librae:/home/librae
+      - ${HOST_WORKSPACE:-/home/librae}:${CONTAINER_WORKSPACE:-/home/librae}
       # toolbar 配置等持久化数据，重建容器不丢失
       - nexus-data:/app/data
 

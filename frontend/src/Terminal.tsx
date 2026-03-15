@@ -5,6 +5,7 @@ import '@xterm/xterm/css/xterm.css'
 import Toolbar from './Toolbar'
 import SessionManager from './SessionManager'
 import TabBar from './TabBar'
+import WorkspaceSelector from './WorkspaceSelector'
 
 interface TmuxWindow {
   index: number
@@ -92,6 +93,7 @@ export default function Terminal({ token }: Props) {
   const [windows, setWindows] = useState<TmuxWindow[]>([])
   const [activeWindowIndex, setActiveWindowIndex] = useState(0)
   const [showSettings, setShowSettings] = useState(false)
+  const [showNewSession, setShowNewSession] = useState(false)
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme)
 
   const headers = { Authorization: `Bearer ${token}` }
@@ -154,12 +156,12 @@ export default function Terminal({ token }: Props) {
     }
   }
 
-  async function createSession() {
+  async function createSession(relPath: string, shellType: 'claude' | 'bash' = 'claude', profile?: string) {
     try {
       const r = await fetch('/api/sessions', {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rel_path: '~' }),
+        body: JSON.stringify({ rel_path: relPath, shell_type: shellType, profile }),
       })
       if (r.ok) {
         await fetchWindows()
@@ -167,6 +169,15 @@ export default function Terminal({ token }: Props) {
     } catch {
       // ignore
     }
+  }
+
+  function openNewSessionDialog() {
+    setShowNewSession(true)
+  }
+
+  function handleCreateSession(path: string, shellType: 'claude' | 'bash', profile?: string) {
+    setShowNewSession(false)
+    createSession(path, shellType, profile)
   }
 
   useEffect(() => {
@@ -365,7 +376,7 @@ export default function Terminal({ token }: Props) {
         activeIndex={activeWindowIndex}
         onSwitch={attachToWindow}
         onClose={closeWindow}
-        onAdd={createSession}
+        onAdd={openNewSessionDialog}
         onOpenSettings={() => setShowSettings(true)}
       />
       <div ref={containerRef} style={styles.terminal} />
@@ -381,6 +392,13 @@ export default function Terminal({ token }: Props) {
         <SessionManager
           token={token}
           onClose={() => setShowSettings(false)}
+        />
+      )}
+      {showNewSession && (
+        <WorkspaceSelector
+          token={token}
+          onClose={() => setShowNewSession(false)}
+          onConfirm={handleCreateSession}
         />
       )}
     </div>

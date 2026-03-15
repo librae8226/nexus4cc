@@ -41,7 +41,7 @@ const {
   JWT_SECRET,
   ACC_PASSWORD_HASH,
   TMUX_SESSION = 'main',
-  WORKSPACE_ROOT = '/workspace',
+  WORKSPACE_ROOT = '/home/librae',
   PORT = '3000',
 } = process.env;
 
@@ -82,21 +82,30 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // POST /api/sessions — 在 tmux 中创建新 window
-// body: { rel_path, profile?, command? }
-//   profile 优先：用 nexus-run-claude.sh 启动 claude（配置隔离 + 自动续接）
-//   否则使用 command（默认 sh）
+// body: { rel_path, shell_type?, profile? }
+//   shell_type: 'claude' | 'bash' (default: 'claude')
+//   当 shell_type='claude' 时，profile 可选，使用 nexus-run-claude.sh 启动
+//   当 shell_type='bash' 时，直接启动 bash
 app.post('/api/sessions', authMiddleware, (req, res) => {
-  const { rel_path, profile, command = 'sh' } = req.body || {};
+  const { rel_path, shell_type = 'claude', profile } = req.body || {};
   if (!rel_path) return res.status(400).json({ error: 'rel_path required' });
   const cwd = rel_path.startsWith('/') ? rel_path : `${WORKSPACE_ROOT}/${rel_path}`;
   const name = cwd.replace(/^\/+|\/+$/g, '').replace(/\//g, '-') || 'session';
-  const shellCmd = profile
-    ? `bash /app/nexus-run-claude.sh ${profile} ${cwd}`
-    : command;
+
+  let shellCmd;
+  if (shell_type === 'bash') {
+    shellCmd = 'bash';
+  } else {
+    // claude mode: use profile if specified, otherwise default claude without profile
+    shellCmd = profile
+      ? `bash /app/nexus-run-claude.sh ${profile} ${cwd}`
+      : `bash -c 'cd "${cwd}" && claude -c --dangerously-skip-permissions'`;
+  }
+
   const cmd = `tmux new-window -t ${TMUX_SESSION} -c "${cwd}" -n "${name}" "${shellCmd}"`;
   exec(cmd, (err) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json({ name, cwd, command: shellCmd, profile: profile || null });
+    res.json({ name, cwd, shell_type, profile: profile || null });
   });
 });
 
@@ -158,6 +167,20 @@ app.post('/api/toolbar-config', authMiddleware, (req, res) => {
   try {
     writeFileSync(TOOLBAR_CONFIG_FILE, JSON.stringify(req.body), 'utf8');
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/workspaces — 扫描 WORKSPACE_ROOT 下的子目录
+app.get('/api/workspaces', authMiddleware, (req, res) => {
+  try {
+    const entries = readdirSync(WORKSPACE_ROOT, { withFileTypes: true });
+    const dirs = entries
+      .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+      .map(e => ({ name: e.name, path: e.name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    res.json(dirs);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
