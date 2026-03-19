@@ -5,7 +5,7 @@ import * as pty from 'node-pty';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { createServer } from 'http';
-import { exec } from 'child_process';
+import { exec, spawn, execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync } from 'fs';
@@ -31,6 +31,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, 'data');
 const TOOLBAR_CONFIG_FILE = join(DATA_DIR, 'toolbar-config.json');
 const CONFIGS_DIR = join(DATA_DIR, 'configs');
+const TASKS_FILE = join(DATA_DIR, 'tasks.json');
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 if (!existsSync(CONFIGS_DIR)) mkdirSync(CONFIGS_DIR, { recursive: true });
 
@@ -236,6 +237,115 @@ app.post('/api/sessions/:id/attach', authMiddleware, (req, res) => {
   exec(`tmux select-window -t ${TMUX_SESSION}:${index}`, (err) => {
     if (err) return res.status(500).json({ error: err.message })
     res.json({ ok: true })
+  })
+})
+
+// ---- Tasks API (F-13: claude -p 非交互派发) ----
+
+function loadTasks() {
+  try {
+    if (existsSync(TASKS_FILE)) {
+      return JSON.parse(readFileSync(TASKS_FILE, 'utf8'))
+    }
+  } catch {}
+  return []
+}
+
+function saveTasks(tasks) {
+  writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2))
+}
+
+// GET /api/tasks — 获取任务历史
+app.get('/api/tasks', authMiddleware, (req, res) => {
+  const tasks = loadTasks()
+  res.json(tasks.slice(-50).reverse()) // 最近50条，倒序
+})
+
+// POST /api/tasks — 创建新任务，SSE 流式返回
+app.post('/api/tasks', authMiddleware, (req, res) => {
+  const { session_name, prompt, profile } = req.body || {}
+  if (!prompt) return res.status(400).json({ error: 'prompt required' })
+
+  // 找到 session 对应的 cwd
+  let cwd = WORKSPACE_ROOT
+  try {
+    const windows = execSync(`tmux list-windows -t ${TMUX_SESSION} -F "#I:#W:#{pane_current_path}"`).toString().trim().split('\n')
+    for (const line of windows) {
+      const [index, name, path] = line.split(':')
+      if (name === session_name) {
+        cwd = path
+        break
+      }
+    }
+  } catch {}
+
+  const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  const createdAt = new Date().toISOString()
+
+  // 设置 SSE headers
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+
+  // 代理环境变量
+  const proxyEnv = CLAUDE_PROXY ? { ALL_PROXY: CLAUDE_PROXY, HTTPS_PROXY: CLAUDE_PROXY, HTTP_PROXY: CLAUDE_PROXY } : {}
+
+  // 构建 claude 命令
+  const args = ['-p', prompt, '--dangerously-skip-permissions']
+  if (profile) args.push('--profile', profile)
+
+  const child = spawn('claude', args, {
+    cwd,
+    env: { ...process.env, ...proxyEnv },
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+
+  let output = ''
+  let errorOutput = ''
+
+  // 发送任务开始事件
+  res.write(`event: start\ndata: ${JSON.stringify({ taskId, session_name, prompt, createdAt })}\n\n`)
+
+  child.stdout.on('data', (data) => {
+    const chunk = data.toString()
+    output += chunk
+    res.write(`event: output\ndata: ${JSON.stringify({ chunk })}\n\n`)
+  })
+
+  child.stderr.on('data', (data) => {
+    const chunk = data.toString()
+    errorOutput += chunk
+    res.write(`event: error\ndata: ${JSON.stringify({ chunk })}\n\n`)
+  })
+
+  child.on('close', (code) => {
+    const status = code === 0 ? 'success' : 'error'
+    const completedAt = new Date().toISOString()
+
+    // 保存任务历史
+    const tasks = loadTasks()
+    tasks.push({
+      id: taskId,
+      session_name,
+      prompt: prompt.slice(0, 1000), // 截断保存
+      status,
+      output: output.slice(-10000), // 保存最后10K输出
+      error: errorOutput.slice(-1000),
+      createdAt,
+      completedAt,
+      exitCode: code
+    })
+    // 只保留最近 100 条
+    if (tasks.length > 100) tasks.shift()
+    saveTasks(tasks)
+
+    res.write(`event: done\ndata: ${JSON.stringify({ taskId, status, exitCode: code })}\n\n`)
+    res.end()
+  })
+
+  // 客户端断开时清理
+  req.on('close', () => {
+    if (!child.killed) child.kill()
   })
 })
 
