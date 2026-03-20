@@ -525,6 +525,18 @@ export default function Terminal({ token }: Props) {
     }
   }, [])
 
+  // 跟随系统深色/浅色模式切换（用户未手动设置时）
+  useEffect(() => {
+    const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
+    if (!mq) return
+    const handler = (e: MediaQueryListEvent) => {
+      if (localStorage.getItem(THEME_KEY)) return // user has manual override
+      setThemeMode(e.matches ? 'dark' : 'light')
+    }
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [])
+
   // CSS vars 独立于 xterm，组件 mount 即执行
   const applyCssVars = useCallback((mode: ThemeMode) => {
     const isDark = mode === 'dark'
