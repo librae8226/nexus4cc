@@ -23,9 +23,10 @@ interface Props {
   onSwitchSession?: (session: string) => void
   windowOutputs?: Record<number, { output: string; clients: number; idleMs: number; connected: boolean }>
   runningTaskCount?: number
+  position?: 'top' | 'bottom'
 }
 
-export default function TabBar({ windows, activeIndex, onSwitch, onClose, onAdd, onOpenSettings, onOpenTasks, onUpload, onRename, token, sessions, activeSession, onSwitchSession, windowOutputs: windowOutputsProp, runningTaskCount }: Props) {
+export default function TabBar({ windows, activeIndex, onSwitch, onClose, onAdd, onOpenSettings, onOpenTasks, onUpload, onRename, token, sessions, activeSession, onSwitchSession, windowOutputs: windowOutputsProp, runningTaskCount, position = 'top' }: Props) {
   const [menuIndex, setMenuIndex] = useState<number | null>(null)
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 })
   const [renameIndex, setRenameIndex] = useState<number | null>(null)
@@ -116,7 +117,11 @@ export default function TabBar({ windows, activeIndex, onSwitch, onClose, onAdd,
 
   return (
     <>
-      <div style={s.container}>
+      <div style={{
+        ...s.container,
+        borderBottom: position !== 'bottom' ? '1px solid var(--nexus-border)' : 'none',
+        borderTop: position === 'bottom' ? '1px solid var(--nexus-border)' : 'none',
+      }}>
         <div ref={scrollRef} style={s.tabs}>
           {windows.map(item => (
             <div
@@ -198,11 +203,12 @@ export default function TabBar({ windows, activeIndex, onSwitch, onClose, onAdd,
           <div style={{ position: 'fixed', inset: 0, zIndex: 200 }} onClick={() => setShowSessionPicker(false)} />
           <div style={{
             position: 'fixed',
-            top: 44,
+            top: position !== 'bottom' ? 44 : undefined,
+            bottom: position === 'bottom' ? 44 : undefined,
             right: 0,
             background: 'var(--nexus-menu-bg)',
             border: '1px solid var(--nexus-border)',
-            borderRadius: '0 0 0 8px',
+            borderRadius: position !== 'bottom' ? '0 0 0 8px' : '8px 0 0 0',
             zIndex: 201,
             minWidth: 160,
             boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
@@ -233,7 +239,8 @@ export default function TabBar({ windows, activeIndex, onSwitch, onClose, onAdd,
       {hoverIndex !== null && windowOutputs[hoverIndex]?.output && (
         <div style={{
           position: 'fixed',
-          top: 44, // TabBar 高度
+          top: position !== 'bottom' ? 44 : undefined,
+          bottom: position === 'bottom' ? 44 : undefined,
           left: '50%',
           transform: 'translateX(-50%)',
           background: 'var(--nexus-menu-bg)',

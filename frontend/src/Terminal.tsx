@@ -470,6 +470,7 @@ export default function Terminal({ token }: Props) {
   // F-18: 多 tmux session 支持
   const [tmuxSessions, setTmuxSessions] = useState<string[]>([])
   const [activeTmuxSession, setActiveTmuxSession] = useState<string>(() => localStorage.getItem('nexus_session') || 'main')
+  const [wsSessionKey, setWsSessionKey] = useState<string>(() => localStorage.getItem('nexus_session') || 'main')
   const activeTmuxSessionRef = useRef(activeTmuxSession)
   activeTmuxSessionRef.current = activeTmuxSession
 
@@ -737,9 +738,24 @@ export default function Terminal({ token }: Props) {
         body: JSON.stringify({ rel_path: relPath, shell_type: shellType, profile, session }),
       })
       if (r.ok) {
+        const { name: newWindowName } = await r.json()
         // 等待一小段时间让 tmux 创建窗口，然后刷新列表
         await new Promise(resolve => setTimeout(resolve, 300))
-        await fetchWindows()
+        // 获取更新后的窗口列表并切换到新窗口
+        const sessionNow = activeTmuxSessionRef.current
+        const listRes = await fetch(`/api/sessions?session=${encodeURIComponent(sessionNow)}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        if (listRes.ok) {
+          const d = await listRes.json()
+          const wins: TmuxWindow[] = d.windows ?? []
+          setWindows(wins)
+          // 找到新窗口并切换
+          const newWin = wins.find(w => w.name === newWindowName)
+          if (newWin) {
+            attachToWindow(newWin.index)
+          }
+        }
       }
     } catch {
       // ignore
@@ -757,7 +773,11 @@ export default function Terminal({ token }: Props) {
 
   function handleSwitchSession(newSession: string) {
     localStorage.setItem('nexus_session', newSession)
+    // 同步更新 ref，确保 fetchWindows 能立即读到新 session
+    activeTmuxSessionRef.current = newSession
     setActiveTmuxSession(newSession)
+    // 强制 WebSocket 重新连接（即使 activeWindowIndex 没变）
+    setWsSessionKey(newSession)
     // 重置窗口状态
     setWindows([])
     setActiveWindowIndex(0)
@@ -837,6 +857,7 @@ export default function Terminal({ token }: Props) {
       fontFamily: 'Menlo, Monaco, "Cascadia Code", "Fira Code", monospace',
       scrollback: 10000,
       cursorBlink: true,
+      cursorInactiveStyle: 'block',
       allowProposedApi: true,
     })
 
@@ -1104,7 +1125,7 @@ export default function Terminal({ token }: Props) {
       clearTimeout(loadingTimer)
       wsRef.current?.close()
     }
-  }, [token, activeWindowIndex])
+  }, [token, activeWindowIndex, wsSessionKey])
 
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     const val = e.target.value
@@ -1232,6 +1253,18 @@ export default function Terminal({ token }: Props) {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', minHeight: 0 }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', position: 'relative' }}>
+            <div ref={containerRef} style={styles.terminal} onClick={() => inputRef.current?.focus()} />
+            {isConnecting && (
+              <div style={styles.loadingOverlay}>
+                <div style={styles.spinner} />
+                <span style={styles.loadingText}>Connecting...</span>
+              </div>
+            )}
+            {isScrolledUp && (
+              <button style={styles.scrollBtn} onClick={scrollToBottom} title="滚到底部">↓</button>
+            )}
+          </div>
           <TabBar
             windows={windows}
             activeIndex={activeWindowIndex}
@@ -1248,19 +1281,8 @@ export default function Terminal({ token }: Props) {
             onSwitchSession={handleSwitchSession}
             windowOutputs={windowOutputs}
             runningTaskCount={runningTaskCount}
+            position="bottom"
           />
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', position: 'relative' }}>
-            <div ref={containerRef} style={styles.terminal} onClick={() => inputRef.current?.focus()} />
-            {isConnecting && (
-              <div style={styles.loadingOverlay}>
-                <div style={styles.spinner} />
-                <span style={styles.loadingText}>Connecting...</span>
-              </div>
-            )}
-            {isScrolledUp && (
-              <button style={styles.scrollBtn} onClick={scrollToBottom} title="滚到底部">↓</button>
-            )}
-          </div>
           <Toolbar {...toolbarProps} />
         </div>
       )}

@@ -379,7 +379,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
             onPointerDown={(e) => { e.preventDefault(); onToggleSelectionMode() }}
             title={selectionMode ? '退出复制模式' : '进入复制模式'}
           >
-            {selectionMode ? '完成' : '复制'}
+            {selectionMode ? '✓' : '⎘'}
           </button>
           {onOpenSettings && (
             <button style={{...s.iconBtnPC, color: tc.iconColor}} onPointerDown={(e) => { e.preventDefault(); onOpenSettings() }} title="设置">
@@ -446,7 +446,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
           onPointerDown={(e) => { e.preventDefault(); onToggleSelectionMode() }}
           title={selectionMode ? '退出复制模式' : '进入复制模式'}
         >
-          {selectionMode ? '完成' : '复制'}
+          {selectionMode ? '✓' : '⎘'}
         </button>
         {onOpenSettings && (
           <button style={{...s.iconBtn, color: tc.iconColor}} onPointerDown={(e) => { e.preventDefault(); onOpenSettings() }} title="设置">

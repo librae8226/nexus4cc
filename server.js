@@ -105,7 +105,17 @@ app.post('/api/sessions', authMiddleware, (req, res) => {
     shellCmd = 'zsh';
   } else {
     // claude mode: inject proxy env vars so claude can reach the API
-    const proxyEnv = CLAUDE_PROXY ? `ALL_PROXY=${CLAUDE_PROXY} HTTPS_PROXY=${CLAUDE_PROXY} HTTP_PROXY=${CLAUDE_PROXY}` : '';
+    // 合并宿主机代理变量和 CLAUDE_PROXY（CLAUDE_PROXY 优先级最高）
+    const proxyVars = {
+      ...(process.env.HTTP_PROXY  ? { HTTP_PROXY:  process.env.HTTP_PROXY  } : {}),
+      ...(process.env.HTTPS_PROXY ? { HTTPS_PROXY: process.env.HTTPS_PROXY } : {}),
+      ...(process.env.ALL_PROXY   ? { ALL_PROXY:   process.env.ALL_PROXY   } : {}),
+      ...(process.env.http_proxy  ? { http_proxy:  process.env.http_proxy  } : {}),
+      ...(process.env.https_proxy ? { https_proxy: process.env.https_proxy } : {}),
+      // CLAUDE_PROXY 覆盖所有
+      ...(CLAUDE_PROXY ? { ALL_PROXY: CLAUDE_PROXY, HTTPS_PROXY: CLAUDE_PROXY, HTTP_PROXY: CLAUDE_PROXY } : {}),
+    };
+    const proxyEnv = Object.entries(proxyVars).map(([k, v]) => `${k}=${v}`).join(' ');
     if (profile) {
       const runScript = join(__dirname, 'nexus-run-claude.sh');
       shellCmd = `${proxyEnv} bash ${runScript} ${profile} ${cwd}`;
