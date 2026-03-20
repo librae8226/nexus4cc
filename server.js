@@ -376,8 +376,10 @@ app.post('/api/tasks', authMiddleware, (req, res) => {
   try {
     const windows = execSync(`tmux list-windows -t ${TMUX_SESSION} -F "#I:#W:#{pane_current_path}"`).toString().trim().split('\n')
     for (const line of windows) {
-      const [index, name, path] = line.split(':')
-      if (name === session_name) {
+      const parts = line.split(':')
+      const name = parts[1]
+      const path = parts.slice(2).join(':')
+      if (name === session_name && path) {
         cwd = path
         break
       }
