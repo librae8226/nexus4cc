@@ -1,29 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-
-type WindowStatus = 'running' | 'waiting' | 'shell' | 'unknown'
-
-function getWindowStatus(outputData?: { output: string; idleMs: number; connected: boolean }): WindowStatus {
-  if (!outputData || !outputData.connected) return 'unknown'
-  const { output, idleMs } = outputData
-  // 最近有输出 → 运行中
-  if (idleMs < 4000) return 'running'
-  // 分析最后一行
-  const stripped = output.replace(/\x1b\[[0-9;]*[mGKHFJA-Za-z]/g, '').replace(/\r/g, '')
-  const lines = stripped.split('\n').map(l => l.trimEnd()).filter(l => l.length > 0)
-  const lastLine = lines[lines.length - 1] || ''
-  // Shell prompt 特征：含 $ 或 # 结尾，且有用户名/路径特征
-  if (/[\$#]\s*$/.test(lastLine)) return 'shell'
-  // Claude 等待输入（常见提示符样式）
-  if (/>\s*$/.test(lastLine) || /\?\s*$/.test(lastLine)) return 'waiting'
-  return 'waiting'
-}
-
-const STATUS_DOT: Record<WindowStatus, { color: string; title: string }> = {
-  running: { color: '#22c55e', title: '运行中' },
-  waiting: { color: '#f59e0b', title: '等待输入' },
-  shell:   { color: '#94a3b8', title: '已退出 shell' },
-  unknown: { color: '#475569', title: '未连接' },
-}
+import { getWindowStatus, STATUS_DOT_COLOR, STATUS_DOT_TITLE } from './windowStatus'
 
 interface TmuxWindow {
   index: number
@@ -189,8 +165,7 @@ export default function TabBar({ windows, activeIndex, onSwitch, onClose, onAdd,
               {item.index === activeIndex && <span style={s.activeIndicator} />}
               {(() => {
                 const status = getWindowStatus(windowOutputs[item.index])
-                const dot = STATUS_DOT[status]
-                return <span style={{ ...s.runningDot, background: dot.color }} title={dot.title} />
+                return <span style={{ ...s.runningDot, background: STATUS_DOT_COLOR[status] }} title={STATUS_DOT_TITLE[status]} />
               })()}
             </div>
           ))}
