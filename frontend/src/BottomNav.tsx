@@ -12,15 +12,19 @@ interface Props {
   onSwitch: (index: number) => void
   onClose: (index: number) => void
   onAdd: () => void
+  onRename?: (index: number, name: string) => void
 }
 
 const SWIPE_THRESHOLD = 40
 
-export default function BottomNav({ windows, activeIndex, onSwitch, onClose, onAdd }: Props) {
+export default function BottomNav({ windows, activeIndex, onSwitch, onClose, onAdd, onRename }: Props) {
   const [showSheet, setShowSheet] = useState(false)
   const [touchStartX, setTouchStartX] = useState(0)
   const [touchStartY, setTouchStartY] = useState(0)
   const [isSwiping, setIsSwiping] = useState(false)
+  const [menuWin, setMenuWin] = useState<TmuxWindow | null>(null)
+  const [renameWin, setRenameWin] = useState<TmuxWindow | null>(null)
+  const [renameValue, setRenameValue] = useState('')
   const sheetRef = useRef<HTMLDivElement>(null)
 
   // 找到当前 active window 在 windows 数组中的位置
@@ -79,7 +83,6 @@ export default function BottomNav({ windows, activeIndex, onSwitch, onClose, onA
   }
 
   // 长按显示操作菜单
-  const [menuWin, setMenuWin] = useState<TmuxWindow | null>(null)
   const longPressTimer = useRef<number | null>(null)
 
   const handleDotTouchStart = (win: TmuxWindow) => {
@@ -100,6 +103,20 @@ export default function BottomNav({ windows, activeIndex, onSwitch, onClose, onA
       if (longPressTimer.current) clearTimeout(longPressTimer.current)
     }
   }, [])
+
+  function startRename(win: TmuxWindow) {
+    setMenuWin(null)
+    setRenameWin(win)
+    setRenameValue(win.name)
+  }
+
+  function submitRename() {
+    if (renameWin && renameValue.trim() && onRename) {
+      onRename(renameWin.index, renameValue.trim())
+    }
+    setRenameWin(null)
+    setRenameValue('')
+  }
 
   return (
     <>
@@ -167,6 +184,7 @@ export default function BottomNav({ windows, activeIndex, onSwitch, onClose, onA
                 >
                   <span style={s.sheetItemNumber}>{pos + 1}</span>
                   <span style={s.sheetItemName}>{win.name}</span>
+                  {win.active && <span style={s.runningBadge}>运行中</span>}
                   {win.index === activeIndex && <span style={s.activeBadge}>当前</span>}
                 </div>
               ))}
@@ -181,8 +199,16 @@ export default function BottomNav({ windows, activeIndex, onSwitch, onClose, onA
           <div style={s.menuOverlay} onClick={() => setMenuWin(null)} />
           <div style={s.contextMenu}>
             <div style={s.menuTitle}>{menuWin.name}</div>
+            {onRename && (
+              <button
+                style={s.menuItem}
+                onClick={() => startRename(menuWin)}
+              >
+                <span style={s.menuIcon}>✎</span> 重命名
+              </button>
+            )}
             <button
-              style={s.menuItem}
+              style={s.menuItemClose}
               onClick={() => {
                 onClose(menuWin.index)
                 setMenuWin(null)
@@ -193,6 +219,30 @@ export default function BottomNav({ windows, activeIndex, onSwitch, onClose, onA
             <button style={s.menuItemCancel} onClick={() => setMenuWin(null)}>
               取消
             </button>
+          </div>
+        </>
+      )}
+
+      {/* 重命名对话框 */}
+      {renameWin && (
+        <>
+          <div style={s.menuOverlay} onClick={() => setRenameWin(null)} />
+          <div style={s.renameDialog}>
+            <div style={s.menuTitle}>重命名会话</div>
+            <input
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submitRename()
+                if (e.key === 'Escape') setRenameWin(null)
+              }}
+              style={s.renameInput}
+              autoFocus
+            />
+            <div style={s.renameActions}>
+              <button style={s.menuItemCancel} onClick={() => setRenameWin(null)}>取消</button>
+              <button style={s.renameConfirm} onClick={submitRename}>确定</button>
+            </div>
           </div>
         </>
       )}
@@ -358,6 +408,13 @@ const s: Record<string, React.CSSProperties> = {
     padding: '2px 8px',
     borderRadius: 4,
   },
+  runningBadge: {
+    background: '#22c55e',
+    color: '#fff',
+    fontSize: 10,
+    padding: '2px 8px',
+    borderRadius: 4,
+  },
   // 菜单样式
   menuOverlay: {
     position: 'fixed',
@@ -415,5 +472,57 @@ const s: Record<string, React.CSSProperties> = {
     textAlign: 'center',
     borderTop: '1px solid var(--nexus-border)',
     marginTop: 8,
+  },
+  menuItemClose: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    background: 'transparent',
+    border: 'none',
+    color: '#ef4444',
+    cursor: 'pointer',
+    fontSize: 15,
+    padding: '12px 20px',
+    width: '100%',
+    textAlign: 'left',
+  },
+  renameDialog: {
+    position: 'fixed',
+    left: '50%',
+    top: '50%',
+    transform: 'translate(-50%, -50%)',
+    background: 'var(--nexus-menu-bg)',
+    borderRadius: 12,
+    padding: '16px 0',
+    minWidth: 260,
+    boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+    border: '1px solid var(--nexus-border)',
+    zIndex: 251,
+  },
+  renameInput: {
+    background: 'var(--nexus-bg)',
+    border: '1px solid var(--nexus-border)',
+    borderRadius: 6,
+    color: 'var(--nexus-text)',
+    fontSize: 14,
+    padding: '8px 12px',
+    width: 'calc(100% - 40px)',
+    margin: '0 20px 12px',
+    outline: 'none',
+  },
+  renameActions: {
+    display: 'flex',
+    gap: 8,
+    padding: '0 20px',
+  },
+  renameConfirm: {
+    flex: 1,
+    background: '#3b82f6',
+    border: 'none',
+    borderRadius: 6,
+    color: '#fff',
+    cursor: 'pointer',
+    fontSize: 14,
+    padding: '10px 16px',
   },
 }

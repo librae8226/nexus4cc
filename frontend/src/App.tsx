@@ -48,7 +48,7 @@ export default function App() {
     <div style={styles.loginContainer}>
       <div style={styles.loginBox}>
         <h1 style={styles.title}>Nexus</h1>
-        <p style={styles.subtitle}>AI Agent 终端面板</p>
+        <p style={styles.subtitle}>AI Agent 终端面板 <span style={styles.version}>v1.6.1</span></p>
         <form onSubmit={handleLogin} style={styles.form}>
           <input
             type="password"
@@ -75,17 +75,18 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     width: '100%',
     height: '100%',
-    background: '#1a1a2e',
+    background: 'var(--nexus-bg)',
   },
   loginBox: {
-    background: '#16213e',
+    background: 'var(--nexus-bg2)',
     borderRadius: 12,
     padding: '40px 32px',
     minWidth: 320,
-    boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+    border: '1px solid var(--nexus-border)',
   },
   title: {
-    color: '#e2e8f0',
+    color: 'var(--nexus-text)',
     fontSize: 32,
     fontWeight: 700,
     textAlign: 'center',
@@ -93,7 +94,7 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: 4,
   },
   subtitle: {
-    color: '#64748b',
+    color: 'var(--nexus-text2)',
     fontSize: 14,
     textAlign: 'center',
     marginBottom: 32,
@@ -104,10 +105,10 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 12,
   },
   input: {
-    background: '#0f3460',
-    border: '1px solid #334155',
+    background: 'var(--nexus-bg)',
+    border: '1px solid var(--nexus-border)',
     borderRadius: 8,
-    color: '#e2e8f0',
+    color: 'var(--nexus-text)',
     fontSize: 16,
     padding: '12px 16px',
     outline: 'none',
@@ -127,5 +128,11 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     padding: '12px 24px',
     marginTop: 8,
+  },
+  version: {
+    color: 'var(--nexus-muted)',
+    fontSize: 12,
+    fontWeight: 400,
+    marginLeft: 6,
   },
 }

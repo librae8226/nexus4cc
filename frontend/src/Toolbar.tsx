@@ -154,6 +154,22 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
       } catch {
         // clipboard access denied or unavailable
       }
+    } else if (key.action === 'copyTerminal') {
+      try {
+        const term = _termRef.current
+        if (!term) return
+        const buffer = (term as any).buffer?.active
+        if (!buffer) return
+        const lines: string[] = []
+        for (let i = buffer.viewportY; i < buffer.length; i++) {
+          const line = buffer.getLine(i)
+          if (line) lines.push(line.translateToString(true))
+        }
+        const text = lines.join('\n')
+        await navigator.clipboard.writeText(text)
+      } catch {
+        // ignore
+      }
     } else {
       sendToWs(key.seq)
     }
