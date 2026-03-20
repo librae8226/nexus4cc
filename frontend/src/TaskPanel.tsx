@@ -234,6 +234,18 @@ export default function TaskPanel({ token, windows, activeWindowName, tmuxSessio
                 {activeTask.session_name} — {activeTask.status === 'running' ? '执行中' : activeTask.status}
                 {activeTask.source === 'telegram' ? ' · TG' : ''}
               </span>
+              <div style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
+                {activeTask.status !== 'running' && (
+                  <button style={s.iconAction} title="重新执行" onClick={() => {
+                    setPrompt(activeTask.prompt)
+                    setSelectedTask(null)
+                  }}>↩</button>
+                )}
+                <button style={s.iconAction} title="复制输出" onClick={() => {
+                  const text = activeTask.output || activeTask.error || ''
+                  if (text) navigator.clipboard.writeText(text).catch(() => {})
+                }}>⎘</button>
+              </div>
             </div>
             <pre style={s.output}>{activeTask.output || activeTask.error || (activeTask.status === 'running' ? '等待输出...' : '(无输出)')}</pre>
           </div>
@@ -460,5 +472,15 @@ const s: Record<string, React.CSSProperties> = {
     flexShrink: 0,
     lineHeight: 1,
     opacity: 0.6,
+  },
+  iconAction: {
+    background: 'transparent',
+    border: 'none',
+    color: 'var(--nexus-text2)',
+    cursor: 'pointer',
+    fontSize: 13,
+    padding: '2px 4px',
+    lineHeight: 1,
+    borderRadius: 4,
   },
 }
