@@ -879,6 +879,15 @@ export default function Terminal({ token }: Props) {
     term.open(container)
     fitAddon.fit()
 
+    // On mobile: suppress keyboard from xterm's internal textarea until user explicitly enables it
+    const xtermTextarea = term.textarea
+    if (xtermTextarea && window.innerWidth < 1024) {
+      xtermTextarea.inputMode = 'none'
+      xtermTextarea.addEventListener('touchstart', (e: TouchEvent) => {
+        if (!keyboardVisibleRef.current) e.preventDefault()
+      }, { passive: false })
+    }
+
     // Enable text selection - use auto for PC, but handle touch events for mobile scrolling
     const viewport = container.querySelector('.xterm-viewport') as HTMLElement
     if (viewport) {
@@ -1175,12 +1184,16 @@ export default function Terminal({ token }: Props) {
     return () => vv.removeEventListener('resize', handleResize)
   }, [isWidePC])
 
-  // Layer 2: Global focusin guard — immediately blur hidden input if keyboard should be hidden
+  // Layer 2: Global focusin guard — blur any input that triggers keyboard when it should be hidden
+  // This covers both our custom hidden input AND xterm's internal textarea
   useEffect(() => {
     if (isWidePC) return
     function handleFocusin(e: FocusEvent) {
-      if (e.target === inputRef.current && !keyboardVisibleRef.current) {
-        ;(e.target as HTMLElement).blur()
+      if (keyboardVisibleRef.current) return
+      const target = e.target as HTMLElement
+      const xtermTa = termRef.current?.textarea
+      if (target === inputRef.current || (xtermTa && target === xtermTa)) {
+        target.blur()
       }
     }
     document.addEventListener('focusin', handleFocusin)
@@ -1201,6 +1214,7 @@ export default function Terminal({ token }: Props) {
     onUpload: handleFileUpload,
     runningTaskCount,
     onToggleKeyboard: () => {
+      const xtermTa = termRef.current?.textarea
       if (keyboardVisibleRef.current) {
         keyboardVisibleRef.current = false
         setKeyboardVisible(false)
@@ -1208,6 +1222,7 @@ export default function Terminal({ token }: Props) {
           inputRef.current.inputMode = 'none'
           inputRef.current.blur()
         }
+        if (xtermTa) { xtermTa.inputMode = 'none'; xtermTa.blur() }
       } else {
         keyboardVisibleRef.current = true
         setKeyboardVisible(true)
@@ -1215,6 +1230,7 @@ export default function Terminal({ token }: Props) {
           inputRef.current.inputMode = 'text'
           inputRef.current.focus()
         }
+        if (xtermTa) xtermTa.inputMode = 'text'
       }
     },
     keyboardActive: keyboardVisible,
