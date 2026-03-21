@@ -975,7 +975,7 @@ export default function Terminal({ token }: Props) {
           const dy = Math.abs(e.touches[0].clientY - touchStartY)
           if (dx > 8 || dy > 8) swipeAxis = dx > dy ? 'horizontal' : 'vertical'
         }
-        if (swipeAxis !== 'vertical') return // horizontal swipe — don't scroll
+        if (swipeAxis === 'horizontal') return // clearly horizontal — don't scroll
         const y = e.touches[0].clientY
         const deltaY = touchLastY - y
         touchLastY = y
@@ -1266,7 +1266,7 @@ export default function Terminal({ token }: Props) {
       )}
       <input
         ref={inputRef}
-        style={styles.hiddenInput}
+        style={{ ...styles.hiddenInput, ...(!isWidePC && !keyboardVisible ? { display: 'none' } : {}) }}
         inputMode={!isWidePC && !keyboardVisible ? 'none' : undefined}
         readOnly={!isWidePC && !keyboardVisible}
         autoComplete="off"
