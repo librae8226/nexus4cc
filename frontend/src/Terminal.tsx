@@ -460,6 +460,7 @@ export default function Terminal({ token }: Props) {
   const overlayScrolledUpRef = useRef(false)
   const scrollbackOverlayRef = useRef<HTMLDivElement>(null)
   const triggerScrollbackRef = useRef<() => void>(() => {})
+  const drawerOpenTimeRef = useRef(0)
   const pausePollingRef = useRef(false)
   const activeWindowIndexRef = useRef(0)
   const windowsInitializedRef = useRef(false)
@@ -1004,6 +1005,9 @@ export default function Terminal({ token }: Props) {
       }
       const endX = e.changedTouches[0].clientX
       const endY = e.changedTouches[0].clientY
+      // Ignore if touch ended outside the terminal container (e.g. drifted to FAB/toolbar)
+      const rect = container.getBoundingClientRect()
+      if (endX < rect.left || endX > rect.right || endY < rect.top || endY > rect.bottom) return
       const dx = endX - touchStartX
       const dy = endY - touchStartY
       // Horizontal swipe (>60px, primarily horizontal) → switch window
@@ -1394,7 +1398,7 @@ export default function Terminal({ token }: Props) {
               <button style={styles.scrollBtn} onClick={scrollToBottom} title="滚到底部">↓</button>
             )}
           </div>
-          <SessionFAB onClick={() => setShowSessionDrawer(true)} windowCount={windows.length} />
+          <SessionFAB onClick={() => { drawerOpenTimeRef.current = Date.now(); setShowSessionDrawer(true) }} windowCount={windows.length} />
           <Toolbar {...toolbarProps} />
         </div>
       )}
@@ -1440,7 +1444,7 @@ export default function Terminal({ token }: Props) {
                       ) : (
                         <span
                           style={{ flex: 1, color: 'var(--nexus-text)', fontSize: 14, fontFamily: 'Menlo, Monaco, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
-                          onClick={() => { attachToWindow(win.index); setShowSessionDrawer(false); setDrawerMenuIndex(null) }}
+                          onPointerUp={(e) => { e.stopPropagation(); if (Date.now() - drawerOpenTimeRef.current < 350) return; attachToWindow(win.index); setShowSessionDrawer(false); setDrawerMenuIndex(null) }}
                         >{win.name}</span>
                       )}
                       {isActive && !isRenaming && <span style={{ color: '#3b82f6', fontSize: 13, fontWeight: 600, flexShrink: 0 }}>✓</span>}
