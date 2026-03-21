@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, RefObject } from 'react'
+import { createPortal } from 'react-dom'
 import type { Terminal } from '@xterm/xterm'
 import { KeyDef, ToolbarConfig, ALL_KEYS, FACTORY_CONFIG } from './toolbarDefaults'
 import type { ThemeMode } from './Terminal'
@@ -468,7 +469,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
             }}
             title="更多"
           >⚙</button>
-          {showQuickMenu && (
+          {showQuickMenu && createPortal(
             <>
               <div style={{ position: 'fixed', inset: 0, zIndex: 300 }} onPointerDown={() => setShowQuickMenu(false)} />
               <div style={{ position: 'fixed', bottom: menuPos.bottom, right: menuPos.right, background: 'var(--nexus-menu-bg)', border: '1px solid var(--nexus-border)', borderRadius: 8, padding: '4px 0', minWidth: 160, zIndex: 400, boxShadow: '0 -4px 16px rgba(0,0,0,0.3)' }}>
@@ -492,7 +493,8 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
                   </button>
                 )}
               </div>
-            </>
+            </>,
+            document.body
           )}
         </div>
         <button

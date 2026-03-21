@@ -920,20 +920,10 @@ export default function Terminal({ token }: Props) {
       }
     })
 
-    function getLineHeight(): number {
-      const core = (term as any)._core
-      const cellH = core?._renderService?.dimensions?.css?.cell?.height
-      if (cellH && cellH > 0) return cellH
-      const h = container.offsetHeight
-      if (h > 0 && term.rows > 0) return h / term.rows
-      return 20
-    }
-
     let touchStartX = 0
     let touchStartY = 0
     let touchLastY = 0
-    let touchScrollRemainder = 0
-    let cachedLineHeight = 20
+    let xtermViewport: HTMLElement | null = null
     let isPinching = false
     let pinchStartDist = 0
     let pinchStartFontSize = fontSize
@@ -956,9 +946,8 @@ export default function Terminal({ token }: Props) {
         touchStartX = e.touches[0].clientX
         touchStartY = e.touches[0].clientY
         touchLastY = e.touches[0].clientY
-        touchScrollRemainder = 0
         swipeAxis = null
-        cachedLineHeight = getLineHeight()
+        xtermViewport = container.querySelector('.xterm-viewport')
       }
     }
 
@@ -986,21 +975,11 @@ export default function Terminal({ token }: Props) {
         }
         if (swipeAxis === 'horizontal') return // clearly horizontal — don't scroll
         const y = e.touches[0].clientY
-        const deltaY = touchLastY - y
+        const deltaY = touchLastY - y  // positive = finger moved up = scroll toward older content
         touchLastY = y
-        touchScrollRemainder += deltaY
-        const lines = Math.trunc(touchScrollRemainder / cachedLineHeight)
-        if (lines !== 0) {
-          touchScrollRemainder -= lines * cachedLineHeight
-          // Positive deltaY = finger moved up = user wants older content (scroll up).
-          // term.scrollLines: negative = toward older (up), positive = toward newer (down).
-          term.scrollLines(-lines)
-          const buffer = (term as any).buffer?.active
-          if (buffer) {
-            const atBottom = buffer.viewportY >= buffer.baseY
-            userScrolledRef.current = !atBottom
-            window.dispatchEvent(new CustomEvent('nexus:atbottom', { detail: atBottom }))
-          }
+        if (xtermViewport && deltaY !== 0) {
+          xtermViewport.scrollTop -= deltaY
+          // userScrolledRef is updated via term.onScroll listener
         }
       }
     }
@@ -1282,9 +1261,7 @@ export default function Terminal({ token }: Props) {
       )}
       <input
         ref={inputRef}
-        style={{ ...styles.hiddenInput, ...(!isWidePC && !keyboardVisible ? { display: 'none' } : {}) }}
-        inputMode={!isWidePC && !keyboardVisible ? 'none' : undefined}
-        readOnly={!isWidePC && !keyboardVisible}
+        style={styles.hiddenInput}
         autoComplete="off"
         autoCorrect="off"
         autoCapitalize="off"
