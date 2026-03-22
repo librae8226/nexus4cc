@@ -166,8 +166,9 @@ export default function SessionFAB({ onClick, windowCount, topInset = 0, bottomI
         width: SIZE,
         height: SIZE,
         borderRadius: '50%',
-        background: 'var(--nexus-accent)',
-        boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
+        background: 'var(--nexus-bg2)',
+        border: '1px solid var(--nexus-border)',
+        boxShadow: '0 2px 12px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.12)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -178,15 +179,26 @@ export default function SessionFAB({ onClick, windowCount, topInset = 0, bottomI
         transition,
       }}
     >
-      <svg viewBox="0 0 24 24" fill="white" width="26" height="26">
-        <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
+      <svg viewBox="0 0 24 24" fill="none" stroke="var(--nexus-accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" width="26" height="26">
+        {/* 头部 */}
+        <rect x="4.5" y="8" width="15" height="11" rx="2.5" />
+        {/* 眼睛 */}
+        <circle cx="9" cy="13" r="1.5" fill="var(--nexus-accent)" stroke="none" />
+        <circle cx="15" cy="13" r="1.5" fill="var(--nexus-accent)" stroke="none" />
+        {/* 嘴巴 */}
+        <path d="M9.5 17h5" />
+        {/* 天线 */}
+        <path d="M12 8V5" />
+        <circle cx="12" cy="4.5" r="1" fill="var(--nexus-accent)" stroke="none" />
+        {/* 侧耳 */}
+        <path d="M4.5 12.5H2.5M19.5 12.5H21.5" />
       </svg>
       {!!windowCount && windowCount > 0 && (
         <span style={{
           position: 'absolute',
           top: -4,
           right: -4,
-          background: 'var(--nexus-success)',
+          background: 'var(--nexus-accent)',
           color: '#fff',
           borderRadius: '50%',
           width: 18,

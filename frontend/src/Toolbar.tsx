@@ -387,11 +387,6 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
           <button style={s.iconBtnPC} onPointerDown={(e) => { e.preventDefault(); onToggleTheme() }}>
             <Icon name={themeMode === 'dark' ? 'sun' : 'moon'} size={18} />
           </button>
-          {onOpenSettings && (
-            <button style={s.iconBtnPC} onPointerDown={(e) => { e.preventDefault(); onOpenSettings() }} title="设置">
-              <Icon name="settings" size={18} />
-            </button>
-          )}
           {/* 固定键：宽屏折叠时隐藏，仅展开时显示 */}
           {(!isWidePC || !collapsed) && (
             <div style={s.pinnedRowPC}>
@@ -409,6 +404,11 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
                 )
               })}
             </div>
+          )}
+          {onOpenSettings && (
+            <button style={{ ...s.iconBtnPC, marginLeft: 'auto' }} onPointerDown={(e) => { e.preventDefault(); onOpenSettings() }} title="设置">
+              <Icon name="settings" size={18} />
+            </button>
           )}
         </div>
         {/* 展开区：非折叠时显示第二行 */}
@@ -444,7 +444,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
           <Icon name={collapsed ? 'chevronUp' : 'chevronDown'} size={18} />
         </button>
         {/* quick menu */}
-        <div style={{ position: 'relative' }}>
+        <div style={{ position: 'relative', marginLeft: 'auto' }}>
           <button
             ref={menuBtnRef}
             style={s.iconBtn}
