@@ -241,7 +241,7 @@ const s: Record<string, React.CSSProperties> = {
 
   select: { background: 'var(--nexus-bg2)', border: '1px solid var(--nexus-border)', borderRadius: 6, color: 'var(--nexus-text)', fontSize: 14, padding: '8px 10px', outline: 'none', width: '100%', boxSizing: 'border-box' as const },
   hint: { color: 'var(--nexus-muted)', fontSize: 11, marginBottom: 10, lineHeight: 1.6 },
-  code: { background: 'var(--nexus-bg2)', borderRadius: 3, padding: '1px 4px', fontFamily: 'monospace', fontSize: 10, color: 'var(--nexus-accent)' },
+  code: { background: 'var(--nexus-bg2)', borderRadius: 3, padding: '1px 4px', fontFamily: 'Menlo, Monaco, "Cascadia Code", "Fira Code", monospace', fontSize: 10, color: 'var(--nexus-accent)' },
   createBtn: { background: 'var(--nexus-accent)', border: 'none', borderRadius: 6, color: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 600, padding: '10px 20px', width: '100%' },
   createBtnDisabled: { opacity: 0.5, cursor: 'not-allowed' },
   logoutBtn: { background: 'transparent', border: '1px solid var(--nexus-border)', borderRadius: 6, color: 'var(--nexus-text2)', cursor: 'pointer', fontSize: 14, padding: '10px 20px', width: '100%' },

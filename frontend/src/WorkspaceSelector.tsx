@@ -290,7 +290,7 @@ const s: Record<string, React.CSSProperties> = {
   section: { padding: '12px 16px', borderBottom: '1px solid var(--nexus-border)' },
   sectionHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
   sectionTitle: { fontSize: 11, color: 'var(--nexus-text2)', letterSpacing: 0.5, textTransform: 'uppercase' as const, marginBottom: 0 },
-  selectedPath: { fontSize: 14, color: 'var(--nexus-accent)', fontFamily: 'monospace', padding: '8px 12px', background: 'var(--nexus-bg2)', borderRadius: 6, wordBreak: 'break-all' as const },
+  selectedPath: { fontSize: 14, color: 'var(--nexus-accent)', fontFamily: 'Menlo, Monaco, "Cascadia Code", "Fira Code", monospace', padding: '8px 12px', background: 'var(--nexus-bg2)', borderRadius: 6, wordBreak: 'break-all' as const },
   refreshBtn: { background: 'transparent', border: '1px solid var(--nexus-border)', borderRadius: 4, color: 'var(--nexus-text2)', cursor: 'pointer', fontSize: 11, padding: '2px 8px', flexShrink: 0 },
   errorMsg: { color: 'var(--nexus-error)', fontSize: 12, marginBottom: 8 },
   emptyMsg: { color: 'var(--nexus-muted)', fontSize: 13, padding: '8px 0' },
@@ -309,7 +309,7 @@ const s: Record<string, React.CSSProperties> = {
 
   // 浏览器路径行
   browsePathRow: { display: 'flex', alignItems: 'center', gap: 8 },
-  browseCurrent: { fontSize: 11, color: 'var(--nexus-accent)', fontFamily: 'monospace', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
+  browseCurrent: { fontSize: 11, color: 'var(--nexus-accent)', fontFamily: 'Menlo, Monaco, "Cascadia Code", "Fira Code", monospace', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
 
   // 工作区列表
   workspaceList: { display: 'flex', flexDirection: 'column' as const, gap: 2 },

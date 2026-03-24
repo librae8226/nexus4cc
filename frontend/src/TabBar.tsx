@@ -223,7 +223,7 @@ export default function TabBar({ windows, activeIndex, onSwitch, onClose, onAdd,
                   background: sess === activeSession ? 'var(--nexus-tab-active)' : 'transparent',
                   color: sess === activeSession ? 'var(--nexus-text)' : 'var(--nexus-text2)',
                   fontSize: 14,
-                  fontFamily: 'Menlo, Monaco, monospace',
+                  fontFamily: 'Menlo, Monaco, "Cascadia Code", "Fira Code", monospace',
                   borderBottom: '1px solid var(--nexus-border)',
                 }}
                 onClick={() => {
@@ -263,7 +263,7 @@ export default function TabBar({ windows, activeIndex, onSwitch, onClose, onAdd,
           <pre style={{
             color: 'var(--nexus-text)',
             fontSize: 12,
-            fontFamily: 'Menlo, Monaco, monospace',
+            fontFamily: 'Menlo, Monaco, "Cascadia Code", "Fira Code", monospace',
             margin: 0,
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
