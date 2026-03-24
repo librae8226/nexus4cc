@@ -3,7 +3,7 @@ export interface KeyDef {
   label: string
   seq: string
   desc: string
-  action?: 'scrollToBottom' | 'pasteClipboard' | 'copyTerminal'
+  action?: 'scrollToBottom' | 'pasteClipboard' | 'copyTerminal' | 'fit'
 }
 
 export interface ToolbarConfig {
@@ -45,6 +45,7 @@ export const ALL_KEYS: KeyDef[] = [
   { id: 'ctrl-v',     label: '^V',    seq: '',         desc: '粘贴剪贴板图片', action: 'pasteClipboard' },
   { id: 'scroll-btm', label: '↓↓',   seq: '',         desc: '滚动到底部',     action: 'scrollToBottom' },
   { id: 'copy-term',  label: '📋',    seq: '',         desc: '复制终端内容',   action: 'copyTerminal' },
+  { id: 'fit',        label: '⟳',    seq: '',         desc: '重新适配终端大小', action: 'fit' },
   { id: 'backspace',  label: '⌫',    seq: '\x7f',     desc: '退格删除' },
 ]
 
@@ -52,7 +53,7 @@ export const FACTORY_PINNED = ['esc', 'tab', 'ctrl-c', 'up', 'down', 'left', 'ri
 export const FACTORY_EXPANDED = [
   'ctrl-d', 'ctrl-u', 'ctrl-k', 'ctrl-y', 'ctrl-a', 'ctrl-z',
   'ctrl-b', 'ctrl-o', 'ctrl-t', 'ctrl-f', 'ctrl-g', 'ctrl-j', 'shift-tab',
-  'alt-b', 'alt-f', 'slash', 'bang', 'at', 'ctrl-v', 'scroll-btm', 'copy-term',
+  'alt-b', 'alt-f', 'slash', 'bang', 'at', 'ctrl-v', 'scroll-btm', 'copy-term', 'fit',
 ]
 
 export const FACTORY_CONFIG: ToolbarConfig = {

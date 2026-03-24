@@ -207,21 +207,6 @@ app.post('/api/toolbar-config', authMiddleware, (req, res) => {
   }
 });
 
-// GET /api/workspaces — 扫描 WORKSPACE_ROOT 下的子目录
-app.get('/api/workspaces', authMiddleware, (req, res) => {
-  try {
-    const entries = readdirSync(WORKSPACE_ROOT, { withFileTypes: true });
-    const dirs = entries
-      .filter(e => e.isDirectory() && !e.name.startsWith('.'))
-      .map(e => ({ name: e.name, path: e.name }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-    res.json(dirs);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/browse?path=<path> — 浏览目录内容
 app.get('/api/browse', authMiddleware, (req, res) => {
   try {
     let p = req.query.path || WORKSPACE_ROOT
@@ -935,14 +920,12 @@ wss.on('connection', (ws, req) => {
       const data = JSON.parse(str);
       if (data && data.type === 'resize' && data.cols && data.rows) {
         isResize = true;
-        ent.clientSizes.set(ws, { cols: Number(data.cols), rows: Number(data.rows) });
-        // Use minimum size across all connected clients to avoid clipping
-        let minCols = Number(data.cols), minRows = Number(data.rows);
-        for (const [, size] of ent.clientSizes) {
-          if (size.cols < minCols) minCols = size.cols;
-          if (size.rows < minRows) minRows = size.rows;
-        }
-        ent.pty.resize(Math.max(minCols, 10), Math.max(minRows, 5));
+        const newCols = Number(data.cols);
+        const newRows = Number(data.rows);
+        ent.clientSizes.set(ws, { cols: newCols, rows: newRows });
+        // 直接使用当前客户端的尺寸，而不是所有客户端的最小值
+        // 避免多个客户端/窗口切换时的尺寸混乱
+        ent.pty.resize(Math.max(newCols, 10), Math.max(newRows, 5));
       }
     } catch { /* not JSON — fall through to pty.write */ }
     // Write for all non-resize messages. Previously only the catch branch wrote,

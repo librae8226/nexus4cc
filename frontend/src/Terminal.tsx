@@ -388,7 +388,6 @@ export default function Terminal({ token }: Props) {
   const [scrollbackLoading, setScrollbackLoading] = useState(false)
   const showScrollbackRef = useRef(false)
   const swipeUpAccumRef = useRef(0)
-  const overlayScrolledUpRef = useRef(false)
   const scrollbackOverlayRef = useRef<HTMLDivElement>(null)
   const triggerScrollbackRef = useRef<() => void>(() => {})
   const pausePollingRef = useRef(false)
@@ -1294,7 +1293,6 @@ export default function Terminal({ token }: Props) {
 
   function closeScrollback() {
     showScrollbackRef.current = false
-    overlayScrolledUpRef.current = false
     setShowScrollback(false)
     setScrollbackContent('')
   }
@@ -1302,9 +1300,7 @@ export default function Terminal({ token }: Props) {
   function handleOverlayScroll(e: React.UIEvent<HTMLDivElement>) {
     const el = e.currentTarget
     const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 30
-    if (!atBottom) {
-      overlayScrolledUpRef.current = true
-    } else if (overlayScrolledUpRef.current) {
+    if (atBottom) {
       closeScrollback()
     }
   }
@@ -1312,7 +1308,6 @@ export default function Terminal({ token }: Props) {
   async function fetchScrollback() {
     if (showScrollbackRef.current) return // already showing
     showScrollbackRef.current = true
-    overlayScrolledUpRef.current = false
     swipeUpAccumRef.current = 0
     setScrollbackLoading(true)
     setShowScrollback(true)
@@ -1332,7 +1327,9 @@ export default function Terminal({ token }: Props) {
 
   useEffect(() => {
     if (scrollbackContent && scrollbackOverlayRef.current) {
-      scrollbackOverlayRef.current.scrollTop = scrollbackOverlayRef.current.scrollHeight
+      // 初始滚动到距离底部 50px，避免立即触发 atBottom 检测
+      const el = scrollbackOverlayRef.current
+      el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - 50)
     }
   }, [scrollbackContent])
 

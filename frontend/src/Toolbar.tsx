@@ -19,6 +19,7 @@ interface Props {
   onOpenTasks?: () => void
   onUpload?: () => void
   onUploadFile?: (file: File) => void
+  onFitTerminal?: () => void
   runningTaskCount?: number
   /** When true: renders as a compact sidebar section (no theme/settings, flex-wrap key grid) */
   embedded?: boolean
@@ -64,7 +65,7 @@ interface DragState {
 
 const ITEM_HEIGHT = 48 // px，每行编辑项高度
 
-export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _termRef, themeMode, onToggleTheme, onOpenSettings, onOpenTasks, onUploadFile, runningTaskCount, embedded }: Props) {
+export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _termRef, themeMode, onToggleTheme, onOpenSettings, onOpenTasks, onUploadFile, onFitTerminal, runningTaskCount, embedded }: Props) {
   const [config, setConfig]           = useState<ToolbarConfig>(loadConfig)
   const [collapsed, setCollapsed]     = useState(() => {
     const saved = localStorage.getItem(COLLAPSED_KEY)
@@ -190,6 +191,8 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
         if (handled) return
       }
       setShowPasteBox(true)
+    } else if (key.action === 'fit') {
+      onFitTerminal?.()
     } else if (key.action === 'copyTerminal') {
       try {
         const term = _termRef.current
