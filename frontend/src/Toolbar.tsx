@@ -512,9 +512,6 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
       <div ref={rootRef} style={s.containerPC}>
         {/* PC: 控制按钮 + 固定键同一行 */}
         <div style={s.topBarPC}>
-          <button style={s.iconBtnPC} onPointerDown={(e) => { e.preventDefault(); setCollapsed(v => { const n = !v; localStorage.setItem(COLLAPSED_KEY, String(n)); return n }) }}>
-            <Icon name={collapsed ? 'chevronUp' : 'chevronDown'} size={18} />
-          </button>
           <button style={s.iconBtnPC} onPointerDown={(e) => { e.preventDefault(); setEditing(true) }}><Icon name="pencil" size={18} /></button>
           <button style={s.iconBtnPC} onPointerDown={(e) => { e.preventDefault(); onToggleTheme() }}>
             <Icon name={themeMode === 'dark' ? 'sun' : 'moon'} size={18} />
@@ -542,6 +539,9 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
               <Icon name="settings" size={18} />
             </button>
           )}
+          <button style={s.iconBtnPC} onPointerDown={(e) => { e.preventDefault(); setCollapsed(v => { const n = !v; localStorage.setItem(COLLAPSED_KEY, String(n)); return n }) }}>
+            <Icon name={collapsed ? 'chevronUp' : 'chevronDown'} size={18} />
+          </button>
         </div>
         {/* 展开区：非折叠时显示第二行 */}
         {!collapsed && (
@@ -573,11 +573,9 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
   return (
     <div ref={rootRef} style={s.container}>
       <div style={s.topBar}>
-        <button style={s.iconBtn} onPointerDown={(e) => { e.preventDefault(); setCollapsed(v => { const n = !v; localStorage.setItem(COLLAPSED_KEY, String(n)); return n }) }}>
-          <Icon name={collapsed ? 'chevronUp' : 'chevronDown'} size={18} />
-        </button>
+        <div style={{ flex: 1 }} />
         {/* quick menu */}
-        <div style={{ position: 'relative', marginLeft: 'auto' }}>
+        <div style={{ position: 'relative' }}>
           <button
             ref={menuBtnRef}
             style={s.iconBtn}
@@ -618,6 +616,9 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
             document.body
           )}
         </div>
+        <button style={s.iconBtn} onPointerDown={(e) => { e.preventDefault(); setCollapsed(v => { const n = !v; localStorage.setItem(COLLAPSED_KEY, String(n)); return n }) }}>
+          <Icon name={collapsed ? 'chevronUp' : 'chevronDown'} size={18} />
+        </button>
       </div>
 
       {renderKeys(config.pinned)}
