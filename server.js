@@ -43,7 +43,7 @@ app.use(express.json());
 const {
   JWT_SECRET,
   ACC_PASSWORD_HASH,
-  TMUX_SESSION = 'main',
+  TMUX_SESSION = '~',
   WORKSPACE_ROOT = '/home/librae',
   PORT = '3000',
   CLAUDE_PROXY = 'http://127.0.0.1:6789',
@@ -453,13 +453,33 @@ app.get('/api/projects/:name/channels', authMiddleware, (req, res) => {
 })
 
 // POST /api/projects — 新建 Project（创建 tmux session）
+// body: { path, shell_type?, profile? }
+// project 名称基于路径自动生成
 app.post('/api/projects', authMiddleware, (req, res) => {
-  const { name, path, shell_type = 'claude', profile } = req.body || {}
-  if (!name) return res.status(400).json({ error: 'name required' })
+  const { path, shell_type = 'claude', profile } = req.body || {}
   if (!path) return res.status(400).json({ error: 'path required' })
 
-  const safeName = name.replace(/[^a-zA-Z0-9._-]/g, '-').substring(0, 50)
   const cwd = path.startsWith('/') ? path : `${WORKSPACE_ROOT}/${path}`
+
+  // project 名称基于路径：把 / 替换成 -，并去除首尾 -
+  let projectName = cwd.replace(/^\/+|\/+$/g, '').replace(/\//g, '-')
+  if (cwd === WORKSPACE_ROOT || cwd === '/root' || cwd.startsWith('/home/')) {
+    // 使用 ~ 作为 home 的标识
+    projectName = cwd.replace(WORKSPACE_ROOT, '~').replace(/\//g, '-').replace(/^-/, '')
+  }
+  if (!projectName || projectName === '~') projectName = 'home'
+  // 确保名称安全且唯一
+  const safeName = projectName.replace(/[^a-zA-Z0-9._~-]/g, '-').substring(0, 50) || 'project'
+
+  // 检查是否已存在同名 session，如果存在则添加序号
+  let finalName = safeName
+  try {
+    const existing = execSync('tmux list-sessions -F "#{session_name}" 2>/dev/null').toString().trim().split('\n')
+    let counter = 1
+    while (existing.includes(finalName)) {
+      finalName = `${safeName}-${counter++}`
+    }
+  } catch {}
 
   // 构建 shell 命令
   const proxyVars = {
@@ -485,20 +505,23 @@ app.post('/api/projects', authMiddleware, (req, res) => {
     }
   }
 
+  // 初始窗口名使用目录名（取路径最后一部分）
+  const initialWindowName = cwd.replace(/^\/+|\/+$/g, '').split('/').pop() || '~'
+
   // 创建 tmux session（如果不存在）
   try {
-    execSync(`tmux has-session -t ${safeName} 2>/dev/null || tmux new-session -d -s ${safeName} -n "${safeName}" -c "${cwd}" "${shellCmd}"`)
+    execSync(`tmux new-session -d -s ${finalName} -n "${initialWindowName}" -c "${cwd}" "${shellCmd}"`)
     // 设置 NEXUS_CWD
-    execSync(`tmux set-environment -t ${safeName} NEXUS_CWD "${cwd}"`)
+    execSync(`tmux set-environment -t ${finalName} NEXUS_CWD "${cwd}"`)
     // 设置代理变量
     for (const [key, value] of Object.entries(proxyVars)) {
-      try { execSync(`tmux set-environment -t ${safeName} ${key} "${value}" 2>/dev/null`) } catch {}
+      try { execSync(`tmux set-environment -t ${finalName} ${key} "${value}" 2>/dev/null`) } catch {}
     }
   } catch (err) {
     return res.status(500).json({ error: 'failed to create project: ' + err.message })
   }
 
-  res.json({ name: safeName, path: cwd, shell_type, profile: profile || null })
+  res.json({ name: finalName, path: cwd, shell_type, profile: profile || null })
 })
 
 // POST /api/projects/:name/channels — 在指定 Project 中新建 Channel（window）
@@ -1257,9 +1280,10 @@ server.listen(Number(PORT), '0.0.0.0', () => {
   console.log(`Nexus listening on :${PORT}`);
   console.log(`tmux session: ${TMUX_SESSION}`);
   console.log(`workspace: ${WORKSPACE_ROOT}`);
-  // 确保默认 tmux session 存在，防止重启后 main session 丢失
+  // 启动时确保默认 tmux session 存在，窗口名使用 WORKSPACE_ROOT 的目录名
   try {
-    execSync(`tmux has-session -t ${TMUX_SESSION} 2>/dev/null || tmux new-session -d -s ${TMUX_SESSION} -n shell "zsh"`);
+    const defaultWindowName = WORKSPACE_ROOT.replace(/^\/+|\/+$/, '').split('/').pop() || '~'
+    execSync(`tmux has-session -t ${TMUX_SESSION} 2>/dev/null || tmux new-session -d -s ${TMUX_SESSION} -n "${defaultWindowName}" -c "${WORKSPACE_ROOT}" "zsh"`);
     console.log(`tmux session '${TMUX_SESSION}' ready`);
   } catch (e) { console.warn('tmux session init failed:', e.message); }
 });

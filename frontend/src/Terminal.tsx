@@ -498,8 +498,8 @@ export default function Terminal({ token }: Props) {
 
   // F-18: 多 tmux session 支持
   const [tmuxSessions, setTmuxSessions] = useState<string[]>([])
-  const [activeTmuxSession, setActiveTmuxSession] = useState<string>(() => localStorage.getItem('nexus_session') || 'main')
-  const [wsSessionKey, setWsSessionKey] = useState<string>(() => localStorage.getItem('nexus_session') || 'main')
+  const [activeTmuxSession, setActiveTmuxSession] = useState<string>(() => localStorage.getItem('nexus_session') || '~')
+  const [wsSessionKey, setWsSessionKey] = useState<string>(() => localStorage.getItem('nexus_session') || '~')
   const activeTmuxSessionRef = useRef(activeTmuxSession)
   activeTmuxSessionRef.current = activeTmuxSession
 
@@ -844,29 +844,16 @@ export default function Terminal({ token }: Props) {
 
   async function createSession(relPath: string, shellType: 'claude' | 'bash' = 'claude', profile?: string) {
     try {
-      const session = activeTmuxSessionRef.current
-      // F-19: 使用新的 /api/windows endpoint，传入 rel_path 表示新项目
-      const r = await fetch(`/api/windows?session=${encodeURIComponent(session)}`, {
+      // F-20: 使用 /api/projects 创建新的 project（tmux session）
+      const r = await fetch('/api/projects', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rel_path: relPath, shell_type: shellType, profile }),
+        body: JSON.stringify({ path: relPath, shell_type: shellType, profile }),
       })
       if (r.ok) {
-        const { name: newWindowName } = await r.json()
-        await new Promise(resolve => setTimeout(resolve, 300))
-        const sessionNow = activeTmuxSessionRef.current
-        const listRes = await fetch(`/api/sessions?session=${encodeURIComponent(sessionNow)}`, {
-          headers: { Authorization: `Bearer ${token}` }
-        })
-        if (listRes.ok) {
-          const d = await listRes.json()
-          const wins: TmuxWindow[] = d.windows ?? []
-          setWindows(wins)
-          const newWin = wins.find(w => w.name === newWindowName)
-          if (newWin) {
-            attachToWindow(newWin.index)
-          }
-        }
+        const { name: newProjectName } = await r.json()
+        // 切换到新创建的 project
+        handleSwitchSession(newProjectName, 0)
       }
     } catch {
       // ignore
@@ -877,7 +864,8 @@ export default function Terminal({ token }: Props) {
   async function createWindow(shellType: 'claude' | 'bash' = 'claude', profile?: string) {
     try {
       const session = activeTmuxSessionRef.current
-      const r = await fetch(`/api/windows?session=${encodeURIComponent(session)}`, {
+      // 修复：使用正确的 API 端点 /api/projects/:name/channels
+      const r = await fetch(`/api/projects/${encodeURIComponent(session)}/channels`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ shell_type: shellType, profile }),

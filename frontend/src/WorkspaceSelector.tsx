@@ -267,7 +267,7 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
         {/* 底部按钮 */}
         <div style={s.footer}>
           <button style={s.cancelBtn} onPointerDown={onClose}>取消</button>
-          <button style={s.confirmBtn} onPointerDown={handleConfirm}>创建项目</button>
+          <button style={s.confirmBtn} onPointerDown={handleConfirm}>创建</button>
         </div>
       </div>
     </div>

@@ -175,9 +175,6 @@ export default function SessionManagerV2({
 
   // 触摸结束时触发切换
   const handleChannelTouchEnd = (channel: Channel) => {
-    // 清除按下状态
-    setPressedChannel(null)
-
     // 清除长按定时器
     if (longPressTimerRef.current) {
       window.clearTimeout(longPressTimerRef.current)
@@ -186,8 +183,14 @@ export default function SessionManagerV2({
 
     // 如果是长按，不处理点击
     if (isLongPressRef.current) {
+      setPressedChannel(null)
       return
     }
+
+    // 延迟清除按下状态，让用户看到反馈
+    window.setTimeout(() => {
+      setPressedChannel(null)
+    }, 100)
 
     // 点击抬起时触发切换
     // 如果点击的是当前已激活的 channel，直接关闭菜单
@@ -247,6 +250,7 @@ export default function SessionManagerV2({
   // 处理改名
   const handleRenameChannel = async (channel: Channel) => {
     setLongPressMenu(null)
+    setChannelMenu(null)
     const newName = window.prompt('重命名 Channel:', channel.name)
     if (!newName || newName === channel.name) return
 
@@ -266,6 +270,7 @@ export default function SessionManagerV2({
   // 处理关闭 channel
   const handleCloseChannel = async (channel: Channel) => {
     setLongPressMenu(null)
+    setChannelMenu(null)
     if (!window.confirm(`确定要关闭 Channel "${channel.name}" 吗？`)) return
 
     try {
@@ -282,6 +287,9 @@ export default function SessionManagerV2({
 
   // 获取当前 Project 信息
   const currentProjectInfo = projects.find(p => p.name === currentProject)
+
+  // channel 菜单状态
+  const [channelMenu, setChannelMenu] = useState<{ channel: Channel; x: number; y: number } | null>(null)
 
   // 格式化路径显示
   const formatPath = (p: string) => {
@@ -374,6 +382,37 @@ export default function SessionManagerV2({
                       />
                       <span style={s.channelPrefix}>#</span>
                       <span style={s.channelName}>{channel.name}</span>
+                      {/* 三个点菜单按钮 */}
+                      <button
+                        style={s.channelMenuBtn}
+                        onTouchStart={(e) => {
+                          // 阻止触摸事件冒泡，防止触发父元素的 channel 切换
+                          e.stopPropagation()
+                        }}
+                        onTouchEnd={(e) => {
+                          e.stopPropagation()
+                          e.preventDefault()
+                          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                          setChannelMenu({
+                            channel,
+                            x: rect.left + rect.width / 2,
+                            y: rect.bottom + 8,
+                          })
+                        }}
+                        onPointerDown={(e) => {
+                          // PC 端：阻止冒泡
+                          e.stopPropagation()
+                          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                          setChannelMenu({
+                            channel,
+                            x: rect.left + rect.width / 2,
+                            y: rect.bottom + 8,
+                          })
+                        }}
+                        title="更多选项"
+                      >
+                        <Icon name="more" size={16} />
+                      </button>
                     </div>
                   )
                 })
@@ -386,23 +425,26 @@ export default function SessionManagerV2({
               <span>新 Channel</span>
             </button>
 
-            {/* 长按菜单 */}
-            {longPressMenu && (
+            {/* Channel 菜单（长按或点击三个点） */}
+            {(longPressMenu || channelMenu) && (
               <>
                 <div
                   style={s.menuOverlay}
-                  onPointerDown={() => setLongPressMenu(null)}
+                  onPointerDown={() => {
+                    setLongPressMenu(null)
+                    setChannelMenu(null)
+                  }}
                 />
                 <div
                   style={{
                     ...s.longPressMenu,
-                    left: longPressMenu.x,
-                    top: longPressMenu.y,
+                    left: (longPressMenu || channelMenu)!.x,
+                    top: (longPressMenu || channelMenu)!.y,
                   }}
                 >
                   <button
                     style={s.menuItem}
-                    onPointerDown={() => handleRenameChannel(longPressMenu.channel)}
+                    onPointerDown={() => handleRenameChannel((longPressMenu || channelMenu)!.channel)}
                   >
                     <Icon name="pencil" size={14} />
                     <span>重命名</span>
@@ -410,7 +452,7 @@ export default function SessionManagerV2({
                   <div style={s.menuDivider} />
                   <button
                     style={{ ...s.menuItem, ...s.menuItemDanger }}
-                    onPointerDown={() => handleCloseChannel(longPressMenu.channel)}
+                    onPointerDown={() => handleCloseChannel((longPressMenu || channelMenu)!.channel)}
                   >
                     <Icon name="x" size={14} />
                     <span>关闭</span>
@@ -508,12 +550,13 @@ const s: Record<string, React.CSSProperties> = {
   listContainer: { flex: 1, overflowY: 'auto', padding: '4px 8px' },
 
   // Channel 项
-  channelItem: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 6, cursor: 'pointer', marginBottom: 2, WebkitUserSelect: 'none', userSelect: 'none', WebkitTouchCallout: 'none', touchAction: 'manipulation', WebkitTapHighlightColor: 'rgba(128,128,128,0.3)' },
+  channelItem: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 6, cursor: 'pointer', marginBottom: 2, WebkitUserSelect: 'none', userSelect: 'none', WebkitTouchCallout: 'none', touchAction: 'manipulation', WebkitTapHighlightColor: 'rgba(128,128,128,0.3)', transition: 'background-color 0.05s ease' },
   channelItemActive: { background: 'var(--nexus-bg2)' },
-  channelItemPressed: { background: 'var(--nexus-border)' },
+  channelItemPressed: { background: 'var(--nexus-border)', transition: 'none' },
   channelPrefix: { color: 'var(--nexus-text2)', fontSize: 13, fontWeight: 500, userSelect: 'none' },
   channelName: { flex: 1, fontSize: 14, color: 'var(--nexus-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   statusDot: { width: 8, height: 8, borderRadius: '50%', flexShrink: 0 },
+  channelMenuBtn: { background: 'transparent', border: 'none', color: 'var(--nexus-text2)', cursor: 'pointer', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.6, transition: 'opacity 0.15s' },
 
   // 分隔线
   divider: { height: 2, background: 'var(--nexus-border)', margin: '8px 0' },
