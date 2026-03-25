@@ -616,6 +616,22 @@ app.post('/api/projects/:name/activate', authMiddleware, (req, res) => {
   res.json({ active: true, project: sessionName, lastChannel })
 })
 
+// DELETE /api/projects/:name — 关闭 Project（kill tmux session）
+app.delete('/api/projects/:name', authMiddleware, (req, res) => {
+  const sessionName = req.params.name
+  // 验证 session 存在
+  try {
+    execSync(`tmux has-session -t ${sessionName}`)
+  } catch {
+    return res.status(404).json({ error: 'project not found' })
+  }
+  // kill session
+  exec(`tmux kill-session -t ${sessionName}`, (err) => {
+    if (err) return res.status(500).json({ error: err.message })
+    res.json({ ok: true })
+  })
+})
+
 // ================================================
 
 // GET /api/sessions — 列出 tmux 会话的所有窗口

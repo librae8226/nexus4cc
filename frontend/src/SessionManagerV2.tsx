@@ -79,12 +79,17 @@ export default function SessionManagerV2({
   // 长按菜单状态
   const [longPressMenu, setLongPressMenu] = useState<{ channel: Channel; x: number; y: number } | null>(null)
 
+  // Project 长按菜单状态
+  const [projectLongPressMenu, setProjectLongPressMenu] = useState<{ project: Project; x: number; y: number } | null>(null)
+
   // 按下状态（用于视觉反馈）
   const [pressedChannel, setPressedChannel] = useState<number | null>(null)
+  const [pressedProject, setPressedProject] = useState<string | null>(null)
 
   // 长按检测 refs
   const longPressTimerRef = useRef<number | null>(null)
   const longPressChannelRef = useRef<Channel | null>(null)
+  const longPressProjectRef = useRef<Project | null>(null)
   const isLongPressRef = useRef(false)
 
   // 加载 Projects 列表
@@ -281,6 +286,85 @@ export default function SessionManagerV2({
       fetchChannels(currentProject)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : '关闭失败')
+    }
+  }
+
+  // 处理关闭 project
+  const handleCloseProject = async (project: Project) => {
+    setProjectLongPressMenu(null)
+
+    try {
+      const r = await fetch(`/api/projects/${encodeURIComponent(project.name)}`, {
+        method: 'DELETE',
+        headers,
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      // 刷新 project 列表
+      fetchProjects()
+      // 如果关闭的是当前 project，需要切换
+      if (project.name === currentProject) {
+        // 找一个其他 project 切换
+        const remaining = projects.filter(p => p.name !== project.name)
+        if (remaining.length > 0) {
+          handleProjectClick(remaining[0])
+        }
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : '关闭失败')
+    }
+  }
+
+  // Project 长按开始
+  const handleProjectTouchStart = (project: Project, e: React.TouchEvent) => {
+    isLongPressRef.current = false
+    longPressProjectRef.current = project
+    setPressedProject(project.name)
+
+    // 启动长按检测（500ms）
+    longPressTimerRef.current = window.setTimeout(() => {
+      isLongPressRef.current = true
+      setPressedProject(null)
+      // 显示长按菜单
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+      setProjectLongPressMenu({
+        project,
+        x: rect.left + rect.width / 2,
+        y: rect.bottom + 8,
+      })
+    }, 500)
+  }
+
+  // Project 触摸结束
+  const handleProjectTouchEnd = (project: Project) => {
+    // 清除长按定时器
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current)
+      longPressTimerRef.current = null
+    }
+
+    // 如果是长按，不处理点击
+    if (isLongPressRef.current) {
+      setPressedProject(null)
+      return
+    }
+
+    // 延迟清除按下状态，让用户看到反馈
+    window.setTimeout(() => {
+      setPressedProject(null)
+    }, 100)
+
+    // 点击抬起时触发切换
+    if (project.name !== currentProject) {
+      handleProjectClick(project)
+    }
+  }
+
+  // Project 触摸移动时取消长按
+  const handleProjectTouchMove = () => {
+    setPressedProject(null)
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current)
+      longPressTimerRef.current = null
     }
   }
 
@@ -491,8 +575,14 @@ export default function SessionManagerV2({
                       style={{
                         ...s.projectItem,
                         ...(isActive ? s.projectItemActive : {}),
+                        ...(pressedProject === project.name ? s.projectItemPressed : {}),
                       }}
-                      onPointerDown={() => handleProjectClick(project)}
+                      onTouchStart={(e) => handleProjectTouchStart(project, e)}
+                      onTouchEnd={(e) => {
+                        e.preventDefault()
+                        handleProjectTouchEnd(project)
+                      }}
+                      onTouchMove={handleProjectTouchMove}
                     >
                       <span style={isActive ? s.projectDotActive : s.projectDot} />
                       <span style={s.projectName}>{project.name}</span>
@@ -508,6 +598,32 @@ export default function SessionManagerV2({
               <Icon name="plus" size={14} />
               <span>新 Project</span>
             </button>
+
+            {/* Project 长按菜单 */}
+            {projectLongPressMenu && (
+              <>
+                <div
+                  style={s.menuOverlay}
+                  onPointerDown={() => setProjectLongPressMenu(null)}
+                />
+                <div
+                  style={{
+                    ...s.longPressMenu,
+                    left: projectLongPressMenu.x,
+                    top: projectLongPressMenu.y,
+                  }}
+                >
+                  <div style={s.menuTitle}>{projectLongPressMenu.project.name}</div>
+                  <button
+                    style={{ ...s.menuItem, ...s.menuItemDanger }}
+                    onPointerDown={() => handleCloseProject(projectLongPressMenu.project)}
+                  >
+                    <Icon name="x" size={14} />
+                    <span>关闭 Project</span>
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -566,6 +682,7 @@ const s: Record<string, React.CSSProperties> = {
   // Project 项
   projectItem: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 6, cursor: 'pointer', marginBottom: 2 },
   projectItemActive: { background: 'rgba(59,130,246,0.15)' },
+  projectItemPressed: { background: 'var(--nexus-border)', transition: 'none' },
   projectDot: { width: 8, height: 8, borderRadius: '50%', background: 'var(--nexus-muted)', flexShrink: 0 },
   projectDotActive: { width: 8, height: 8, borderRadius: '50%', background: '#3b82f6', flexShrink: 0 },
   projectName: { flex: 1, fontSize: 14, color: 'var(--nexus-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
