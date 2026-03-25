@@ -76,6 +76,17 @@ export default function SessionManagerV2({
   const clickTimerRef = useRef<number | null>(null)
   const pendingChannelRef = useRef<Channel | null>(null)
 
+  // 长按菜单状态
+  const [longPressMenu, setLongPressMenu] = useState<{ channel: Channel; x: number; y: number } | null>(null)
+
+  // 按下状态（用于视觉反馈）
+  const [pressedChannel, setPressedChannel] = useState<number | null>(null)
+
+  // 长按检测 refs
+  const longPressTimerRef = useRef<number | null>(null)
+  const longPressChannelRef = useRef<Channel | null>(null)
+  const isLongPressRef = useRef(false)
+
   // 加载 Projects 列表
   const fetchProjects = useCallback(async () => {
     setLoadingProjects(true)
@@ -142,8 +153,43 @@ export default function SessionManagerV2({
     }
   }
 
-  // 点击 Channel 切换（单击切换不收起，双击切换并收起）
-  const handleChannelPointerDown = (channel: Channel) => {
+  // 长按开始
+  const handleChannelTouchStart = (channel: Channel, e: React.TouchEvent) => {
+    isLongPressRef.current = false
+    longPressChannelRef.current = channel
+    setPressedChannel(channel.index)
+
+    // 启动长按检测（500ms）
+    longPressTimerRef.current = window.setTimeout(() => {
+      isLongPressRef.current = true
+      setPressedChannel(null)
+      // 显示长按菜单
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+      setLongPressMenu({
+        channel,
+        x: rect.left + rect.width / 2,
+        y: rect.bottom + 8,
+      })
+    }, 500)
+  }
+
+  // 触摸结束时触发切换
+  const handleChannelTouchEnd = (channel: Channel) => {
+    // 清除按下状态
+    setPressedChannel(null)
+
+    // 清除长按定时器
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current)
+      longPressTimerRef.current = null
+    }
+
+    // 如果是长按，不处理点击
+    if (isLongPressRef.current) {
+      return
+    }
+
+    // 点击抬起时触发切换
     // 如果点击的是当前已激活的 channel，直接关闭菜单
     if (channel.index === currentChannelIndex) {
       onClose()
@@ -158,10 +204,8 @@ export default function SessionManagerV2({
       // 250ms 内第二次点击 = 双击，清除之前的定时器
       window.clearTimeout(clickTimerRef.current)
       clickTimerRef.current = null
-      // 双击：等待 250ms 让用户看到视觉反馈后再切换并收起菜单
-      window.setTimeout(() => {
-        doSwitchChannel(channel, true)
-      }, 250)
+      // 双击：立即切换并收起菜单
+      doSwitchChannel(channel, true)
     } else {
       // 第一次点击，等待是否为双击
       clickTimerRef.current = window.setTimeout(() => {
@@ -171,6 +215,15 @@ export default function SessionManagerV2({
           doSwitchChannel(pendingChannelRef.current, false)
         }
       }, 250)
+    }
+  }
+
+  // 触摸移动时取消长按
+  const handleChannelTouchMove = () => {
+    setPressedChannel(null)
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current)
+      longPressTimerRef.current = null
     }
   }
 
@@ -188,6 +241,42 @@ export default function SessionManagerV2({
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : '切换失败')
+    }
+  }
+
+  // 处理改名
+  const handleRenameChannel = async (channel: Channel) => {
+    setLongPressMenu(null)
+    const newName = window.prompt('重命名 Channel:', channel.name)
+    if (!newName || newName === channel.name) return
+
+    try {
+      const r = await fetch(`/api/sessions/${channel.index}/rename?session=${encodeURIComponent(currentProject)}`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      fetchChannels(currentProject)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : '重命名失败')
+    }
+  }
+
+  // 处理关闭 channel
+  const handleCloseChannel = async (channel: Channel) => {
+    setLongPressMenu(null)
+    if (!window.confirm(`确定要关闭 Channel "${channel.name}" 吗？`)) return
+
+    try {
+      const r = await fetch(`/api/sessions/${channel.index}/kill?session=${encodeURIComponent(currentProject)}`, {
+        method: 'POST',
+        headers,
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      fetchChannels(currentProject)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : '关闭失败')
     }
   }
 
@@ -265,8 +354,16 @@ export default function SessionManagerV2({
                       style={{
                         ...s.channelItem,
                         ...(isActive ? s.channelItemActive : {}),
+                        ...(pressedChannel === channel.index ? s.channelItemPressed : {}),
                       }}
-                      onPointerDown={() => handleChannelPointerDown(channel)}
+                      onTouchStart={(e) => {
+                        handleChannelTouchStart(channel, e)
+                      }}
+                      onTouchEnd={(e) => {
+                        e.preventDefault()
+                        handleChannelTouchEnd(channel)
+                      }}
+                      onTouchMove={() => handleChannelTouchMove()}
                     >
                       <span
                         style={{
@@ -288,6 +385,39 @@ export default function SessionManagerV2({
               <Icon name="plus" size={14} />
               <span>新 Channel</span>
             </button>
+
+            {/* 长按菜单 */}
+            {longPressMenu && (
+              <>
+                <div
+                  style={s.menuOverlay}
+                  onPointerDown={() => setLongPressMenu(null)}
+                />
+                <div
+                  style={{
+                    ...s.longPressMenu,
+                    left: longPressMenu.x,
+                    top: longPressMenu.y,
+                  }}
+                >
+                  <button
+                    style={s.menuItem}
+                    onPointerDown={() => handleRenameChannel(longPressMenu.channel)}
+                  >
+                    <Icon name="pencil" size={14} />
+                    <span>重命名</span>
+                  </button>
+                  <div style={s.menuDivider} />
+                  <button
+                    style={{ ...s.menuItem, ...s.menuItemDanger }}
+                    onPointerDown={() => handleCloseChannel(longPressMenu.channel)}
+                  >
+                    <Icon name="x" size={14} />
+                    <span>关闭</span>
+                  </button>
+                </div>
+              </>
+            )}
           </div>
 
           {/* 分隔线 */}
@@ -378,8 +508,9 @@ const s: Record<string, React.CSSProperties> = {
   listContainer: { flex: 1, overflowY: 'auto', padding: '4px 8px' },
 
   // Channel 项
-  channelItem: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 6, cursor: 'pointer', marginBottom: 2 },
+  channelItem: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 6, cursor: 'pointer', marginBottom: 2, WebkitUserSelect: 'none', userSelect: 'none', WebkitTouchCallout: 'none', touchAction: 'manipulation', WebkitTapHighlightColor: 'rgba(128,128,128,0.3)' },
   channelItemActive: { background: 'var(--nexus-bg2)' },
+  channelItemPressed: { background: 'var(--nexus-border)' },
   channelPrefix: { color: 'var(--nexus-text2)', fontSize: 13, fontWeight: 500, userSelect: 'none' },
   channelName: { flex: 1, fontSize: 14, color: 'var(--nexus-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   statusDot: { width: 8, height: 8, borderRadius: '50%', flexShrink: 0 },
@@ -406,4 +537,11 @@ const s: Record<string, React.CSSProperties> = {
 
   // 新建按钮
   addBtn: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, margin: '8px 16px', padding: '8px 12px', background: 'transparent', border: '1px dashed var(--nexus-border)', borderRadius: 6, color: 'var(--nexus-text2)', fontSize: 13, cursor: 'pointer' },
+
+  // 长按菜单
+  menuOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 150 },
+  longPressMenu: { position: 'fixed', transform: 'translateX(-50%)', background: 'var(--nexus-bg)', border: '1px solid var(--nexus-border)', borderRadius: 8, padding: '4px 0', minWidth: 120, boxShadow: '0 4px 20px rgba(0,0,0,0.3)', zIndex: 151 },
+  menuItem: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', background: 'transparent', border: 'none', color: 'var(--nexus-text)', fontSize: 14, cursor: 'pointer', width: '100%', textAlign: 'left' },
+  menuItemDanger: { color: 'var(--nexus-error)' },
+  menuDivider: { height: 1, background: 'var(--nexus-border)', margin: '4px 0' },
 }
