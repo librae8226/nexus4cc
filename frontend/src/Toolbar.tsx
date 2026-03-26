@@ -103,6 +103,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
   const [menuPos, setMenuPos]         = useState({ bottom: 60, right: 8 })
   const [uploadMenuPos, setUploadMenuPos] = useState({ bottom: 60, right: 44 })
   const menuBtnRef                    = useRef<HTMLButtonElement>(null)
+  const uploadBtnRef                  = useRef<HTMLButtonElement>(null)
   const [isPC, setIsPC]               = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const editScrollRef = useRef<HTMLDivElement>(null)
@@ -488,6 +489,34 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
     document.body
   )
 
+  // 隐藏的文件输入框（移动端和PC端都需要）
+  const fileInputsEl = (
+    <>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*,video/*"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file && onUploadFile) { onUploadFile(file) }
+          e.target.value = ''
+        }}
+      />
+      <input
+        ref={pasteFileRef}
+        type="file"
+        accept="*/*"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file && onUploadFile) { onUploadFile(file) }
+          e.target.value = ''
+        }}
+      />
+    </>
+  )
+
   // ---- 嵌入侧边栏模式（PC端） ----
   if (embedded) {
     const allEmbedded = [...config.pinned, ...(collapsed ? [] : config.expanded)]
@@ -531,41 +560,82 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
   if (isPC) {
     return (
       <div ref={rootRef} style={s.containerPC}>
+        {fileInputsEl}
         {/* PC: 控制按钮 + 固定键同一行 */}
         <div style={s.topBarPC}>
-          <button style={s.iconBtnPC} onPointerDown={(e) => { e.preventDefault(); setEditing(true) }}><Icon name="pencil" size={18} /></button>
-          <button style={s.iconBtnPC} onPointerDown={(e) => { e.preventDefault(); onToggleTheme() }}>
+          <button style={s.iconBtnPC} onPointerDown={(e) => { e.preventDefault(); setEditing(true) }} title="编辑快捷键"><Icon name="pencil" size={18} /></button>
+          <button style={s.iconBtnPC} onPointerDown={(e) => { e.preventDefault(); onToggleTheme() }} title="切换主题">
             <Icon name={themeMode === 'dark' ? 'sun' : 'moon'} size={18} />
           </button>
-          {/* 固定键：始终显示 */}
-          {(
-            <div style={s.pinnedRowPC}>
-              {config.pinned.map(id => {
-                const key = KEY_MAP[id]
-                if (!key) return null
-                return (
-                  <button
-                    key={id}
-                    style={s.keyPC}
-                    onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); handleKey(key) }}
-                  >
-                    {key.label}
-                  </button>
-                )
-              })}
-            </div>
-          )}
+          {/* 固定键：始终显示，占据中间空间 */}
+          <div style={s.pinnedRowPC}>
+            {config.pinned.map(id => {
+              const key = KEY_MAP[id]
+              if (!key) return null
+              return (
+                <button
+                  key={id}
+                  style={s.keyPC}
+                  onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); handleKey(key) }}
+                >
+                  {key.label}
+                </button>
+              )
+            })}
+          </div>
+          {/* 右侧按钮组 */}
           {onOpenFiles && (
             <button style={s.iconBtnPC} onPointerDown={(e) => { e.preventDefault(); onOpenFiles() }} title="文件列表">
               <Icon name="folder" size={18} />
             </button>
           )}
+          {onOpenTasks && (
+            <button style={{ ...s.iconBtnPC, position: 'relative' }} onPointerDown={(e) => { e.preventDefault(); onOpenTasks() }} title="任务面板">
+              <Icon name="clipboard" size={18} />
+              {!!runningTaskCount && <span style={{ position: 'absolute', top: 2, right: 2, width: 8, height: 8, background: 'var(--nexus-success)', borderRadius: '50%' }} />}
+            </button>
+          )}
+          {/* 上传按钮 */}
+          <button
+            ref={uploadBtnRef}
+            style={{ ...s.iconBtnPC, position: 'relative' }}
+            onPointerDown={(e) => {
+              e.preventDefault()
+              if (!showUploadMenu) {
+                const rect = uploadBtnRef.current?.getBoundingClientRect()
+                if (rect) {
+                  setUploadMenuPos({ bottom: window.innerHeight - rect.top + 4, right: window.innerWidth - rect.right })
+                }
+              }
+              setShowUploadMenu(v => !v)
+            }}
+            title="上传"
+          >
+            <Icon name="paperclip" size={18} />
+          </button>
+          {showUploadMenu && createPortal(
+            <>
+              <GhostShield />
+              <div style={{ position: 'fixed', inset: 0, zIndex: 300 }} onPointerDown={() => setShowUploadMenu(false)} />
+              <div style={{ position: 'fixed', bottom: uploadMenuPos.bottom, right: uploadMenuPos.right, background: 'var(--nexus-menu-bg)', border: '1px solid var(--nexus-border)', borderRadius: 8, padding: '4px 0', minWidth: 120, zIndex: 400, boxShadow: '0 4px 16px rgba(0,0,0,0.3)' }}>
+                <button style={s.quickMenuItem} onPointerDown={(e) => { e.preventDefault(); fileInputRef.current?.click(); setShowUploadMenu(false) }}>
+                  <Icon name="image" size={16} />
+                  <span>相册</span>
+                </button>
+                <button style={s.quickMenuItem} onPointerDown={(e) => { e.preventDefault(); pasteFileRef.current?.click(); setShowUploadMenu(false) }}>
+                  <Icon name="folder" size={16} />
+                  <span>文件</span>
+                </button>
+              </div>
+            </>,
+            document.body
+          )}
           {onOpenSettings && (
-            <button style={{ ...s.iconBtnPC, marginLeft: 'auto' }} onPointerDown={(e) => { e.preventDefault(); onOpenSettings() }} title="设置">
+            <button style={s.iconBtnPC} onPointerDown={(e) => { e.preventDefault(); onOpenSettings() }} title="设置">
               <Icon name="settings" size={18} />
             </button>
           )}
-          <button style={s.iconBtnPC} onPointerDown={(e) => { e.preventDefault(); setCollapsed(v => { const n = !v; localStorage.setItem(COLLAPSED_KEY, String(n)); return n }) }}>
+          <button style={s.iconBtnPC} onPointerDown={(e) => { e.preventDefault(); setCollapsed(v => { const n = !v; localStorage.setItem(COLLAPSED_KEY, String(n)); return n }) }} title={collapsed ? '展开' : '收起'}>
             <Icon name={collapsed ? 'chevronUp' : 'chevronDown'} size={18} />
           </button>
         </div>
@@ -598,31 +668,10 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
 
   return (
     <div ref={rootRef} style={s.container}>
+      {fileInputsEl}
       <div style={s.topBar}>
         <div style={{ flex: 1 }} />
         {/* 上传按钮 - 显示自定义面板 */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*,video/*"
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            const file = e.target.files?.[0]
-            if (file && onUploadFile) { onUploadFile(file) }
-            e.target.value = ''
-          }}
-        />
-        <input
-          ref={pasteFileRef}
-          type="file"
-          accept="*/*"
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            const file = e.target.files?.[0]
-            if (file && onUploadFile) { onUploadFile(file) }
-            e.target.value = ''
-          }}
-        />
         <button
           style={s.iconBtn}
           onPointerDown={(e) => {
