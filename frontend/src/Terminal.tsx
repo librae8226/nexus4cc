@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState, lazy, Suspense } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Terminal as XTerm, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -12,8 +13,10 @@ import { getWindowStatus, STATUS_DOT_COLOR, STATUS_DOT_TITLE } from './windowSta
 const SessionManager = lazy(() => import('./SessionManager'))
 const SessionManagerV2 = lazy(() => import('./SessionManagerV2'))
 const WorkspaceSelector = lazy(() => import('./WorkspaceSelector'))
+const NewWindowDialog = lazy(() => import('./NewWindowDialog'))
 const TaskPanel = lazy(() => import('./TaskPanel'))
 const FilePanel = lazy(() => import('./FilePanel'))
+const GeneralSettings = lazy(() => import('./GeneralSettings'))
 
 interface TmuxWindow {
   index: number
@@ -158,30 +161,16 @@ function Sidebar({
   onToggleTheme: () => void
   runningTaskCount?: number
 }) {
+  const { t } = useTranslation()
   const [renameIndex, setRenameIndex] = useState<number | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [menuOpenIndex, setMenuOpenIndex] = useState<number | null>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
-  const [showAddMenu, setShowAddMenu] = useState(false)
   const [showUploadMenu, setShowUploadMenu] = useState(false)
-  const addMenuRef = useRef<HTMLDivElement>(null)
   const uploadBtnRef = useRef<HTMLButtonElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pasteFileRef = useRef<HTMLInputElement>(null)
   const [uploadMenuPos, setUploadMenuPos] = useState({ top: 0, left: 0 })
-
-  // 点击外部关闭菜单
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (addMenuRef.current && !addMenuRef.current.contains(e.target as Node)) {
-        setShowAddMenu(false)
-      }
-    }
-    if (showAddMenu) {
-      document.addEventListener('mousedown', handleClickOutside)
-      return () => document.removeEventListener('mousedown', handleClickOutside)
-    }
-  }, [showAddMenu])
 
   // 点击外部关闭窗口操作菜单
   useEffect(() => {
@@ -210,7 +199,7 @@ function Sidebar({
       {/* Session Selector */}
       <div className="px-4 py-3 border-b border-nexus-border">
         <div className="flex items-center mb-2">
-          <span className="text-nexus-text text-sm font-semibold flex-1">会话管理</span>
+          <span className="text-nexus-text text-sm font-semibold flex-1">{t('sessionMgr.title')}</span>
         </div>
         <select
           value={activeSession}
@@ -240,7 +229,7 @@ function Sidebar({
                 <span
                   className="w-2 h-2 rounded-full flex-shrink-0 inline-block"
                   style={{ background: STATUS_DOT_COLOR[status] }}
-                  title={STATUS_DOT_TITLE[status]}
+                  title={t(STATUS_DOT_TITLE[status])}
                 />
                 {isRenaming ? (
                   <input
@@ -270,11 +259,11 @@ function Sidebar({
                   <button
                     className="flex-1 bg-transparent border border-nexus-border rounded-md text-nexus-text text-xs py-1.5 cursor-pointer"
                     onClick={(e) => { e.stopPropagation(); setRenameValue(win.name); setRenameIndex(win.index); setMenuOpenIndex(null) }}
-                  ><span className="flex items-center justify-center gap-1"><Icon name="pencil" size={12} />改名</span></button>
+                  ><span className="flex items-center justify-center gap-1"><Icon name="pencil" size={12} />{t('common.rename')}</span></button>
                   <button
                     className="flex-1 bg-transparent border border-nexus-error rounded-md text-nexus-error text-xs py-1.5 cursor-pointer"
                     onClick={(e) => { e.stopPropagation(); onClose(win.index); setMenuOpenIndex(null) }}
-                  ><span className="flex items-center justify-center gap-1"><Icon name="x" size={12} />关闭</span></button>
+                  ><span className="flex items-center justify-center gap-1"><Icon name="x" size={12} />{t('common.close')}</span></button>
                 </div>
               )}
             </div>
@@ -308,33 +297,24 @@ function Sidebar({
 
       {/* Bottom Actions */}
       <div className="border-t border-nexus-border p-2 flex flex-col gap-1">
-        {/* + 新建 */}
-        <div ref={addMenuRef} className="relative">
+        {/* 新建按钮 - 两个并排 */}
+        <div className="flex gap-1">
           <button
-            className="w-full bg-nexus-accent border-none rounded-lg text-white cursor-pointer text-sm font-semibold py-2.5 px-3 text-center flex items-center justify-center gap-1.5"
-            onClick={() => setShowAddMenu(!showAddMenu)}
+            className="flex-1 bg-nexus-accent border-none rounded-lg text-white cursor-pointer text-sm font-semibold py-2 px-2 flex items-center justify-center gap-1.5"
+            onClick={onNewProject}
+            title={t('sessionMgr.newProject')}
           >
-            <span>+</span>
-            <span>新建</span>
+            <Icon name="folderPlus" size={14} />
+            <span>{t('sessionMgr.newProject')}</span>
           </button>
-          {showAddMenu && (
-            <div className="absolute bottom-full left-0 right-0 mb-1 bg-nexus-menu-bg border border-nexus-border rounded-lg shadow-lg z-10 overflow-hidden">
-              <button
-                className="w-full bg-transparent border-none border-b border-nexus-border text-nexus-text cursor-pointer text-sm py-2.5 px-3 text-left flex items-center gap-2"
-                onClick={() => { setShowAddMenu(false); onNewProject() }}
-              >
-                <span>📁</span>
-                <span>新项目</span>
-              </button>
-              <button
-                className="w-full bg-transparent border-none text-nexus-text cursor-pointer text-sm py-2.5 px-3 text-left flex items-center gap-2"
-                onClick={() => { setShowAddMenu(false); onNewWindow() }}
-              >
-                <span>➕</span>
-                <span>新窗口</span>
-              </button>
-            </div>
-          )}
+          <button
+            className="flex-1 bg-transparent border border-nexus-border rounded-lg text-nexus-text-2 cursor-pointer text-sm py-2 px-2 flex items-center justify-center gap-1.5"
+            onClick={onNewWindow}
+            title={t('newWindow.title')}
+          >
+            <Icon name="plus" size={14} />
+            <span>{t('newWindow.title')}</span>
+          </button>
         </div>
 
         {/* 功能按钮网格 - 两列布局 */}
@@ -342,10 +322,10 @@ function Sidebar({
           <button
             className="bg-transparent border border-nexus-border rounded-md text-nexus-text-2 cursor-pointer text-xs py-1.5 px-2 flex items-center justify-center gap-1"
             onClick={onOpenTasks}
-            title="任务面板"
+            title={t('tasks.title')}
           >
             <Icon name="clipboard" size={14} />
-            <span>任务</span>
+            <span>{t('toolbar.tasks')}</span>
             {!!runningTaskCount && <span className="bg-nexus-success text-white rounded-full text-[9px] px-1">{runningTaskCount}</span>}
           </button>
 
@@ -353,10 +333,10 @@ function Sidebar({
             <button
               className="bg-transparent border border-nexus-border rounded-md text-nexus-text-2 cursor-pointer text-xs py-1.5 px-2 flex items-center justify-center gap-1"
               onClick={onOpenFiles}
-              title="文件列表"
+              title={t('toolbar.fileList')}
             >
               <Icon name="folder" size={14} />
-              <span>文件</span>
+              <span>{t('toolbar.files')}</span>
             </button>
           )}
 
@@ -370,10 +350,10 @@ function Sidebar({
                 setUploadMenuPos({ top: rect.top - 80, left: rect.left })
                 setShowUploadMenu(v => !v)
               }}
-              title="上传"
+              title={t('tabBar.upload')}
             >
               <Icon name="paperclip" size={14} />
-              <span>上传</span>
+              <span>{t('tabBar.upload')}</span>
             </button>
             {showUploadMenu && (
               <>
@@ -387,14 +367,14 @@ function Sidebar({
                     onClick={() => { fileInputRef.current?.click(); setShowUploadMenu(false) }}
                   >
                     <Icon name="image" size={14} />
-                    <span>相册</span>
+                    <span>{t('toolbar.photos')}</span>
                   </button>
                   <button
                     className="w-full flex items-center gap-2 bg-transparent border-none text-nexus-text cursor-pointer text-sm py-2 px-3 text-left"
                     onClick={() => { pasteFileRef.current?.click(); setShowUploadMenu(false) }}
                   >
                     <Icon name="folder" size={14} />
-                    <span>文件</span>
+                    <span>{t('toolbar.files')}</span>
                   </button>
                 </div>
               </>
@@ -404,25 +384,24 @@ function Sidebar({
           <button
             className="bg-transparent border border-nexus-border rounded-md text-nexus-text-2 cursor-pointer text-xs py-1.5 px-2 flex items-center justify-center gap-1"
             onClick={onToggleTheme}
-            title={themeMode === 'dark' ? '切换亮色' : '切换暗色'}
+            title={themeMode === 'dark' ? t('toolbar.switchLight') : t('toolbar.switchDark')}
           >
             <Icon name={themeMode === 'dark' ? 'sun' : 'moon'} size={14} />
-            <span>{themeMode === 'dark' ? '亮色' : '暗色'}</span>
+            <span>{themeMode === 'dark' ? t('settings.themeLight') : t('settings.themeDark')}</span>
           </button>
         </div>
 
-        {/* 底部单行：配置 + 快捷键 - 仅在传入回调时显示 */}
-        {onOpenShortcuts && (
-          <div className="flex gap-1">
-            <button
-              className="flex-1 bg-transparent border border-nexus-border rounded-md text-nexus-text-2 cursor-pointer text-xs py-1.5 px-2 flex items-center justify-center gap-1"
-              onClick={onOpenSettings}
-              title="配置管理"
-            >
-              <Icon name="settings" size={14} />
-              <span>配置</span>
-            </button>
-
+        {/* 底部单行：配置（+ 快捷键若有回调） */}
+        <div className="flex gap-1">
+          <button
+            className="flex-1 bg-transparent border border-nexus-border rounded-md text-nexus-text-2 cursor-pointer text-xs py-1.5 px-2 flex items-center justify-center gap-1"
+            onClick={onOpenSettings}
+            title="配置管理"
+          >
+            <Icon name="settings" size={14} />
+            <span>配置</span>
+          </button>
+          {onOpenShortcuts && (
             <button
               className="flex-1 bg-transparent border border-nexus-border rounded-md text-nexus-text-2 cursor-pointer text-xs py-1.5 px-2 flex items-center justify-center gap-1"
               onClick={onOpenShortcuts}
@@ -431,25 +410,29 @@ function Sidebar({
               <Icon name="pencil" size={14} />
               <span>快捷键</span>
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   )
 }
 
 export default function Terminal({ token }: Props) {
+  const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const userScrolledRef = useRef(false)
+  const lastContainerSizeRef = useRef({ w: 0, h: 0 })
   const inputRef = useRef<HTMLInputElement>(null)
   const [windows, setWindows] = useState<TmuxWindow[]>([])
   const [activeWindowIndex, setActiveWindowIndex] = useState(() => parseInt(localStorage.getItem(WINDOW_KEY) || '0', 10))
   const [showSettings, setShowSettings] = useState(false)
+  const [showGeneralSettings, setShowGeneralSettings] = useState(false)
   const [showSessionManagerV2, setShowSessionManagerV2] = useState(false)
   const [showNewSession, setShowNewSession] = useState(false)
+  const [showNewWindow, setShowNewWindow] = useState(false)
   const [showSessionDrawer, setShowSessionDrawer] = useState(false)
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme)
 
@@ -678,23 +661,19 @@ export default function Terminal({ token }: Props) {
     const container = containerRef.current
     if (!term || !fitAddon || !container) return
 
-    // 延迟执行，等待任何 CSS transition 完成
+    // 更新尺寸基线，让 ResizeObserver 的 delta 检查保持同步
+    const rect = container.getBoundingClientRect()
+    lastContainerSizeRef.current = { w: rect.width, h: rect.height }
+
+    // 走和 ResizeObserver 完全相同的路径：debounce + rAF
     setTimeout(() => {
-      // 强制重新计算布局
-      void container.offsetHeight
-
-      // 执行 fit
-      fitAddon.fit()
-
-      // 发送新的尺寸到后端
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
-      }
-
-      // 滚动到底部
-      if (!userScrolledRef.current) {
-        term.scrollToBottom()
-      }
+      requestAnimationFrame(() => {
+        fitAddon.fit()
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+        }
+        if (!userScrolledRef.current) term.scrollToBottom()
+      })
     }, 150)
   }, [])
 
@@ -705,8 +684,6 @@ export default function Terminal({ token }: Props) {
 
     let rafId: number | null = null
     let debounceTimer: number | null = null
-    let lastWidth = 0
-    let lastHeight = 0
 
     function doResize() {
       const term = termRef.current
@@ -718,12 +695,11 @@ export default function Terminal({ token }: Props) {
       const rect = containerEl.getBoundingClientRect()
 
       // 如果变化太小，忽略（避免微抖动）
-      const wDelta = Math.abs(rect.width - lastWidth)
-      const hDelta = Math.abs(rect.height - lastHeight)
+      const wDelta = Math.abs(rect.width - lastContainerSizeRef.current.w)
+      const hDelta = Math.abs(rect.height - lastContainerSizeRef.current.h)
       if (wDelta < 2 && hDelta < 2) return
 
-      lastWidth = rect.width
-      lastHeight = rect.height
+      lastContainerSizeRef.current = { w: rect.width, h: rect.height }
 
       // 清除任何待执行的 raf 和 timer
       if (rafId) cancelAnimationFrame(rafId)
@@ -749,8 +725,7 @@ export default function Terminal({ token }: Props) {
     // 只在 orientation change 时额外处理
     function onOrientationChange() {
       // 重置缓存，强制重新计算
-      lastWidth = 0
-      lastHeight = 0
+      lastContainerSizeRef.current = { w: 0, h: 0 }
       setTimeout(doResize, 300)
     }
     window.addEventListener('orientationchange', onOrientationChange)
@@ -931,9 +906,14 @@ export default function Terminal({ token }: Props) {
     createSession(path, shellType, profile)
   }
 
-  // F-19: 处理新窗口创建（使用默认配置）
+  // F-19: 处理新窗口创建（打开配置对话框）
   function handleCreateWindow() {
-    createWindow('claude')
+    setShowNewWindow(true)
+  }
+
+  function handleNewWindowConfirm(shellType: 'claude' | 'bash', profile?: string) {
+    setShowNewWindow(false)
+    createWindow(shellType, profile)
   }
 
   function handleSwitchSession(newSession: string, lastChannel?: number) {
@@ -1089,7 +1069,7 @@ export default function Terminal({ token }: Props) {
     function onGlobalKeyDown(e: KeyboardEvent) {
       // 仅在PC宽屏模式且没有打开弹层时处理
       if (window.innerWidth < 768) return
-      const anyOverlayOpen = showSessionDrawer || showTasks || showSettings || showNewSession || showScrollback || showSessionManagerV2 || showFiles
+      const anyOverlayOpen = showSessionDrawer || showTasks || showSettings || showGeneralSettings || showNewSession || showNewWindow || showScrollback || showSessionManagerV2 || showFiles
       if (anyOverlayOpen) return
 
       // 白名单：这些快捷键保留给浏览器/应用使用
@@ -1567,7 +1547,7 @@ export default function Terminal({ token }: Props) {
 
   // Overlay guard: when any overlay opens, set xterm textarea to readOnly
   // to prevent virtual keyboard from appearing when keyboard dismisses
-  const anyOverlayOpen = showSessionDrawer || showTasks || showSettings || showNewSession || showScrollback || showSessionManagerV2 || showFiles
+  const anyOverlayOpen = showSessionDrawer || showTasks || showSettings || showGeneralSettings || showNewSession || showNewWindow || showScrollback || showSessionManagerV2 || showFiles
   useEffect(() => {
     if (isWidePC) return
     const ta = termRef.current?.textarea
@@ -1753,7 +1733,7 @@ export default function Terminal({ token }: Props) {
                     className="w-12 h-10 bg-transparent border-none text-nexus-text-2 flex items-center justify-center cursor-pointer"
                     title="新建项目"
                   >
-                    <Icon name="folder" size={18} />
+                    <Icon name="folderPlus" size={18} />
                   </button>
 
                   <button
@@ -1909,7 +1889,7 @@ export default function Terminal({ token }: Props) {
                       <span
                         className="w-2 h-2 rounded-full flex-shrink-0 inline-block"
                         style={{ background: STATUS_DOT_COLOR[status] }}
-                        title={STATUS_DOT_TITLE[status]}
+                        title={t(STATUS_DOT_TITLE[status])}
                       />
                       {isRenaming ? (
                         <input
@@ -2035,6 +2015,26 @@ export default function Terminal({ token }: Props) {
             token={token}
             onClose={() => setShowNewSession(false)}
             onConfirm={handleCreateSession}
+          />
+        </Suspense>
+      )}
+      {showNewWindow && (
+        <Suspense fallback={null}>
+          <NewWindowDialog
+            token={token}
+            onClose={() => setShowNewWindow(false)}
+            onConfirm={handleNewWindowConfirm}
+          />
+        </Suspense>
+      )}
+      {showGeneralSettings && (
+        <Suspense fallback={null}>
+          <GeneralSettings
+            token={token}
+            themeMode={themeMode}
+            onToggleTheme={toggleTheme}
+            onClose={() => setShowGeneralSettings(false)}
+            onOpenApiConfig={() => { setShowGeneralSettings(false); setShowSettings(true) }}
           />
         </Suspense>
       )}

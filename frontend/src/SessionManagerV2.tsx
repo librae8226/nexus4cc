@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import GhostShield from './GhostShield'
 import { Icon } from './icons'
 
@@ -63,6 +64,7 @@ export default function SessionManagerV2({
   onNewProject,
   onNewChannel,
 }: Props) {
+  const { t } = useTranslation()
   const isDesktop = useIsDesktop()
   const [projects, setProjects] = useState<Project[]>([])
   const [channels, setChannels] = useState<Channel[]>([])
@@ -99,7 +101,7 @@ export default function SessionManagerV2({
       const data: Project[] = await r.json()
       setProjects(data)
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : '加载失败')
+      setError(e instanceof Error ? e.message : t('sessionMgr.loadFailed'))
     } finally {
       setLoadingProjects(false)
     }
@@ -152,7 +154,7 @@ export default function SessionManagerV2({
       onSwitchProject(project.name, data.lastChannel)
       // Channels 会通过 useEffect 自动刷新
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : '切换失败')
+      setError(e instanceof Error ? e.message : t('sessionMgr.switchFailed'))
     }
   }
 

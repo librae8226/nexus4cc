@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, RefObject } from 'react'
+import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 import GhostShield from './GhostShield'
 import useOverlayGuard from './useOverlayGuard'
@@ -71,6 +72,7 @@ interface DragState {
 const ITEM_HEIGHT = 48 // px，每行编辑项高度
 
 export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _termRef, themeMode, onToggleTheme, onOpenSettings, onOpenTasks, onUploadFile, onOpenFiles, onFitTerminal, runningTaskCount, embedded, collapsed: controlledCollapsed, onCollapsedChange }: Props) {
+  const { t } = useTranslation()
   const [config, setConfig]           = useState<ToolbarConfig>(loadConfig)
   const isControlled = controlledCollapsed !== undefined
   const [collapsedInternal, setCollapsedInternal] = useState(() => {
@@ -318,20 +320,20 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
         {/* 头部 */}
         <div className={isPC ? 'flex items-center justify-between px-5 py-4 border-b border-nexus-border shrink-0' : 'flex items-center justify-between px-2.5 py-2 border-b border-nexus-border shrink-0'}>
           <div>
-            <span className={isPC ? 'text-nexus-text text-base font-semibold' : 'text-nexus-text text-sm font-semibold'}>工具栏编辑</span>
+            <span className={isPC ? 'text-nexus-text text-base font-semibold' : 'text-nexus-text text-sm font-semibold'}>{t('toolbar.toolbarEdit')}</span>
             <div className={isPC ? 'text-nexus-muted text-xs mt-1' : 'text-nexus-muted text-[10px] mt-0.5'}>
-              {existsUserDefault ? '将恢复到您保存的默认配置' : '将恢复到出厂配置'}
+              {existsUserDefault ? t('toolbar.resetToSaved') : t('toolbar.resetToFactory')}
             </div>
           </div>
           <div className="flex gap-2">
-            <button onPointerDown={(e) => { e.preventDefault(); resetConfig() }} className={isPC ? editBtnSmPCClass : editBtnSmClass}>重置</button>
+            <button onPointerDown={(e) => { e.preventDefault(); resetConfig() }} className={isPC ? editBtnSmPCClass : editBtnSmClass}>{t('toolbar.reset')}</button>
             <button
               onPointerDown={(e) => { e.preventDefault(); saveAsDefault() }}
               className={savedFlash ? (isPC ? 'text-nexus-success border-nexus-success ' + editBtnSmPCClass : 'text-nexus-success border-nexus-success ' + editBtnSmClass) : (isPC ? editBtnSmPCClass : editBtnSmClass)}
             >
-              {savedFlash ? '已保存' : '存为默认'}
+              {savedFlash ? t('common.saved') : t('toolbar.saveAsDefault')}
             </button>
-            <button onPointerDown={(e) => { e.preventDefault(); setEditing(false) }} className={isPC ? editBtnPrimaryPCClass : editBtnPrimaryClass}>完成</button>
+            <button onPointerDown={(e) => { e.preventDefault(); setEditing(false) }} className={isPC ? editBtnPrimaryPCClass : editBtnPrimaryClass}>{t('toolbar.done')}</button>
           </div>
         </div>
 
@@ -340,7 +342,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
           {(['pinned', 'expanded'] as const).map(section => (
             <div key={section} className="mb-1">
               <div className={isPC ? 'text-nexus-text-2 text-xs px-5 py-2.5 pb-1.5 tracking-wide uppercase' : 'text-nexus-text-2 text-[11px] px-2.5 py-1.5 pb-[3px] tracking-wide uppercase'}>
-                {section === 'pinned' ? '固定行（始终显示）' : '展开区'}
+                {section === 'pinned' ? t('toolbar.fixedRow') : t('toolbar.expandSection')}
               </div>
               {getDisplayIds(section).map((id, idx) => {
                 const key = KEY_MAP[id]
@@ -371,11 +373,11 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
                       <Icon name="grip" size={16} />
                     </div>
                     <span className={isPC ? 'text-nexus-text font-mono text-sm min-w-[60px] shrink-0' : 'text-nexus-text font-mono text-[13px] min-w-[48px] shrink-0'}>{key.label}</span>
-                    <span className={isPC ? 'text-nexus-text-2 text-xs flex-1 overflow-hidden text-ellipsis whitespace-nowrap' : 'text-nexus-text-2 text-[11px] flex-1 overflow-hidden text-ellipsis whitespace-nowrap'}>{key.desc}</span>
+                    <span className={isPC ? 'text-nexus-text-2 text-xs flex-1 overflow-hidden text-ellipsis whitespace-nowrap' : 'text-nexus-text-2 text-[11px] flex-1 overflow-hidden text-ellipsis whitespace-nowrap'}>{t(key.desc)}</span>
                     <button
                       className={isPC ? 'bg-transparent border-none text-nexus-error cursor-pointer text-xl px-2 py-1 shrink-0 leading-none flex items-center justify-center' : 'bg-transparent border-none text-nexus-error cursor-pointer text-lg px-0.5 shrink-0 leading-none flex items-center justify-center'}
                       onPointerDown={(e) => { e.preventDefault(); removeKey(section, id) }}
-                      title="移除"
+                      title={t('toolbar.remove')}
                     >
                       <Icon name="x" size={14} />
                     </button>
@@ -388,14 +390,14 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
           {/* 可添加 */}
           {availableKeys.length > 0 && (
             <div className="mb-1">
-              <div className={isPC ? 'text-nexus-text-2 text-xs px-5 py-2.5 pb-1.5 tracking-wide uppercase' : 'text-nexus-text-2 text-[11px] px-2.5 py-1.5 pb-[3px] tracking-wide uppercase'}>可添加</div>
+              <div className={isPC ? 'text-nexus-text-2 text-xs px-5 py-2.5 pb-1.5 tracking-wide uppercase' : 'text-nexus-text-2 text-[11px] px-2.5 py-1.5 pb-[3px] tracking-wide uppercase'}>{t('toolbar.addAvailable')}</div>
               {availableKeys.map(key => (
                 <div key={key.id} className={isPC ? 'flex items-center px-5 h-12 gap-3 border-b border-nexus-border box-border' : 'flex items-center px-2.5 h-12 gap-2 border-b border-nexus-border box-border'}>
                   <span className={isPC ? 'text-nexus-text font-mono text-sm min-w-[60px] shrink-0' : 'text-nexus-text font-mono text-[13px] min-w-[48px] shrink-0'}>{key.label}</span>
-                  <span className={isPC ? 'text-nexus-text-2 text-xs flex-1 overflow-hidden text-ellipsis whitespace-nowrap' : 'text-nexus-text-2 text-[11px] flex-1 overflow-hidden text-ellipsis whitespace-nowrap'}>{key.desc}</span>
+                  <span className={isPC ? 'text-nexus-text-2 text-xs flex-1 overflow-hidden text-ellipsis whitespace-nowrap' : 'text-nexus-text-2 text-[11px] flex-1 overflow-hidden text-ellipsis whitespace-nowrap'}>{t(key.desc)}</span>
                   <div className="flex gap-1 ml-auto shrink-0">
-                    <button className={isPC ? addBtnPCClass : addBtnClass} onPointerDown={(e) => { e.preventDefault(); addKey('pinned', key.id) }}>固定</button>
-                    <button className={isPC ? addBtnPCClass : addBtnClass} onPointerDown={(e) => { e.preventDefault(); addKey('expanded', key.id) }}>展开</button>
+                    <button className={isPC ? addBtnPCClass : addBtnClass} onPointerDown={(e) => { e.preventDefault(); addKey('pinned', key.id) }}>{t('toolbar.pinToFixed')}</button>
+                    <button className={isPC ? addBtnPCClass : addBtnClass} onPointerDown={(e) => { e.preventDefault(); addKey('expanded', key.id) }}>{t('toolbar.pinToExpand')}</button>
                   </div>
                 </div>
               ))}
@@ -430,7 +432,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
       <div className="fixed inset-0 z-[700]" onPointerDown={() => setShowPasteBox(false)} />
       <div className="fixed bottom-0 left-0 right-0 z-[701] bg-nexus-bg border-t border-nexus-border rounded-t-xl p-3.5 pb-6 shadow-[0_-4px_24px_rgba(0,0,0,0.35)]">
         <div className="flex items-center justify-between mb-3">
-          <span className="text-nexus-text text-sm font-semibold">粘贴 / 上传</span>
+          <span className="text-nexus-text text-sm font-semibold">{t('toolbar.pasteUpload')}</span>
           <button onPointerDown={(e) => { e.preventDefault(); setShowPasteBox(false) }}
             className="bg-transparent border-none text-nexus-text-2 cursor-pointer p-1 flex">
             <Icon name="x" size={20} />
@@ -439,7 +441,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
         <textarea
           ref={pasteBoxRef}
           rows={3}
-          placeholder="长按此处粘贴文本或图片…"
+          placeholder={t('toolbar.pastePlaceholder')}
           className="w-full box-border bg-nexus-bg-2 border border-nexus-border rounded-lg text-nexus-text text-sm p-2.5 resize-none outline-none font-inherit block"
           onPaste={(e) => {
             const items = e.clipboardData?.items
@@ -460,7 +462,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
           }}
         />
         <label className="flex items-center justify-center gap-2 mt-2.5 p-2.5 rounded-lg cursor-pointer bg-nexus-bg-2 border border-nexus-border text-nexus-text-2 text-[13px]">
-          <Icon name="paperclip" size={16} />选择文件
+          <Icon name="paperclip" size={16} />{t('toolbar.selectFile')}
           <input ref={pasteFileRef} type="file" accept="*/*" className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0]
@@ -509,16 +511,16 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
       <div ref={rootRef} className="border-t border-nexus-border shrink-0 bg-nexus-bg">
         {/* Section header */}
         <div className="flex items-center px-2 py-1 gap-0.5">
-          <span className="text-[10px] text-nexus-muted flex-1 tracking-wide uppercase">快捷键</span>
+          <span className="text-[10px] text-nexus-muted flex-1 tracking-wide uppercase">{t('toolbar.shortcuts')}</span>
           <button
             className={iconBtnPCClass}
             onPointerDown={(e) => { e.preventDefault(); setEditing(true) }}
-            title="编辑快捷键"
+            title={t('toolbar.editShortcuts')}
           ><Icon name="pencil" size={14} /></button>
           <button
             className={iconBtnPCClass}
             onPointerDown={(e) => { e.preventDefault(); setCollapsed(v => { const n = !v; localStorage.setItem(COLLAPSED_KEY, String(n)); return n }) }}
-            title={collapsed ? '展开' : '收起'}
+            title={collapsed ? t('toolbar.expand') : t('toolbar.collapse')}
           ><Icon name={collapsed ? 'chevronUp' : 'chevronDown'} size={14} /></button>
         </div>
         {/* Key grid */}
@@ -531,7 +533,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
                 key={id}
                 className={keyEmbeddedClass}
                 onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); handleKey(key) }}
-                title={key.desc}
+                title={t(key.desc)}
               >{key.label}</button>
             )
           })}
@@ -548,8 +550,8 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
         {fileInputsEl}
         {/* PC: 控制按钮 + 固定键同一行 */}
         <div className="flex items-center px-3 py-1 gap-1.5 h-11 box-border">
-          <button className={iconBtnPCClass} onPointerDown={(e) => { e.preventDefault(); setEditing(true) }} title="编辑快捷键"><Icon name="pencil" size={18} /></button>
-          <button className={iconBtnPCClass} onPointerDown={(e) => { e.preventDefault(); onToggleTheme() }} title="切换主题">
+          <button className={iconBtnPCClass} onPointerDown={(e) => { e.preventDefault(); setEditing(true) }} title={t('toolbar.editShortcuts')}><Icon name="pencil" size={18} /></button>
+          <button className={iconBtnPCClass} onPointerDown={(e) => { e.preventDefault(); onToggleTheme() }} title={t('toolbar.toggleTheme')}>
             <Icon name={themeMode === 'dark' ? 'sun' : 'moon'} size={18} />
           </button>
           {/* 固定键：始终显示，占据中间空间 */}
@@ -570,12 +572,12 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
           </div>
           {/* 右侧按钮组 */}
           {onOpenFiles && (
-            <button className={iconBtnPCClass} onPointerDown={(e) => { e.preventDefault(); onOpenFiles() }} title="文件列表">
+            <button className={iconBtnPCClass} onPointerDown={(e) => { e.preventDefault(); onOpenFiles() }} title={t('toolbar.fileList')}>
               <Icon name="folder" size={18} />
             </button>
           )}
           {onOpenTasks && (
-            <button className={`${iconBtnPCClass} relative`} onPointerDown={(e) => { e.preventDefault(); onOpenTasks() }} title="任务面板">
+            <button className={`${iconBtnPCClass} relative`} onPointerDown={(e) => { e.preventDefault(); onOpenTasks() }} title={t('toolbar.tasks')}>
               <Icon name="clipboard" size={18} />
               {!!runningTaskCount && <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-nexus-success rounded-full" />}
             </button>
@@ -594,7 +596,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
               }
               setShowUploadMenu(v => !v)
             }}
-            title="上传"
+            title={t('toolbar.pasteUpload')}
           >
             <Icon name="paperclip" size={18} />
           </button>
@@ -605,22 +607,22 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
               <div className="fixed bg-nexus-menu-bg border border-nexus-border rounded-lg py-1 min-w-[120px] z-[400] shadow-[0_4px_16px_rgba(0,0,0,0.3)]" style={{ bottom: uploadMenuPos.bottom, right: uploadMenuPos.right }}>
                 <button className={quickMenuItemClass} onPointerDown={(e) => { e.preventDefault(); fileInputRef.current?.click(); setShowUploadMenu(false) }}>
                   <Icon name="image" size={16} />
-                  <span>相册</span>
+                  <span>{t('toolbar.photos')}</span>
                 </button>
                 <button className={quickMenuItemClass} onPointerDown={(e) => { e.preventDefault(); pasteFileRef.current?.click(); setShowUploadMenu(false) }}>
                   <Icon name="folder" size={16} />
-                  <span>文件</span>
+                  <span>{t('toolbar.files')}</span>
                 </button>
               </div>
             </>,
             document.body
           )}
           {onOpenSettings && (
-            <button className={iconBtnPCClass} onPointerDown={(e) => { e.preventDefault(); onOpenSettings() }} title="设置">
+            <button className={iconBtnPCClass} onPointerDown={(e) => { e.preventDefault(); onOpenSettings() }} title={t('toolbar.settings')}>
               <Icon name="settings" size={18} />
             </button>
           )}
-          <button className={iconBtnPCClass} onPointerDown={(e) => { e.preventDefault(); setCollapsed(v => { const n = !v; localStorage.setItem(COLLAPSED_KEY, String(n)); return n }) }} title={collapsed ? '展开' : '收起'}>
+          <button className={iconBtnPCClass} onPointerDown={(e) => { e.preventDefault(); setCollapsed(v => { const n = !v; localStorage.setItem(COLLAPSED_KEY, String(n)); return n }) }} title={collapsed ? t('toolbar.expand') : t('toolbar.collapse')}>
             <Icon name={collapsed ? 'chevronUp' : 'chevronDown'} size={18} />
           </button>
         </div>
@@ -667,7 +669,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
             }
             setShowUploadMenu(v => !v)
           }}
-          title="上传"
+          title={t('toolbar.pasteUpload')}
         >
           <Icon name="paperclip" size={18} />
         </button>
@@ -678,11 +680,11 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
             <div className="fixed bg-nexus-menu-bg border border-nexus-border rounded-lg py-1 min-w-[120px] z-[400] shadow-[0_-4px_16px_rgba(0,0,0,0.3)]" style={{ bottom: uploadMenuPos.bottom, right: uploadMenuPos.right }}>
               <button className={quickMenuItemClass} onPointerDown={(e) => { e.preventDefault(); fileInputRef.current?.click(); setShowUploadMenu(false) }}>
                 <Icon name="image" size={16} />
-                <span>相册</span>
+                <span>{t('toolbar.photos')}</span>
               </button>
               <button className={quickMenuItemClass} onPointerDown={(e) => { e.preventDefault(); pasteFileRef.current?.click(); setShowUploadMenu(false) }}>
                 <Icon name="folder" size={16} />
-                <span>文件</span>
+                <span>{t('toolbar.files')}</span>
               </button>
             </div>
           </>,
@@ -701,7 +703,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
               }
               setShowQuickMenu(v => !v)
             }}
-            title="更多"
+            title={t('toolbar.more')}
           ><Icon name="settings" size={18} /></button>
           {showQuickMenu && createPortal(
             <>
@@ -710,22 +712,22 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
               <div className="fixed bg-nexus-menu-bg border border-nexus-border rounded-lg py-1 min-w-[160px] z-[400] shadow-[0_-4px_16px_rgba(0,0,0,0.3)]" style={{ bottom: menuPos.bottom, right: menuPos.right }}>
                 <button className={quickMenuItemClass} onPointerDown={(e) => { e.preventDefault(); onToggleTheme(); setShowQuickMenu(false) }}>
                   <Icon name={themeMode === 'dark' ? 'sun' : 'moon'} size={16} />
-                  <span>{themeMode === 'dark' ? '切换亮色' : '切换暗色'}</span>
+                  <span>{themeMode === 'dark' ? t('toolbar.switchLight') : t('toolbar.switchDark')}</span>
                 </button>
                 <button className={quickMenuItemClass} onPointerDown={(e) => { e.preventDefault(); setEditing(true); setShowQuickMenu(false) }}>
-                  <Icon name="pencil" size={16} /><span>编辑快捷键</span>
+                  <Icon name="pencil" size={16} /><span>{t('toolbar.editShortcuts')}</span>
                 </button>
                 {onOpenTasks && (
                   <button className={quickMenuItemClass} onPointerDown={(e) => { e.preventDefault(); onOpenTasks(); setShowQuickMenu(false) }}>
                     <Icon name="clipboard" size={16} />
-                    <span>任务面板</span>
+                    <span>{t('toolbar.tasks')}</span>
                     {!!runningTaskCount && <span className="ml-auto bg-nexus-success text-white rounded-lg px-1.5 py-[1px] text-[11px]">{runningTaskCount}</span>}
                   </button>
                 )}
                 {onOpenFiles && (
                   <button className={quickMenuItemClass} onPointerDown={(e) => { e.preventDefault(); onOpenFiles(); setShowQuickMenu(false) }}>
                     <Icon name="folder" size={16} />
-                    <span>文件列表</span>
+                    <span>{t('toolbar.fileList')}</span>
                   </button>
                 )}
               </div>

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import GhostShield from './GhostShield'
 import { Icon } from './icons'
 
@@ -44,6 +45,7 @@ const EMPTY_CONFIG: Omit<Config, 'id'> = {
 }
 
 export default function SessionManager({ token, onClose }: Props) {
+  const { t } = useTranslation()
   const isDesktop = useIsDesktop()
 
   const [configs, setConfigs] = useState<Config[]>([])
@@ -94,21 +96,21 @@ export default function SessionManager({ token, onClose }: Props) {
   // ── 配置编辑面板 ──
   if (editingConfig) {
     const fields: Array<{ key: keyof typeof EMPTY_CONFIG; label: string; placeholder: string; secret?: boolean }> = [
-      { key: 'label',              label: '显示名称',      placeholder: 'Kimi (kimi-for-coding)' },
-      { key: 'BASE_URL',           label: 'API Base URL',  placeholder: 'https://api.kimi.com/coding' },
-      { key: 'AUTH_TOKEN',         label: 'Auth Token',    placeholder: 'sk-...', secret: true },
-      { key: 'API_KEY',            label: 'API Key',       placeholder: '（通常留空，用 Auth Token）', secret: true },
-      { key: 'DEFAULT_MODEL',      label: '默认模型',      placeholder: 'kimi-for-coding' },
-      { key: 'THINK_MODEL',        label: '思考模型',      placeholder: 'kimi-for-coding' },
-      { key: 'LONG_CONTEXT_MODEL', label: '长上下文模型',  placeholder: 'kimi-for-coding' },
-      { key: 'DEFAULT_HAIKU_MODEL',label: 'Haiku 模型',   placeholder: 'kimi-for-coding' },
-      { key: 'API_TIMEOUT_MS',     label: 'Timeout (ms)',  placeholder: '3000000' },
+      { key: 'label',              label: t('apiConfig.labelName'),         placeholder: t('apiConfig.labelNamePlaceholder') },
+      { key: 'BASE_URL',           label: t('apiConfig.apiBaseUrl'),        placeholder: 'https://api.kimi.com/coding' },
+      { key: 'AUTH_TOKEN',         label: t('apiConfig.authToken'),         placeholder: 'sk-...', secret: true },
+      { key: 'API_KEY',            label: t('apiConfig.apiKey'),            placeholder: t('apiConfig.apiKeyNote'), secret: true },
+      { key: 'DEFAULT_MODEL',      label: t('apiConfig.defaultModel'),      placeholder: 'kimi-for-coding' },
+      { key: 'THINK_MODEL',        label: t('apiConfig.thinkingModel'),     placeholder: 'kimi-for-coding' },
+      { key: 'LONG_CONTEXT_MODEL', label: t('apiConfig.longContextModel'),  placeholder: 'kimi-for-coding' },
+      { key: 'DEFAULT_HAIKU_MODEL',label: t('apiConfig.haikuModel'),        placeholder: 'kimi-for-coding' },
+      { key: 'API_TIMEOUT_MS',     label: t('apiConfig.timeout'),           placeholder: '3000000' },
     ]
     return (
       <div className={isDesktop ? 'fixed inset-0 bg-black/70 z-[100] flex items-center justify-center p-5' : 'fixed inset-0 bg-black/60 z-[100]'}>
         <div className={isDesktop ? 'bg-nexus-bg border border-nexus-border rounded-xl flex flex-col text-nexus-text w-full max-w-[800px] max-h-[85vh] shadow-[0_20px_60px_rgba(0,0,0,0.5)] overflow-hidden' : 'fixed inset-0 bg-nexus-bg flex flex-col text-nexus-text'}>
           <div className="flex items-center justify-between px-4 py-3.5 border-b border-nexus-border shrink-0">
-            <span className="text-base font-semibold">{editingConfig.isNew ? '新建配置' : '编辑配置'}</span>
+            <span className="text-base font-semibold">{editingConfig.isNew ? t('apiConfig.newConfig') : t('apiConfig.editConfig')}</span>
             <button className="bg-transparent border-none text-nexus-text-2 cursor-pointer text-2xl leading-none px-1 flex items-center justify-center" onPointerDown={() => { setEditingConfig(null); setCfgError(null) }}><Icon name="x" size={20} /></button>
           </div>
           <div className="flex-1 overflow-y-auto py-2">
@@ -116,7 +118,7 @@ export default function SessionManager({ token, onClose }: Props) {
               {cfgError && <div className="text-nexus-error text-xs mb-2">{cfgError}</div>}
               {/* ID 字段只在新建时可编辑 */}
               <div className={isDesktop ? 'flex flex-row items-center gap-4 mb-3' : 'flex flex-col gap-1 mb-2.5'}>
-                <label className={isDesktop ? 'text-nexus-text-2 text-sm w-[140px] shrink-0 text-right' : 'text-nexus-text-2 text-xs'}>配置 ID（唯一标识）</label>
+                <label className={isDesktop ? 'text-nexus-text-2 text-sm w-[140px] shrink-0 text-right' : 'text-nexus-text-2 text-xs'}>{t('apiConfig.idLabel')}</label>
                 <input
                   className={isDesktop ? 'bg-nexus-bg-2 border border-nexus-border rounded-md text-nexus-text text-sm px-3 py-2.5 outline-none flex-1 box-border' : 'bg-nexus-bg-2 border border-nexus-border rounded-md text-nexus-text text-sm px-2.5 py-2 outline-none w-full box-border'}
                   value={editingConfig.id}
@@ -144,7 +146,7 @@ export default function SessionManager({ token, onClose }: Props) {
                 onPointerDown={() => { if (!savingCfg) saveConfig() }}
                 disabled={savingCfg}
               >
-                {savingCfg ? '保存中...' : '保存'}
+                {savingCfg ? t('common.saving') : t('common.save')}
               </button>
             </div>
           </div>
@@ -159,7 +161,7 @@ export default function SessionManager({ token, onClose }: Props) {
       <div className={isDesktop ? 'bg-nexus-bg border border-nexus-border rounded-xl flex flex-col text-nexus-text w-full max-w-[800px] max-h-[85vh] shadow-[0_20px_60px_rgba(0,0,0,0.5)] overflow-hidden' : 'fixed inset-0 bg-nexus-bg flex flex-col text-nexus-text'}>
         {/* 顶部：标题 + 关闭 */}
         <div className="flex items-center justify-between px-4 py-3.5 border-b border-nexus-border shrink-0">
-          <span className="text-base font-semibold">API 配置管理</span>
+          <span className="text-base font-semibold">{t('apiConfig.title')}</span>
           <button className="bg-transparent border-none text-nexus-text-2 cursor-pointer text-2xl leading-none px-1 flex items-center justify-center" onPointerDown={onClose}><Icon name="x" size={20} /></button>
         </div>
 
@@ -167,17 +169,17 @@ export default function SessionManager({ token, onClose }: Props) {
         <div className="flex-1 overflow-y-auto py-2">
           <div className="px-4 py-3 border-b border-nexus-border">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-2">API 配置 Profiles</span>
+              <span className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-2">{t('apiConfig.profiles')}</span>
               <button
                 className="bg-transparent border border-nexus-border rounded text-nexus-text-2 cursor-pointer text-[11px] px-2 py-0.5"
                 onPointerDown={() => setEditingConfig({ id: '', isNew: true, ...EMPTY_CONFIG })}
               >
-                + 新建
+                {t('apiConfig.addNew')}
               </button>
             </div>
-            {loadingCfg && <div className="text-nexus-muted text-sm py-2">加载中...</div>}
+            {loadingCfg && <div className="text-nexus-muted text-sm py-2">{t('common.loading')}</div>}
             {!loadingCfg && configs.length === 0 && (
-              <div className="text-nexus-muted text-sm py-2">暂无配置。点击「+ 新建」添加 API 配置。</div>
+              <div className="text-nexus-muted text-sm py-2">{t('apiConfig.noConfigs')}</div>
             )}
             {configs.map(cfg => (
               <div key={cfg.id} className="flex items-center gap-2.5 py-2.5 border-b border-nexus-border">
@@ -189,17 +191,17 @@ export default function SessionManager({ token, onClose }: Props) {
                   <button
                     className="bg-transparent border border-nexus-border rounded text-nexus-accent cursor-pointer text-[11px] px-2 py-[3px]"
                     onPointerDown={() => setEditingConfig({ id: cfg.id, isNew: false, label: cfg.label, BASE_URL: cfg.BASE_URL, AUTH_TOKEN: cfg.AUTH_TOKEN, API_KEY: cfg.API_KEY, DEFAULT_MODEL: cfg.DEFAULT_MODEL, THINK_MODEL: cfg.THINK_MODEL, LONG_CONTEXT_MODEL: cfg.LONG_CONTEXT_MODEL, DEFAULT_HAIKU_MODEL: cfg.DEFAULT_HAIKU_MODEL, API_TIMEOUT_MS: cfg.API_TIMEOUT_MS })}
-                  >编辑</button>
+                  >{t('common.edit')}</button>
                   <button
                     className="bg-transparent border border-nexus-border rounded text-nexus-error cursor-pointer text-[11px] px-2 py-[3px]"
                     onPointerDown={() => deleteConfig(cfg.id)}
-                  >删除</button>
+                  >{t('common.delete')}</button>
                 </div>
               </div>
             ))}
           </div>
           <div className="px-4 py-3 text-nexus-text-2 text-[11px] leading-relaxed">
-            <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-2">说明</div>
+            <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-2">{t('apiConfig.notes')}</div>
             <p>每个配置对应一个 API provider。新建会话时选择配置后，会以该 provider 的 API key 启动 claude，且每个项目的会话历史独立保存在项目目录的 <code className="bg-nexus-bg-2 rounded px-1 font-mono text-[10px] text-nexus-accent">.claude-data/</code> 中，退出后再次进入可自动续接上下文。</p>
           </div>
         </div>

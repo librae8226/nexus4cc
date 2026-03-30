@@ -650,8 +650,9 @@ app.post('/api/projects', authMiddleware, (req, res) => {
     }
   }
 
-  // 初始窗口名使用目录名（取路径最后一部分）
-  const initialWindowName = cwd.replace(/^\/+|\/+$/g, '').split('/').pop() || '~'
+  // 初始窗口名使用目录名[-profile名]（取路径最后一部分）
+  const dirName = cwd.replace(/^\/+|\/+$/g, '').split('/').pop() || '~'
+  const initialWindowName = profile ? `${dirName}-${profile}` : dirName
 
   // 创建 tmux session（如果不存在）
   try {
@@ -682,8 +683,9 @@ app.post('/api/projects/:name/channels', authMiddleware, (req, res) => {
     if (match) cwd = match[1]
   } catch {}
 
-  // Channel 命名：目录名-序号
-  const baseName = cwd.replace(/^\/+|\/+$/g, '').split('/').pop() || 'channel'
+  // Channel 命名：目录名[-profile名]-序号
+  const dirPart = cwd.replace(/^\/+|\/+$/g, '').split('/').pop() || 'channel'
+  const baseName = profile ? `${dirPart}-${profile}` : dirPart
   let channelName = baseName
   try {
     const existing = execSync(`tmux list-windows -t ${sessionName} -F "#{window_name}"`).toString().trim().split('\n')

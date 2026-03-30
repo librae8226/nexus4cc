@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Icon } from './icons'
 import { getWindowStatus, STATUS_DOT_COLOR, STATUS_DOT_TITLE } from './windowStatus'
 
@@ -28,6 +29,7 @@ interface Props {
 }
 
 export default function TabBar({ windows, activeIndex, onSwitch, onClose, onAdd, onOpenSettings, onOpenTasks, onUpload, onRename, token, sessions, activeSession, onSwitchSession, windowOutputs: windowOutputsProp, runningTaskCount, position = 'top' }: Props) {
+  const { t } = useTranslation()
   const [menuIndex, setMenuIndex] = useState<number | null>(null)
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 })
   const [renameIndex, setRenameIndex] = useState<number | null>(null)
@@ -171,7 +173,7 @@ export default function TabBar({ windows, activeIndex, onSwitch, onClose, onAdd,
               {item.index === activeIndex && <span style={s.activeIndicator} />}
               {(() => {
                 const status = getWindowStatus(windowOutputs[item.index])
-                return <span style={{ ...s.runningDot, background: STATUS_DOT_COLOR[status] }} title={STATUS_DOT_TITLE[status]} />
+                return <span style={{ ...s.runningDot, background: STATUS_DOT_COLOR[status] }} title={t(STATUS_DOT_TITLE[status])} />
               })()}
             </div>
           ))}

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import GhostShield from './GhostShield'
 import { Icon } from './icons'
 
@@ -31,6 +32,7 @@ function useIsDesktop() {
 }
 
 export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) {
+  const { t } = useTranslation()
   const isDesktop = useIsDesktop()
   const [selectedPath, setSelectedPath] = useState(() => localStorage.getItem('nexus_last_path') || '~')
   const [inputPath, setInputPath] = useState(() => localStorage.getItem('nexus_last_path') || '~')
@@ -129,7 +131,7 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
       <div className={isDesktop ? 'bg-nexus-bg border border-nexus-border rounded-xl flex flex-col text-nexus-text w-full max-w-[600px] max-h-[85vh] shadow-[0_20px_60px_rgba(0,0,0,0.5)] overflow-hidden' : 'fixed inset-0 bg-nexus-bg flex flex-col text-nexus-text'}>
         {/* 顶部：标题 + 关闭 */}
         <div className="flex items-center justify-between px-4 py-3.5 border-b border-nexus-border shrink-0">
-          <span className="text-base font-semibold">选择工作目录</span>
+          <span className="text-base font-semibold">{t('workspace.title')}</span>
           <button className="bg-transparent border-none text-nexus-text-2 cursor-pointer text-2xl leading-none px-1 flex items-center justify-center" onPointerDown={onClose}><Icon name="x" size={20} /></button>
         </div>
 
@@ -137,31 +139,31 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
         <div className="flex-1 overflow-y-auto py-2">
           {/* 当前选择 */}
           <div className="px-4 py-3 border-b border-nexus-border">
-            <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-0">当前选择</div>
+            <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-0">{t('workspace.currentSelection')}</div>
             <div className="text-sm text-nexus-accent font-mono px-3 py-2 bg-nexus-bg-2 rounded-md break-all mt-2">{selectedPath || '~'}</div>
           </div>
 
           {/* 手动输入 */}
           <div className="px-4 py-3 border-b border-nexus-border">
-            <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-0">输入路径</div>
+            <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-0">{t('workspace.inputPath')}</div>
             <div className={isDesktop ? 'flex flex-row items-center gap-4 mt-2' : 'flex flex-col gap-1 mt-2'}>
               <input
                 className={isDesktop ? 'bg-nexus-bg-2 border border-nexus-border rounded-md text-nexus-text text-sm px-3 py-2.5 outline-none flex-1 box-border' : 'bg-nexus-bg-2 border border-nexus-border rounded-md text-nexus-text text-sm px-2.5 py-2 outline-none w-full box-border'}
                 value={inputPath}
                 onChange={e => handleInputChange(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="~ 或 /path/to/project"
+                placeholder={t('workspace.pathPlaceholder')}
                 autoCapitalize="off"
                 autoCorrect="off"
                 spellCheck={false}
               />
             </div>
-            <div className="text-nexus-muted text-[11px] mt-1.5">支持 ~ 表示 home 目录，或直接输入绝对路径</div>
+            <div className="text-nexus-muted text-[11px] mt-1.5">{t('workspace.pathHelp')}</div>
           </div>
 
           {/* Shell 类型选择 */}
           <div className="px-4 py-3 border-b border-nexus-border">
-            <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-0">Shell 类型</div>
+            <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-0">{t('workspace.shellType')}</div>
             <div className="flex flex-col gap-2.5 mt-2">
               <label className="flex items-center gap-2 text-nexus-text text-sm cursor-pointer">
                 <input
@@ -171,7 +173,7 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
                   checked={shellType === 'claude'}
                   onChange={() => setShellType('claude')}
                 />
-                <span>Claude (默认)</span>
+                <span>{t('workspace.shellClaude')}</span>
               </label>
               <label className="flex items-center gap-2 text-nexus-text text-sm cursor-pointer">
                 <input
@@ -181,7 +183,7 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
                   checked={shellType === 'bash'}
                   onChange={() => setShellType('bash')}
                 />
-                <span>Zsh</span>
+                <span>{t('workspace.shellZsh')}</span>
               </label>
             </div>
           </div>
@@ -189,20 +191,20 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
           {/* Profile 选择 (仅 claude 模式) */}
           {shellType === 'claude' && (
             <div className="px-4 py-3 border-b border-nexus-border">
-              <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-0">配置 Profile (可选)</div>
+              <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-0">{t('workspace.profileLabel')}</div>
               <select
                 className="bg-nexus-bg-2 border border-nexus-border rounded-md text-nexus-text text-sm px-2.5 py-2 w-full outline-none mt-2"
                 value={selectedProfile}
                 onChange={(e) => handleProfileChange(e.target.value)}
               >
-                <option value="">默认 (不使用 profile)</option>
+                <option value="">{t('workspace.profileDefault')}</option>
                 {configs.map((cfg) => (
                   <option key={cfg.id} value={cfg.id}>
                     {cfg.label}
                   </option>
                 ))}
               </select>
-              <div className="text-nexus-muted text-[11px] mt-1.5">选择 profile 会使用该配置的 API key 和模型设置，数据隔离在项目目录</div>
+              <div className="text-nexus-muted text-[11px] mt-1.5">{t('workspace.profileHelp')}</div>
             </div>
           )}
 
@@ -210,7 +212,7 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
           <div className="px-4 py-3 border-b border-nexus-border">
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
-                <span className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-0">浏览目录</span>
+                <span className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-0">{t('workspace.browseDir')}</span>
                 <span className="text-[11px] text-nexus-accent font-mono max-w-[160px] overflow-hidden text-ellipsis whitespace-nowrap" title={browsePath || ''}>{formatBrowsePath(browsePath)}</span>
               </div>
               <div className="flex gap-1.5">
@@ -218,14 +220,14 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
                   <button
                     className="bg-transparent border border-nexus-border rounded text-nexus-text-2 cursor-pointer text-[11px] px-2 py-0.5 shrink-0"
                     onPointerDown={() => handleSelect(browsePath)}
-                    title="选择当前目录"
-                  >选此目录</button>
+                    title={t('workspace.selectThisDir')}
+                  >{t('workspace.selectThisDir')}</button>
                 )}
-                <button className="bg-transparent border border-nexus-border rounded text-nexus-text-2 cursor-pointer text-[11px] px-2 py-0.5 shrink-0" onPointerDown={() => browseDir(null)}>根目录</button>
+                <button className="bg-transparent border border-nexus-border rounded text-nexus-text-2 cursor-pointer text-[11px] px-2 py-0.5 shrink-0" onPointerDown={() => browseDir('/')}>{t('workspace.rootDir')}</button>
               </div>
             </div>
             {browseError && <div className="text-nexus-error text-xs mb-2">{browseError}</div>}
-            {browseLoading && <div className="text-nexus-muted text-sm py-2">加载中...</div>}
+            {browseLoading && <div className="text-nexus-muted text-sm py-2">{t('common.loading')}</div>}
             {!browseLoading && (
               <div className="flex flex-col gap-0.5">
                 {/* 向上一级 */}
@@ -241,7 +243,7 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
                 )}
                 {/* 子目录列表 */}
                 {browseDirs.length === 0 && !browseLoading && (
-                  <div className="text-nexus-muted text-sm py-2">无子目录</div>
+                  <div className="text-nexus-muted text-sm py-2">{t('workspace.noSubDirs')}</div>
                 )}
                 {browseDirs.map(dir => (
                   <div
@@ -249,7 +251,7 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
                     className={`flex items-center gap-2.5 px-3 py-1.5 rounded-md cursor-pointer bg-transparent ${selectedPath === dir.path ? 'bg-nexus-bg-2 border border-nexus-accent' : ''}`}
                     onPointerDown={() => handleSelect(dir.path)}
                     onDoubleClick={() => browseDir(dir.path)}
-                    title="单击选中，双击进入"
+                    title={t('workspace.dirClickHint')}
                   >
                     <span className="text-sm shrink-0">📁</span>
                     <span className="text-nexus-text text-sm flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{dir.name}</span>
@@ -263,8 +265,8 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
 
         {/* 底部按钮 */}
         <div className="flex gap-3 px-4 py-3 border-t border-nexus-border shrink-0 justify-end">
-          <button className="bg-transparent border border-nexus-border rounded-md text-nexus-text-2 cursor-pointer text-sm px-4 py-2" onPointerDown={onClose}>取消</button>
-          <button className="bg-nexus-accent border-none rounded-md text-white cursor-pointer text-sm font-semibold px-4 py-2" onPointerDown={handleConfirm}>创建</button>
+          <button className="bg-transparent border border-nexus-border rounded-md text-nexus-text-2 cursor-pointer text-sm px-4 py-2" onPointerDown={onClose}>{t('common.cancel')}</button>
+          <button className="bg-nexus-accent border-none rounded-md text-white cursor-pointer text-sm font-semibold px-4 py-2" onPointerDown={handleConfirm}>{t('common.create')}</button>
         </div>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import GhostShield from './GhostShield'
 import { Icon } from './icons'
 
@@ -24,6 +25,7 @@ interface Props {
 }
 
 export default function TaskPanel({ token, windows, activeWindowName, tmuxSession, onClose }: Props) {
+  const { t } = useTranslation()
   const [tasks, setTasks] = useState<Task[]>([])
   const [prompt, setPrompt] = useState('')
   const [selectedTask, setSelectedTask] = useState<Task | null>(null)
@@ -85,7 +87,7 @@ export default function TaskPanel({ token, windows, activeWindowName, tmuxSessio
         signal: controller.signal,
       })
       if (!r.ok || !r.body) {
-        setStreamOutput('请求失败: ' + r.status)
+        setStreamOutput(t('tasks.requestFailed', { status: r.status }))
         setIsRunning(false)
         return
       }
@@ -118,7 +120,7 @@ export default function TaskPanel({ token, windows, activeWindowName, tmuxSessio
       if (!document.hasFocus() && 'Notification' in window && Notification.permission === 'granted') {
         // 取输出最后一个有内容的行作为通知摘要
         const lastLine = fullOutput.trim().split('\n').filter(l => l.trim()).pop() || prompt.trim()
-        new Notification('Nexus: 任务完成', {
+        new Notification(t('tasks.notificationTitle'), {
           body: lastLine.slice(0, 100),
           icon: '/icon.svg',
         })
@@ -144,13 +146,13 @@ export default function TaskPanel({ token, windows, activeWindowName, tmuxSessio
       <div className="w-[440px] max-w-[100vw] bg-nexus-bg border-l border-nexus-border flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-nexus-border shrink-0">
-          <span className="flex items-center gap-2 text-nexus-text text-[15px] font-semibold"><Icon name="clipboard" size={20} />任务面板</span>
+          <span className="flex items-center gap-2 text-nexus-text text-[15px] font-semibold"><Icon name="clipboard" size={20} />{t('tasks.title')}</span>
           <button className="flex items-center justify-center bg-transparent border-none text-nexus-text-2 text-2xl cursor-pointer p-0 leading-none" onClick={onClose}><Icon name="x" size={20} /></button>
         </div>
 
         {/* Session selector */}
         <div className="flex items-center gap-2 px-5 py-2.5 border-b border-nexus-border shrink-0">
-          <span className="text-nexus-text-2 text-[13px] shrink-0">会话:</span>
+          <span className="text-nexus-text-2 text-[13px] shrink-0">{t('tasks.session')}</span>
           <select
             className="flex-1 bg-nexus-bg-2 border border-nexus-border rounded-md text-nexus-text px-2 py-1 text-[13px] font-mono cursor-pointer"
             value={sessionName}
@@ -168,7 +170,7 @@ export default function TaskPanel({ token, windows, activeWindowName, tmuxSessio
             className="bg-nexus-bg-2 border border-nexus-border rounded-lg text-nexus-text px-3 py-2.5 text-[13px] font-mono resize-none outline-none leading-relaxed"
             value={prompt}
             onChange={e => setPrompt(e.target.value)}
-            placeholder="输入任务 prompt，claude -p 非交互执行..."
+            placeholder={t('tasks.promptPlaceholder')}
             rows={4}
             onKeyDown={e => {
               if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
@@ -183,7 +185,7 @@ export default function TaskPanel({ token, windows, activeWindowName, tmuxSessio
                 className="bg-nexus-error border-none rounded-md text-white cursor-pointer text-[13px] font-semibold px-4 py-2 self-end transition-opacity duration-200 flex items-center gap-1"
                 onClick={() => abortRef.current?.abort()}
               >
-                <Icon name="x" size={14} /> 取消
+                <Icon name="x" size={14} /> {t('common.cancel')}
               </button>
             )}
             <button
@@ -191,7 +193,7 @@ export default function TaskPanel({ token, windows, activeWindowName, tmuxSessio
               onClick={runTask}
               disabled={isRunning || !prompt.trim()}
             >
-              {isRunning ? '执行中...' : '▶ 发送任务'}
+              {isRunning ? t('tasks.running') : t('tasks.sendTask')}
             </button>
           </div>
         </div>
@@ -201,7 +203,7 @@ export default function TaskPanel({ token, windows, activeWindowName, tmuxSessio
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
             <div className="flex items-center gap-2 px-5 py-2 border-b border-nexus-border shrink-0">
               {isRunning && <span className="w-2 h-2 rounded-full bg-nexus-success animate-spin shrink-0" />}
-              <span className="text-nexus-text-2 text-xs font-mono">{isRunning ? '执行中' : '输出'}</span>
+              <span className="text-nexus-text-2 text-xs font-mono">{isRunning ? t('tasks.runningStatus') : t('tasks.output')}</span>
             </div>
             <pre ref={outputRef} className="flex-1 m-0 px-5 py-3 text-nexus-text text-xs font-mono overflow-y-auto whitespace-pre-wrap break-words leading-relaxed">{streamOutput || ' '}</pre>
           </div>
@@ -210,9 +212,9 @@ export default function TaskPanel({ token, windows, activeWindowName, tmuxSessio
         {/* Task history */}
         {!isRunning && !streamOutput && (
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            <div className="px-5 py-2 text-nexus-text-2 text-xs font-semibold border-b border-nexus-border shrink-0">历史任务</div>
+            <div className="px-5 py-2 text-nexus-text-2 text-xs font-semibold border-b border-nexus-border shrink-0">{t('tasks.history')}</div>
             {tasks.length === 0 ? (
-              <div className="p-5 text-nexus-muted text-[13px] text-center">暂无任务记录</div>
+              <div className="p-5 text-nexus-muted text-[13px] text-center">{t('tasks.noTasks')}</div>
             ) : (
               <div className="overflow-y-auto flex-1">
                 {tasks.map(task => (
@@ -225,7 +227,7 @@ export default function TaskPanel({ token, windows, activeWindowName, tmuxSessio
                     <span className="flex-1 text-nexus-text text-[13px] font-mono overflow-hidden text-ellipsis whitespace-nowrap" title={task.prompt}>{task.prompt.slice(0, 60)}{task.prompt.length > 60 ? '...' : ''}</span>
                     {task.source === 'telegram' && <span className="bg-nexus-accent text-white text-[9px] font-bold px-1 rounded-[3px] shrink-0 tracking-wider">TG</span>}
                     <span className="text-nexus-muted text-[11px] shrink-0">{task.session_name}</span>
-                    <button className="flex items-center justify-center bg-transparent border-none text-nexus-muted cursor-pointer text-[11px] px-0.5 shrink-0 leading-none opacity-60" onClick={(e) => deleteTask(task.id, e)} title="删除"><Icon name="x" size={14} /></button>
+                    <button className="flex items-center justify-center bg-transparent border-none text-nexus-muted cursor-pointer text-[11px] px-0.5 shrink-0 leading-none opacity-60" onClick={(e) => deleteTask(task.id, e)} title={t('common.delete')}><Icon name="x" size={14} /></button>
                   </div>
                 ))}
               </div>
@@ -239,7 +241,7 @@ export default function TaskPanel({ token, windows, activeWindowName, tmuxSessio
             <div className="flex items-center gap-2 px-5 py-2 border-b border-nexus-border shrink-0">
               {activeTask.status === 'running' && <span className="w-2 h-2 rounded-full bg-nexus-success animate-spin shrink-0" />}
               <span className="text-nexus-text-2 text-xs font-mono">
-                {activeTask.session_name} — {activeTask.status === 'running' ? '执行中' : activeTask.status}
+                {activeTask.session_name} — {activeTask.status === 'running' ? t('tasks.runningStatus') : activeTask.status}
                 {activeTask.source === 'telegram' ? ' · TG' : ''}
               </span>
               <div className="flex gap-1 ml-auto">
@@ -255,7 +257,7 @@ export default function TaskPanel({ token, windows, activeWindowName, tmuxSessio
                 }}>⎘</button>
               </div>
             </div>
-            <pre className="flex-1 m-0 px-5 py-3 text-nexus-text text-xs font-mono overflow-y-auto whitespace-pre-wrap break-words leading-relaxed">{activeTask.output || activeTask.error || (activeTask.status === 'running' ? '等待输出...' : '(无输出)')}</pre>
+            <pre className="flex-1 m-0 px-5 py-3 text-nexus-text text-xs font-mono overflow-y-auto whitespace-pre-wrap break-words leading-relaxed">{activeTask.output || activeTask.error || (activeTask.status === 'running' ? t('tasks.waitingOutput') : t('tasks.noOutput'))}</pre>
           </div>
         )}
       </div>

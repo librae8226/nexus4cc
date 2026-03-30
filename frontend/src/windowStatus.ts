@@ -16,5 +16,5 @@ export const STATUS_DOT_COLOR: Record<WindowStatus, string> = {
 }
 
 export const STATUS_DOT_TITLE: Record<WindowStatus, string> = {
-  running: '运行中', waiting: '等待输入', shell: '已退出 shell', unknown: '未连接',
+  running: 'windowStatus.running', waiting: 'windowStatus.waitingInput', shell: 'windowStatus.shellExited', unknown: 'windowStatus.disconnected',
 }

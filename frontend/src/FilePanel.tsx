@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Icon } from './icons'
 
 interface FileItem {
@@ -24,15 +25,20 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
 }
 
-function formatDate(dateStr: string): string {
-  const today = new Date().toISOString().slice(0, 10)
-  if (dateStr === today) return '今天'
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
-  if (dateStr === yesterday) return '昨天'
-  return dateStr
+function useFormatDate() {
+  const { t } = useTranslation()
+  return (dateStr: string): string => {
+    const today = new Date().toISOString().slice(0, 10)
+    if (dateStr === today) return t('common.today')
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+    if (dateStr === yesterday) return t('common.yesterday')
+    return dateStr
+  }
 }
 
 export default function FilePanel({ token, onClose }: Props) {
+  const { t } = useTranslation()
+  const formatDate = useFormatDate()
   const [groups, setGroups] = useState<FileGroup[]>([])
   const [loading, setLoading] = useState(true)
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null)
@@ -95,12 +101,12 @@ export default function FilePanel({ token, onClose }: Props) {
       setTimeout(() => setCopiedUrl(null), 2000)
     } else {
       // 如果都失败了，至少选中文字让用户手动复制
-      alert(`请手动复制:\n${textToCopy}`)
+      alert(t('files.manualCopy', { text: textToCopy }))
     }
   }
 
   async function deleteFile(date: string, filename: string) {
-    if (!confirm(`删除文件 "${filename}"?`)) return
+    if (!confirm(t('files.deleteConfirm', { filename }))) return
     try {
       const r = await fetch(`/api/files/${date}/${encodeURIComponent(filename)}`, {
         method: 'DELETE',
@@ -115,7 +121,7 @@ export default function FilePanel({ token, onClose }: Props) {
   }
 
   async function deleteAllFiles() {
-    if (!confirm(`确定要删除所有上传的文件吗?\n共 ${totalFiles} 个文件，此操作不可恢复。`)) return
+    if (!confirm(t('files.deleteAllConfirm', { count: totalFiles }))) return
     try {
       const r = await fetch('/api/files/all', {
         method: 'DELETE',
@@ -138,7 +144,7 @@ export default function FilePanel({ token, onClose }: Props) {
         <div className="flex items-center gap-2.5">
           <Icon name="folder" size={20} />
           <span className="text-nexus-text font-semibold text-base">
-            上传文件
+            {t('files.title')}
           </span>
           <span className="text-nexus-muted text-[13px] bg-nexus-bg-2 px-2 py-0.5 rounded-[10px]">
             {totalFiles}
@@ -152,7 +158,7 @@ export default function FilePanel({ token, onClose }: Props) {
               title="清除所有文件"
             >
               <Icon name="trash" size={14} />
-              清除全部
+              {t('files.clearAll')}
             </button>
           )}
           <button
@@ -168,14 +174,14 @@ export default function FilePanel({ token, onClose }: Props) {
       <div className="flex-1 overflow-y-auto px-4 py-3">
         {loading ? (
           <div className="text-nexus-muted text-center py-10 text-sm">
-            加载中...
+            {t('common.loading')}
           </div>
         ) : groups.length === 0 ? (
           <div className="text-nexus-muted text-center py-10 text-sm">
             <div className="text-5xl mb-3">📁</div>
-            <div>暂无上传文件</div>
+            <div>{t('files.noFiles')}</div>
             <div className="text-xs mt-2 opacity-70">
-              拖拽文件到终端或粘贴图片即可上传
+              {t('files.dropHint')}
             </div>
           </div>
         ) : (
@@ -210,15 +216,15 @@ export default function FilePanel({ token, onClose }: Props) {
                       <button
                         onClick={() => copyToClipboard(file.url, fullPath)}
                         className={`rounded-md cursor-pointer text-xs flex items-center gap-1 transition-all duration-150 ${isCopied ? 'bg-nexus-success border-none text-white px-2.5 py-1.5' : 'bg-transparent border border-nexus-border text-nexus-text-2 px-2.5 py-1.5'}`}
-                        title="复制完整路径"
+                        title={t('files.copyPath')}
                       >
                         <Icon name={isCopied ? 'check' : 'copy'} size={14} />
-                        {isCopied ? '已复制' : '复制'}
+                        {isCopied ? t('common.copied') : t('common.copy')}
                       </button>
                       <button
                         onClick={() => deleteFile(group.date, file.name)}
                         className="bg-transparent border-none text-nexus-error cursor-pointer p-1.5 flex items-center justify-center opacity-60"
-                        title="删除"
+                        title={t('common.delete')}
                       >
                         <Icon name="trash" size={16} />
                       </button>
@@ -233,7 +239,7 @@ export default function FilePanel({ token, onClose }: Props) {
 
       {/* Footer hint */}
       <div className="px-4 py-3 border-t border-nexus-border text-nexus-muted text-xs text-center">
-        文件保存在服务器 data/uploads/ 目录，不进入 git 追踪
+        {t('files.footerNote')}
       </div>
     </div>
   )
