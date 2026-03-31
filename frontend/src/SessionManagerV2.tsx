@@ -103,8 +103,8 @@ export default function SessionManagerV2({
     }
   }, [token])
 
-  const fetchChannels = useCallback(async (projectName: string) => {
-    setLoadingChannels(true)
+  const fetchChannels = useCallback(async (projectName: string, opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoadingChannels(true)
     try {
       const r = await fetch(`/api/projects/${encodeURIComponent(projectName)}/channels`, { headers })
       const data = await r.json()
@@ -113,7 +113,7 @@ export default function SessionManagerV2({
       console.error('Load channels failed:', e)
       setChannels([])
     } finally {
-      setLoadingChannels(false)
+      if (!opts?.silent) setLoadingChannels(false)
     }
   }, [token])
 
@@ -128,12 +128,6 @@ export default function SessionManagerV2({
     if (currentProject) fetchChannels(currentProject)
   }, [fetchProjects, fetchChannels, currentProject])
 
-  // Sidebar auto-refresh to detect new/closed channels
-  useEffect(() => {
-    if (!isSidebar || !currentProject) return
-    const timer = setInterval(() => fetchChannels(currentProject), 2000)
-    return () => clearInterval(timer)
-  }, [currentProject, fetchChannels, isSidebar])
 
   // --- Actions ---
 
@@ -506,6 +500,18 @@ export default function SessionManagerV2({
   if (isSidebar) {
     return (
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-nexus-bg text-nexus-text">
+        {/* Refresh button for sidebar */}
+        <div className="px-3 pt-2 border-b border-nexus-border">
+          <button
+            className="flex items-center gap-1.5 bg-transparent border-none text-nexus-text-2 text-xs cursor-pointer py-1"
+            onPointerDown={handleRefresh}
+            title={t('sessionMgr.refresh') || 'Refresh'}
+          >
+            <Icon name="refresh" size={13} />
+            <span>{t('sessionMgr.refresh') || 'Refresh'}</span>
+          </button>
+        </div>
+
         {content}
 
         {/* Sidebar right-click menu - channel */}
