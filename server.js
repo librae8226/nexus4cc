@@ -618,11 +618,7 @@ app.post('/api/projects', authMiddleware, (req, res) => {
 
   // project 名称基于路径：把 / 替换成 -，并去除首尾 -
   let projectName = cwd.replace(/^\/+|\/+$/g, '').replace(/\//g, '-')
-  if (cwd === WORKSPACE_ROOT || cwd === '/root' || cwd.startsWith('/home/')) {
-    // 使用 ~ 作为 home 的标识
-    projectName = cwd.replace(WORKSPACE_ROOT, '~').replace(/\//g, '-').replace(/^-/, '')
-  }
-  if (!projectName || projectName === '~') projectName = 'home'
+  if (!projectName) projectName = 'home'
   // 确保名称安全且唯一
   const safeName = projectName.replace(/[^a-zA-Z0-9._~-]/g, '-').substring(0, 50) || 'project'
 

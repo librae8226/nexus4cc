@@ -34,8 +34,8 @@ function useIsDesktop() {
 export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) {
   const { t } = useTranslation()
   const isDesktop = useIsDesktop()
-  const [selectedPath, setSelectedPath] = useState(() => localStorage.getItem('nexus_last_path') || '~')
-  const [inputPath, setInputPath] = useState(() => localStorage.getItem('nexus_last_path') || '~')
+  const [selectedPath, setSelectedPath] = useState(() => localStorage.getItem('nexus_last_path') || '/workspace')
+  const [inputPath, setInputPath] = useState(() => localStorage.getItem('nexus_last_path') || '/workspace')
   const [shellType, setShellType] = useState<'claude' | 'bash'>('claude')
   const [configs, setConfigs] = useState<Config[]>([])
   const [selectedProfile, setSelectedProfile] = useState<string>(() => localStorage.getItem('nexus_last_profile') || '')
@@ -119,7 +119,7 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
 
   // 截断路径显示：只显示最后几个片段
   function formatBrowsePath(p: string | null): string {
-    if (!p) return '~'
+    if (!p) return '/'
     const parts = p.split('/').filter(Boolean)
     if (parts.length <= 3) return '/' + parts.join('/')
     return '.../' + parts.slice(-2).join('/')

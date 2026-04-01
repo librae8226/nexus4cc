@@ -336,8 +336,11 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
 
   const formatPath = (p: string) => {
     if (!p) return ''
-    if (p.startsWith('/home/')) return p.replace('/home/', '~/')
-    if (p === '/root' || p.startsWith('/root/')) return p.replace('/root', '~')
+    // Truncate long paths for display
+    const parts = p.split('/').filter(Boolean)
+    if (parts.length > 3) {
+      return '...' + '/' + parts.slice(-2).join('/')
+    }
     return p
   }
 
@@ -360,7 +363,7 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
 
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
         {/* Project 列表 */}
-        <div className="py-2 flex flex-col min-h-0" >
+        <div className="flex-1 py-2 flex flex-col min-h-0" >
           <div className="px-3 pb-1.5 border-b border-nexus-border mb-1.5">
             <div className="text-xs font-semibold text-nexus-text tracking-wide flex items-center justify-between gap-1.5">
               <div className="flex items-center gap-1.5">
@@ -435,7 +438,7 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
         </div>
 
         {/* Channel 列表 */}
-        <div className="py-2 flex flex-col min-h-0" >
+        <div className="flex-1 py-2 flex flex-col min-h-0" >
           <div className="px-3 pb-1.5 border-b border-nexus-border mb-1.5">
             <div className="text-xs font-semibold text-nexus-text tracking-wide flex items-center gap-1.5">
               <span className="text-sm">#</span>
