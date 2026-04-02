@@ -1648,7 +1648,7 @@ export default function Terminal({ token }: Props) {
           <WorkspaceBrowser
             token={token}
             onClose={() => setShowWorkspace(false)}
-            initialPath={activeTmuxSession}
+            currentSession={activeTmuxSession}
           />
         </Suspense>
       )}
@@ -1680,7 +1680,6 @@ export default function Terminal({ token }: Props) {
             token={token}
             onClose={() => setShowNewSession(false)}
             onConfirm={handleCreateSession}
-            currentSession={activeTmuxSession}
           />
         </Suspense>
       )}
