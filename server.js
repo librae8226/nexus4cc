@@ -769,15 +769,19 @@ app.post('/api/projects', authMiddleware, (req, res) => {
 // POST /api/projects/:name/channels — 在指定 Project 中新建 Channel（window）
 app.post('/api/projects/:name/channels', authMiddleware, (req, res) => {
   const sessionName = req.params.name
-  const { shell_type = 'claude', profile } = req.body || {}
+  const { shell_type = 'claude', profile, path: bodyPath } = req.body || {}
 
-  // 读取该 session 的 NEXUS_CWD
+  // 优先使用前端传入的 path，其次读取 NEXUS_CWD，最后 fallback 到 WORKSPACE_ROOT
   let cwd = WORKSPACE_ROOT
-  try {
-    const envOutput = execSync(`tmux show-environment -t ${sessionName} NEXUS_CWD 2>/dev/null`).toString().trim()
-    const match = envOutput.match(/^NEXUS_CWD=(.+)$/)
-    if (match) cwd = match[1]
-  } catch {}
+  if (bodyPath) {
+    cwd = bodyPath
+  } else {
+    try {
+      const envOutput = execSync(`tmux show-environment -t ${sessionName} NEXUS_CWD 2>/dev/null`).toString().trim()
+      const match = envOutput.match(/^NEXUS_CWD=(.+)$/)
+      if (match) cwd = match[1]
+    } catch {}
+  }
 
   // Channel 命名：profile 名[-序号]
   const baseName = profile || 'channel'

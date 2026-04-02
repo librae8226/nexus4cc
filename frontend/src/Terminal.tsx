@@ -184,6 +184,15 @@ export default function Terminal({ token }: Props) {
   activeTmuxSessionRef.current = activeTmuxSession
   const sessionManagerRef = useRef<SessionManagerV2Handle>(null)
 
+  // Projects list (for getting project path when creating new channel)
+  interface ProjectInfo {
+    name: string
+    path: string
+    active: boolean
+    channelCount: number
+  }
+  const [projects, setProjects] = useState<ProjectInfo[]>([])
+
   // 加载服务端默认 session
   useEffect(() => {
     fetch('/api/config', { headers: { Authorization: `Bearer ${token}` } })
@@ -196,7 +205,7 @@ export default function Terminal({ token }: Props) {
       .catch(() => {})
   }, [token])
 
-  // 获取所有 tmux sessions
+  // 获取所有 tmux sessions 和 projects
   useEffect(() => {
     const fetchSessions = async () => {
       try {
@@ -207,8 +216,20 @@ export default function Terminal({ token }: Props) {
         }
       } catch {}
     }
+    const fetchProjects = async () => {
+      try {
+        const r = await fetch('/api/projects', { headers: { Authorization: `Bearer ${token}` } })
+        if (r.ok) {
+          setProjects(await r.json())
+        }
+      } catch {}
+    }
     fetchSessions()
-    const interval = setInterval(fetchSessions, 10000)
+    fetchProjects()
+    const interval = setInterval(() => {
+      fetchSessions()
+      fetchProjects()
+    }, 10000)
     return () => clearInterval(interval)
   }, [token])
 
@@ -555,11 +576,14 @@ export default function Terminal({ token }: Props) {
   async function createWindow(shellType: 'claude' | 'bash' = 'claude', profile?: string) {
     try {
       const session = activeTmuxSessionRef.current
+      // 获取当前 project 的路径
+      const currentProject = projects.find(p => p.name === session)
+      const projectPath = currentProject?.path
       // 修复：使用正确的 API 端点 /api/projects/:name/channels
       const r = await fetch(`/api/projects/${encodeURIComponent(session)}/channels`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shell_type: shellType, profile }),
+        body: JSON.stringify({ shell_type: shellType, profile, path: projectPath }),
       })
       if (r.ok) {
         const { name: newWindowName } = await r.json()
