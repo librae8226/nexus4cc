@@ -16,6 +16,7 @@ const SessionManagerV2 = lazy(() => import('./SessionManagerV2'))
 const WorkspaceSelector = lazy(() => import('./WorkspaceSelector'))
 const NewWindowDialog = lazy(() => import('./NewWindowDialog'))
 const FilePanel = lazy(() => import('./FilePanel'))
+const WorkspaceBrowser = lazy(() => import('./WorkspaceBrowser'))
 const GeneralSettings = lazy(() => import('./GeneralSettings'))
 
 interface TmuxWindow {
@@ -140,6 +141,7 @@ export default function Terminal({ token }: Props) {
   const [isConnecting, setIsConnecting] = useState(false)
   const hasConnectedRef = useRef(false)
   const [showFiles, setShowFiles] = useState(false)
+  const [showWorkspace, setShowWorkspace] = useState(false)
   const [showScrollback, setShowScrollback] = useState(false)
   const [scrollbackContent, setScrollbackContent] = useState('')
   const [scrollbackLoading, setScrollbackLoading] = useState(false)
@@ -1300,10 +1302,11 @@ export default function Terminal({ token }: Props) {
     themeMode,
     onToggleTheme: toggleTheme,
     onOpenSettings: () => setShowGeneralSettings(true),
-        onOpenFiles: () => setShowFiles(true),
+    onOpenFiles: () => setShowFiles(true),
+    onOpenWorkspace: () => setShowWorkspace(true),
     onUpload: handleFileUpload,
     onUploadFile: uploadFile,
-        collapsed: toolbarCollapsed,
+    collapsed: toolbarCollapsed,
     onCollapsedChange: setToolbarCollapsed,
   }
 
@@ -1425,6 +1428,14 @@ export default function Terminal({ token }: Props) {
                       title="文件列表"
                     >
                       <Icon name="folder" size={18} />
+                    </button>
+
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setShowWorkspace(true); }}
+                      className="w-12 h-10 bg-transparent border-none text-nexus-text-2 flex items-center justify-center cursor-pointer"
+                      title="浏览工作目录"
+                    >
+                      <Icon name="folderOpen" size={18} />
                     </button>
 
                     <button
@@ -1629,6 +1640,14 @@ export default function Terminal({ token }: Props) {
           <FilePanel
             token={token}
             onClose={() => setShowFiles(false)}
+          />
+        </Suspense>
+      )}
+      {showWorkspace && (
+        <Suspense fallback={null}>
+          <WorkspaceBrowser
+            token={token}
+            onClose={() => setShowWorkspace(false)}
           />
         </Suspense>
       )}

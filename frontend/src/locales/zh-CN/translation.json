@@ -44,7 +44,11 @@
     "selectThisDir": "选此目录",
     "rootDir": "根目录",
     "noSubDirs": "无子目录",
-    "dirClickHint": "单击选中，双击进入"
+    "dirClickHint": "单击选中，双击进入",
+    "root": "根目录",
+    "empty": "空目录",
+    "parent": "上级目录",
+    "footer": "共 {{count}} 个项目"
   },
   "newChannel": {
     "title": "新建频道",
@@ -65,6 +69,7 @@
     "settings": "设置",
     "toggleTheme": "切换主题",
     "fileList": "文件列表",
+    "workspace": "浏览工作目录",
     "more": "更多",
     "tasks": "任务面板",
     "switchLight": "切换亮色",

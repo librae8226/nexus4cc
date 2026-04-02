@@ -308,6 +308,53 @@ app.get('/api/browse', authMiddleware, (req, res) => {
   }
 })
 
+// GET /api/workspace/files — 浏览工作目录文件（支持文件和目录）
+app.get('/api/workspace/files', authMiddleware, (req, res) => {
+  try {
+    let relPath = req.query.path || ''
+    // 安全检查：防止目录遍历
+    relPath = normalize(relPath).replace(/^(\.\.(\/|\|$))+/, '')
+    const fullPath = join(WORKSPACE_ROOT, relPath)
+    // 确保路径在 WORKSPACE_ROOT 内
+    if (!fullPath.startsWith(WORKSPACE_ROOT)) {
+      return res.status(403).json({ error: 'access denied' })
+    }
+    const entries = readdirSync(fullPath, { withFileTypes: true })
+      .filter(e => !e.name.startsWith('.')) // 隐藏文件不显示
+      .map(e => {
+        const stat = statSync(join(fullPath, e.name))
+        return {
+          name: e.name,
+          type: e.isDirectory() ? 'dir' : 'file',
+          size: e.isFile() ? stat.size : undefined,
+          mtime: stat.mtimeMs,
+        }
+      })
+    res.json({ path: relPath, entries })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// 静态文件服务：工作目录文件直接访问（/workspace/相对路径）
+app.use('/workspace', authMiddleware, (req, res, next) => {
+  try {
+    let relPath = decodeURIComponent(req.path)
+    // 安全检查
+    relPath = normalize(relPath).replace(/^(\.\.(\/|\|$))+/, '')
+    const fullPath = join(WORKSPACE_ROOT, relPath)
+    if (!fullPath.startsWith(WORKSPACE_ROOT)) {
+      return res.status(403).send('access denied')
+    }
+    if (!existsSync(fullPath) || !statSync(fullPath).isFile()) {
+      return res.status(404).send('not found')
+    }
+    res.sendFile(fullPath)
+  } catch (err) {
+    res.status(500).send(err.message)
+  }
+})
+
 // POST /api/upload — 上传文件到指定 session 的 cwd（F-14）
 // body: multipart/form-data, fields: file, session_name (optional)
 const upload = multer({

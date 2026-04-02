@@ -44,7 +44,11 @@
     "selectThisDir": "Select",
     "rootDir": "Root",
     "noSubDirs": "No subdirectories",
-    "dirClickHint": "Click to select, double-click to enter"
+    "dirClickHint": "Click to select, double-click to enter",
+    "root": "Root",
+    "empty": "Empty directory",
+    "parent": "Parent directory",
+    "footer": "{{count}} items"
   },
   "newChannel": {
     "title": "New Channel",
@@ -65,6 +69,7 @@
     "settings": "Settings",
     "toggleTheme": "Toggle theme",
     "fileList": "File list",
+    "workspace": "Browse workspace",
     "more": "More",
     "tasks": "Tasks",
     "switchLight": "Light mode",
