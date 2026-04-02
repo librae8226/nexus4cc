@@ -18,6 +18,7 @@ interface Props {
   token: string
   onClose: () => void
   onConfirm: (path: string, shellType: 'claude' | 'bash', profile?: string) => void
+  currentSession?: string
 }
 
 // 检测是否为 PC 端（>= 768px）
@@ -31,11 +32,11 @@ function useIsDesktop() {
   return isDesktop
 }
 
-export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) {
+export default function WorkspaceSelector({ token, onClose, onConfirm, currentSession }: Props) {
   const { t } = useTranslation()
   const isDesktop = useIsDesktop()
-  const [selectedPath, setSelectedPath] = useState(() => localStorage.getItem('nexus_last_path') || '/workspace')
-  const [inputPath, setInputPath] = useState(() => localStorage.getItem('nexus_last_path') || '/workspace')
+  const [selectedPath, setSelectedPath] = useState('/workspace')
+  const [inputPath, setInputPath] = useState('/workspace')
   const [shellType, setShellType] = useState<'claude' | 'bash'>('claude')
   const [configs, setConfigs] = useState<Config[]>([])
   const [selectedProfile, setSelectedProfile] = useState<string>(() => localStorage.getItem('nexus_last_profile') || '')
@@ -67,10 +68,37 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
     }
   }
 
+  // 获取当前 session 的 CWD 作为默认路径
   useEffect(() => {
+    async function init() {
+      // 先尝试从 localStorage 读取上次路径
+      const lastPath = localStorage.getItem('nexus_last_path')
+      if (lastPath && lastPath.startsWith('/')) {
+        setSelectedPath(lastPath)
+        setInputPath(lastPath)
+        browseDir(lastPath)
+      } else if (currentSession) {
+        // 获取当前 session 的 CWD
+        try {
+          const r = await fetch(`/api/session-cwd?session=${encodeURIComponent(currentSession)}`, { headers })
+          if (r.ok) {
+            const data = await r.json()
+            if (data.cwd) {
+              setSelectedPath(data.cwd)
+              setInputPath(data.cwd)
+              browseDir(data.cwd)
+              return
+            }
+          }
+        } catch {}
+        browseDir(null)
+      } else {
+        browseDir(null)
+      }
+    }
     fetchConfigs()
-    browseDir(null)
-  }, [])
+    init()
+  }, [currentSession])
 
   async function fetchConfigs() {
     try {
