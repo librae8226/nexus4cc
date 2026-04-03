@@ -1,5 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import { Icon } from './icons'
 
 interface FileEntry {
@@ -632,83 +634,35 @@ function getFileIcon(name: string): string {
   return iconMap[ext] || '📄'
 }
 
-// Simple Markdown preview component
+// Configure marked for GFM (tables, task lists, etc.)
+marked.setOptions({
+  gfm: true,
+  breaks: true,
+})
+
+// Markdown preview component using marked + DOMPurify
 function MarkdownPreview({ content }: { content: string }) {
-  const html = renderMarkdown(content)
+  const rawHtml = marked.parse(content, { async: false }) as string
+  const cleanHtml = DOMPurify.sanitize(rawHtml, {
+    ALLOWED_TAGS: [
+      'p', 'br', 'strong', 'em', 'del', 'a', 'img', 'code', 'pre',
+      'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+      'ul', 'ol', 'li', 'blockquote', 'hr', 'table', 'thead', 'tbody',
+      'tr', 'th', 'td', 'input' // input for task lists
+    ],
+    ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'target', 'rel', 'checked', 'disabled'],
+    ALLOW_DATA_ATTR: false,
+  })
+
   return (
     <div
-      className="prose prose-invert prose-sm max-w-none text-nexus-text"
-      dangerouslySetInnerHTML={{ __html: html }}
+      className="markdown-body prose prose-invert prose-sm max-w-none text-nexus-text
+        [&_table]:w-full [&_table]:border-collapse [&_table]:my-3
+        [&_th]:border [&_th]:border-nexus-border [&_th]:bg-nexus-bg-2 [&_th]:p-2 [&_th]:text-left [&_th]:text-nexus-text
+        [&_td]:border [&_td]:border-nexus-border [&_td]:p-2 [&_td]:text-nexus-text
+        [&_tr:nth-child(even)]:bg-nexus-bg-2/50
+        [&_input[type='checkbox']]:mr-2 [&_input[type='checkbox']]:accent-nexus-accent"
+      dangerouslySetInnerHTML={{ __html: cleanHtml }}
     />
   )
-}
-
-// Simple Markdown renderer (supports common syntax)
-function renderMarkdown(text: string): string {
-  let html = escapeHtml(text)
-
-  // Code blocks (```lang\ncode\n```)
-  html = html.replace(/```([\w]*)(?:\n)?([\s\S]*?)```/g, (_, _lang, code) => {
-    return `<pre class="bg-nexus-bg p-3 rounded overflow-x-auto my-2"><code class="text-nexus-text text-xs font-mono">${code.trim()}</code></pre>`
-  })
-
-  // Inline code (`code`)
-  html = html.replace(/`([^`]+)`/g, '<code class="bg-nexus-bg px-1 py-0.5 rounded text-xs font-mono text-nexus-accent">$1</code>')
-
-  // Headers (# ## ###)
-  html = html.replace(/^### (.*$)/gim, '<h3 class="text-lg font-semibold mt-4 mb-2 text-nexus-text">$1</h3>')
-  html = html.replace(/^## (.*$)/gim, '<h2 class="text-xl font-semibold mt-5 mb-3 text-nexus-text">$1</h2>')
-  html = html.replace(/^# (.*$)/gim, '<h1 class="text-2xl font-bold mt-6 mb-4 text-nexus-text">$1</h1>')
-
-  // Bold and italic
-  html = html.replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>')
-  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-  html = html.replace(/\*(.*?)\*/g, '<em>$1</em>')
-  html = html.replace(/___(.*?)___/g, '<strong><em>$1</em></strong>')
-  html = html.replace(/__(.*?)__/g, '<strong>$1</strong>')
-  html = html.replace(/_(.*?)_/g, '<em>$1</em>')
-
-  // Strikethrough
-  html = html.replace(/~~(.*?)~~/g, '<del>$1</del>')
-
-  // Links [text](url)
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-nexus-accent hover:underline">$1</a>')
-
-  // Images ![alt](url)
-  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="max-w-full h-auto my-2 rounded" />')
-
-  // Blockquote (> text)
-  html = html.replace(/^> (.*$)/gim, '<blockquote class="border-l-4 border-nexus-accent pl-4 my-2 italic text-nexus-text-2">$1</blockquote>')
-
-  // Unordered lists (- or * item)
-  html = html.replace(/^([\s]*)[-*] (.*$)/gim, (_match, indent, item) => {
-    const depth = indent.length / 2
-    return `<li class="ml-${4 + depth * 4} text-nexus-text">${item}</li>`
-  })
-
-  // Ordered lists (1. item)
-  html = html.replace(/^([\s]*)\d+\. (.*$)/gim, (_match, indent, item) => {
-    const depth = indent.length / 2
-    return `<li class="ml-${4 + depth * 4} text-nexus-text list-decimal">${item}</li>`
-  })
-
-  // Horizontal rule (--- or ***)
-  html = html.replace(/^(---|\*\*\*)$/gim, '<hr class="border-nexus-border my-4" />')
-
-  // Line breaks - preserve paragraphs
-  const paragraphs = html.split('\n\n').filter(p => p.trim())
-  html = paragraphs.map(p => {
-    // Skip if already wrapped in HTML tags
-    if (p.trim().startsWith('<') && p.trim().endsWith('>')) return p
-    // Wrap in paragraph
-    return `<p class="mb-2 text-nexus-text">${p}</p>`
-  }).join('\n')
-
-  return html
-}
-
-function escapeHtml(text: string): string {
-  const div = document.createElement('div')
-  div.textContent = text
-  return div.innerHTML
 }
