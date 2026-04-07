@@ -98,18 +98,36 @@ cp .env.example .env
 #   ACC_PASSWORD_HASH=$$(node -e "console.log(require('bcrypt').hashSync('your-password', 12))")
 #   WORKSPACE_ROOT=/your/workspace
 
-# 3. Install & Build
+# 3. Create a Claude Profile (required!)
+mkdir -p data/configs
+cat > data/configs/anthropic.json << 'EOF'
+{
+  "label": "Anthropic Claude",
+  "BASE_URL": "",
+  "AUTH_TOKEN": "",
+  "API_KEY": "",
+  "DEFAULT_MODEL": "claude-sonnet-4-6",
+  "THINK_MODEL": "claude-opus-4-6",
+  "LONG_CONTEXT_MODEL": "claude-opus-4-6",
+  "DEFAULT_HAIKU_MODEL": "claude-haiku-4-5-20251001",
+  "API_TIMEOUT_MS": "3000000"
+}
+EOF
+
+# 4. Install & Build
 npm install
 cd frontend && npm install && npm run build && cd ..
 
-# 4. Launch
+# 5. Launch
 npm start
 # For production with PM2: pm2 start ecosystem.config.cjs
 
-# 5. Open http://localhost:59000 on any device 🚀
+# 6. Open http://localhost:59000 on any device 🚀
 ```
 
 > **Tip:** Expose via Cloudflare Tunnel or Tailscale for secure remote access without port forwarding.
+
+📖 **[Complete Quick Start Guide →](docs/QUICKSTART.md)** (includes profile setup, troubleshooting, and mobile access)
 
 ---
 
@@ -161,6 +179,7 @@ cd frontend && npm run dev
 
 | Doc | Description |
 | --- | --- |
+| [QUICKSTART.md](docs/QUICKSTART.md) | **Start here** — step-by-step setup guide |
 | [NORTH-STAR.md](NORTH-STAR.md) | Core principles & constraints |
 | [PRD.md](PRD.md) | Feature specifications |
 | [ROADMAP.md](ROADMAP.md) | What's next |
@@ -258,18 +277,36 @@ cp .env.example .env
 #   ACC_PASSWORD_HASH=$$(node -e "console.log(require('bcrypt').hashSync('你的密码', 12))")
 #   WORKSPACE_ROOT=/你的/工作目录
 
-# 3. 安装构建
+# 3. 创建 Claude Profile（重要！）
+mkdir -p data/configs
+cat > data/configs/anthropic.json << 'EOF'
+{
+  "label": "Anthropic Claude",
+  "BASE_URL": "",
+  "AUTH_TOKEN": "",
+  "API_KEY": "",
+  "DEFAULT_MODEL": "claude-sonnet-4-6",
+  "THINK_MODEL": "claude-opus-4-6",
+  "LONG_CONTEXT_MODEL": "claude-opus-4-6",
+  "DEFAULT_HAIKU_MODEL": "claude-haiku-4-5-20251001",
+  "API_TIMEOUT_MS": "3000000"
+}
+EOF
+
+# 4. 安装构建
 npm install
 cd frontend && npm install && npm run build && cd ..
 
-# 4. 启动
+# 5. 启动
 npm start
 # 生产环境推荐 PM2:pm2 start ecosystem.config.cjs
 
-# 5. 在任意设备打开 http://localhost:59000 🚀
+# 6. 在任意设备打开 http://localhost:59000 🚀
 ```
 
 > **小贴士：** 通过 Cloudflare Tunnel 或 Tailscale 暴露服务，无需端口转发即可安全远程访问。
+
+📖 **[完整快速开始指南 →](docs/QUICKSTART.md)**（含 Profile 配置、故障排查、移动端访问）
 
 ---
 
@@ -321,6 +358,7 @@ cd frontend && npm run dev
 
 | 文档 | 说明 |
 | --- | --- |
+| [QUICKSTART.md](docs/QUICKSTART.md) | **新手从这里开始** — 手把手配置指南 |
 | [NORTH-STAR.md](NORTH-STAR.md) | 核心原则与约束 |
 | [PRD.md](PRD.md) | 功能规格说明 |
 | [ROADMAP.md](ROADMAP.md) | 未来规划 |
