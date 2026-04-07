@@ -228,6 +228,7 @@ export default function Terminal({ token }: Props) {
       .then(d => {
         if (d.tmuxSession && !localStorage.getItem('nexus_session')) {
           setActiveTmuxSession(d.tmuxSession)
+          setWsSessionKey(d.tmuxSession)
         }
       })
       .catch(() => {})
@@ -1348,24 +1349,27 @@ export default function Terminal({ token }: Props) {
     }
   }
 
-  async function fetchScrollback() {
+  function fetchScrollback() {
     if (showScrollbackRef.current) return // already showing
     showScrollbackRef.current = true
     swipeUpAccumRef.current = 0
-    setScrollbackLoading(true)
     setShowScrollback(true)
-    try {
-      const r = await fetch(
-        `/api/sessions/${activeWindowIndex}/scrollback?session=${encodeURIComponent(wsSessionKey)}&lines=3000`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      )
-      const data = await r.json()
-      setScrollbackContent(data.content || '')
-    } catch {
-      setScrollbackContent('(加载历史失败)')
-    } finally {
-      setScrollbackLoading(false)
-    }
+    setScrollbackLoading(true)
+
+    const wi = activeWindowIndexRef.current
+    const s = activeTmuxSessionRef.current
+    fetch(`/api/sessions/${wi}/scrollback?session=${encodeURIComponent(s)}&lines=3000`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(({ content }: { content: string }) => {
+        setScrollbackContent(content.trimEnd())
+        setScrollbackLoading(false)
+      })
+      .catch(() => {
+        setScrollbackContent('(加载失败)')
+        setScrollbackLoading(false)
+      })
   }
 
   useEffect(() => {
