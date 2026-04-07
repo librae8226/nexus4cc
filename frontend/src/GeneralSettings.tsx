@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import GhostShield from './GhostShield'
 import { Icon } from './icons'
@@ -28,17 +28,24 @@ export default function GeneralSettings({ token, themeMode, onToggleTheme, onClo
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle')
   const [copied, setCopied] = useState(false)
 
+  useEffect(() => {
+    fetch('/api/version', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data?.current) setCurrentVersion(data.current) })
+      .catch(() => {})
+  }, [token])
+
   async function handleCheckUpdate() {
     setUpdateStatus('checking')
     try {
-      const [vRes, lRes] = await Promise.all([
-        fetch('/api/version', { headers: { Authorization: `Bearer ${token}` } }),
-        fetch('/api/version/latest', { headers: { Authorization: `Bearer ${token}` } }),
-      ])
-      if (!vRes.ok || !lRes.ok) { setUpdateStatus('error'); return }
-      const vData = await vRes.json()
+      const lRes = await fetch('/api/version/latest', { headers: { Authorization: `Bearer ${token}` } })
+      if (!lRes.ok) { setUpdateStatus('error'); return }
       const lData = await lRes.json()
       if (lData.error) { setUpdateStatus('error'); return }
+      // Re-fetch current version to get fresh clean state at check time
+      const vRes = await fetch('/api/version', { headers: { Authorization: `Bearer ${token}` } })
+      if (!vRes.ok) { setUpdateStatus('error'); return }
+      const vData = await vRes.json()
       setCurrentVersion(vData.current)
       setLatestVersion(lData.latest)
       setReleaseUrl(lData.url)

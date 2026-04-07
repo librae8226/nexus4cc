@@ -302,11 +302,11 @@ app.get('/api/version', authMiddleware, (req, res) => {
   }
 });
 
-// GET /api/version/latest — 代理 GitHub Releases API 获取最新版本
+// GET /api/version/latest — 代理 GitHub Tags API 获取最新版本（兼容只有 tag 没有 Release 的 repo）
 app.get('/api/version/latest', authMiddleware, (req, res) => {
   const options = {
     hostname: 'api.github.com',
-    path: `/repos/${GITHUB_REPO}/releases/latest`,
+    path: `/repos/${GITHUB_REPO}/tags`,
     headers: { 'User-Agent': 'nexus-update-check' },
   };
   https.get(options, (ghRes) => {
@@ -315,8 +315,9 @@ app.get('/api/version/latest', authMiddleware, (req, res) => {
     ghRes.on('end', () => {
       try {
         const json = JSON.parse(data);
-        if (!json.tag_name) return res.status(502).json({ error: 'no release found' });
-        res.json({ latest: json.tag_name, url: json.html_url });
+        if (!Array.isArray(json) || json.length === 0) return res.status(502).json({ error: 'no tags found' });
+        const latest = json[0].name;
+        res.json({ latest, url: `https://github.com/${GITHUB_REPO}/releases/tag/${latest}` });
       } catch {
         res.status(502).json({ error: 'invalid response from GitHub' });
       }
