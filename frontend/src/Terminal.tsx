@@ -703,13 +703,14 @@ export default function Terminal({ token }: Props) {
       }
       if (!res.ok) throw new Error(await res.text())
       const data = await res.json()
-      const fullPath = data.fullPath
-      const filename = data.originalName || file.name
+      const fullPath = data.fullPath || data.url || ''
+      const filename = data.originalName || data.filename || file.name
+      if (!fullPath) console.warn('[Nexus] Upload response missing fullPath:', data)
       addUploadNotification(filename, fullPath)
       const term = termRef.current
       if (term) {
         term.writeln(`\r\n\x1b[32m[Nexus: 文件已上传]\x1b[0m ${filename}`)
-        term.writeln(`\x1b[36m路径: ${fullPath}\x1b[0m`)
+        if (fullPath) term.writeln(`\x1b[36m路径: ${fullPath}\x1b[0m`)
       }
     } catch (e: any) {
       console.error('Upload failed:', e)

@@ -688,14 +688,16 @@ app.post('/api/files/upload', authMiddleware, (req, res, next) => {
     try {
       writeFileSync(filePath, req.file.buffer)
       const url = `/uploads/${dateDir}/${safe}`
-      res.json({
+      const responseData = {
         ok: true,
         filename: safe,
         url,
         fullPath: filePath,
         size: req.file.size,
         originalName: originalName
-      })
+      }
+      console.log('[Upload]', safe, '→', filePath)
+      res.json(responseData)
     } catch (writeErr) {
       res.status(500).json({ error: writeErr.message })
     }
