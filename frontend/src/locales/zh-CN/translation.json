@@ -22,7 +22,6 @@
   "login": {
     "title": "Nexus",
     "subtitle": "AI Agent 终端面板",
-    "version": "v1.7.0",
     "passwordPlaceholder": "输入密码",
     "loginButton": "登录",
     "loggingIn": "登录中...",

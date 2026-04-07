@@ -61,6 +61,35 @@ docs/
 - Manual verification：打开浏览器验证受影响的用户流
 - Commit follows standard below
 
+## Version Management
+
+**Source of truth: git tag**（`git describe --tags --abbrev=0`）
+
+每次发布新版本时必须同步更新以下文件，否则版本显示会不一致：
+
+| 文件 | 字段 |
+|---|---|
+| `package.json` | `"version"` |
+| `frontend/package.json` | `"version"` |
+
+发布流程：
+```bash
+# 1. 确认工作区干净
+git status
+
+# 2. 更新两个 package.json 的 version 字段
+
+# 3. 提交
+git add package.json frontend/package.json
+git commit -m "chore: bump version to X.Y.Z"
+
+# 4. 打 tag 并推送
+git tag vX.Y.Z
+git push && git push --tags
+```
+
+**不要**在 i18n 文件或代码里硬编码版本号 — Settings > About 通过 `/api/version`（读 git tag）动态显示，无需手动维护。
+
 ## Git Commit Standard
 
 ```

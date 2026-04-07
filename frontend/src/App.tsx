@@ -50,7 +50,7 @@ export default function App() {
     <div className="flex items-center justify-center w-full h-full bg-nexus-bg">
       <div className="bg-nexus-bg-2 rounded-xl p-10 px-8 min-w-80 shadow-[0_8px_32px_rgba(0,0,0,0.3)] border border-nexus-border">
         <h1 className="text-nexus-text text-3xl font-bold text-center mb-2 tracking-widest">{t('login.title')}</h1>
-        <p className="text-nexus-text-2 text-sm text-center mb-8">{t('login.subtitle')} <span className="text-nexus-muted text-xs font-normal ml-1.5">{t('login.version')}</span></p>
+        <p className="text-nexus-text-2 text-sm text-center mb-8">{t('login.subtitle')}</p>
         <form onSubmit={handleLogin} className="flex flex-col gap-3">
           <input
             type="password"

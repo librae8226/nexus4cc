@@ -22,7 +22,6 @@
   "login": {
     "title": "Nexus",
     "subtitle": "AI Agent Terminal Panel",
-    "version": "v1.7.0",
     "passwordPlaceholder": "Enter password",
     "loginButton": "Login",
     "loggingIn": "Logging in...",
