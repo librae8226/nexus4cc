@@ -1148,16 +1148,25 @@ export default function Terminal({ token }: Props) {
           writeTerm('\r\n\x1b[32m[Nexus: 已重新连接]\x1b[0m\r\n')
         } else {
           clearTimeout(loadingTimer)
-          // Clear terminal buffer for the new window
-          termRef.current?.clear()
+          // Reset xterm parser state for the new window so the incoming
+          // SIGWINCH-triggered repaint is parsed from a clean state.
+          termRef.current?.reset()
         }
         reconnectAttempts = 0
         hasConnectedRef.current = true
         setIsConnecting(false)
         fitAddonRef.current?.fit()
         const term = termRef.current
-        if (term) newWs.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
-        // Follow-up fit in case layout wasn't fully settled at onopen time
+        if (term) {
+          // Send rows-1 first: tmux only repaints on an *actual* dimension change.
+          // If the PTY already has the same cols/rows (same device, same viewport),
+          // a same-size resize is a no-op in tmux and no repaint is sent.
+          // The rows-1 nudge guarantees a size change → SIGWINCH → tmux pushes a
+          // full repaint. The rAF below immediately corrects to the real dimensions.
+          newWs.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: Math.max(term.rows - 1, 5) }))
+        }
+        // Follow-up fit: re-measures layout and sends correct final dimensions,
+        // triggering a second SIGWINCH repaint at the right size.
         requestAnimationFrame(() => {
           fitAddonRef.current?.fit()
           if (wsRef.current?.readyState === WebSocket.OPEN && termRef.current) {

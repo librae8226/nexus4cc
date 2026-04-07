@@ -1685,9 +1685,9 @@ wss.on('connection', (ws, req) => {
   entry.clients.add(ws);
   console.log(`Client connected to ${key} (clients: ${entry.clients.size})`);
 
-  // 发送最近输出（帮助快速恢复上下文）
+  // Send recent output so the screen isn't blank while waiting for the first repaint.
   if (entry.lastOutput) {
-    ws.send(entry.lastOutput.slice(-2000)); // 只发最后 2KB 避免洪水
+    ws.send(entry.lastOutput.slice(-2000));
   }
 
   ws.on('message', (msg) => {
