@@ -43,42 +43,34 @@ cd frontend && npm install && npm run build && cd ..
 ## 第二步：配置环境变量
 
 ```bash
-# 复制示例配置
+# 复制示例配置（已内置默认值，可直接使用）
 cp .env.example .env
 ```
 
-编辑 `.env` 文件，至少填写以下三项：
+`.env.example` 已预填了默认值，**复制后无需编辑即可启动**：
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `JWT_SECRET` | 已预填 | JWT 签名密钥 |
+| `ACC_PASSWORD_HASH` | 已预填 | 默认密码：**`nexus123`** |
+| `TMUX_SESSION` | `main` | tmux 会话名 |
+| `WORKSPACE_ROOT` | `/home` | Claude 能访问的目录根 |
+| `PORT` | `59000` | 服务端口 |
+
+**常用调整（可选）：**
 
 ```bash
-# 1. JWT 签名密钥（生成随机字符串）
-JWT_SECRET=$(openssl rand -hex 32)
+# 改为你的实际工作目录（让 Claude 只访问特定目录）
+WORKSPACE_ROOT=/home/yourname/work
 
-# 2. 登录密码（bcrypt hash，下面命令会生成）
-# 方法 A：用 htpasswd（如果有 apache2-utils）
-htpasswd -bnBC 12 "" yourpassword | tr -d ':\n'
-
-# 方法 B：用 Node.js
-node -e "const b=require('bcrypt');b.hash('yourpassword',12).then(h=>console.log(h))"
-
-# 把生成的 hash 填入
-ACC_PASSWORD_HASH=$2b$12$xxxxxxxxxxxxxxxxxxxxxx
-
-# 3. 工作区根目录（Claude 能访问的目录）
-WORKSPACE_ROOT=/home/yourname/workspace
-```
-
-**其他可选配置：**
-
-```bash
-# tmux 会话名（默认 main）
-TMUX_SESSION=main
-
-# 代理设置（如需通过代理访问 Anthropic API）
+# 如需通过代理访问 Anthropic API
 CLAUDE_PROXY=http://127.0.0.1:6789
-
-# Telegram Bot（可选，用于手机给 AI 下任务）
-TELEGRAM_BOT_TOKEN=
 ```
+
+> ⚠️ **生产环境**请修改密码和 JWT_SECRET。生成新密码 hash：
+> ```bash
+> node -e "const b=require('bcrypt');b.hash('yourpassword',12).then(h=>console.log(h))"
+> ```
 
 ---
 
@@ -206,7 +198,7 @@ http://localhost:59000
 
 ### 1. 登录
 
-首次访问需要输入密码（即 `.env` 中 `ACC_PASSWORD_HASH` 对应的明文密码）。
+首次访问需要输入密码。如果使用默认配置，密码是 **`nexus123`**。
 
 ### 2. 创建工作区
 
