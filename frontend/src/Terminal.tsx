@@ -826,6 +826,34 @@ export default function Terminal({ token }: Props) {
         return
       }
 
+      // === 剪贴板快捷键：Ctrl+C/V (PC) / Cmd+C/V (Mac) ===
+      const clipboardMod = e.ctrlKey || e.metaKey
+      const clipboardKey = e.key.toLowerCase()
+      const noOtherMod = !e.shiftKey && !e.altKey
+
+      // 复制：有选中文字时复制到剪贴板
+      if (clipboardMod && clipboardKey === 'c' && noOtherMod) {
+        if (term.hasSelection()) {
+          e.preventDefault()
+          navigator.clipboard.writeText(term.getSelection()).catch(() => {})
+          return
+        }
+        // Mac Cmd+C 无选中：不拦截（Mac 终端里 Cmd+C 永远是复制，不发送 SIGINT）
+        if (e.metaKey) return
+        // PC Ctrl+C 无选中：继续往下 → 发送 SIGINT (ETX)
+      }
+
+      // 粘贴：从剪贴板读取并发送到终端
+      if (clipboardMod && clipboardKey === 'v' && noOtherMod) {
+        e.preventDefault()
+        navigator.clipboard.readText().then(text => {
+          if (text && wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(text)
+          }
+        }).catch(() => {})
+        return
+      }
+
       // 白名单：这些快捷键保留给浏览器/应用使用
       const whitelist = [
         { ctrl: true, key: 'r', desc: '浏览器刷新' },
@@ -833,7 +861,6 @@ export default function Terminal({ token }: Props) {
         { ctrl: true, key: 't', desc: '新标签页' },
         { ctrl: true, key: 'n', desc: '新窗口' },
         { ctrl: true, key: 'w', desc: '关闭标签' },
-        { ctrl: true, key: 'v', desc: '粘贴' },
         { ctrl: true, shift: true, key: 't', desc: '恢复标签' },
         { ctrl: true, shift: true, key: 'n', desc: '隐身窗口' },
         { ctrl: true, key: 'tab', desc: '切换标签' },

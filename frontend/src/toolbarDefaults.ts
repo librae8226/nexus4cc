@@ -71,12 +71,16 @@ export const FACTORY_PINNED = [
   'esc',
   // Navigation
   'up', 'down', 'left', 'right',
-  // Editing — enter left of backspace
-  'enter', 'backspace', 'tab',
-  // Navigation — ^A replaces ^L, ^E replaces ^R
+  // Editing
+  'enter', 'backspace',
+  // Navigation — ^A ^E
   'ctrl-a', 'ctrl-e',
-  // Input — ^C right of ^V
-  'backslash', 'ctrl-v', 'ctrl-c',
+  // Editing — tab (moved from backspace's right)
+  'tab',
+  // Input — \ / adjacent
+  'backslash', 'slash',
+  // Clipboard
+  'ctrl-v', 'ctrl-c',
 ]
 
 export const FACTORY_EXPANDED = [
@@ -87,7 +91,7 @@ export const FACTORY_EXPANDED = [
   // Control group
   'ctrl-l', 'ctrl-r', 'ctrl-b', 'ctrl-o', 'ctrl-t', 'ctrl-f', 'ctrl-g',
   // Input group
-  'shift-tab', 'slash', 'bang', 'at',
+  'shift-tab', 'bang', 'at',
   // UI Actions
   'scroll-btm', 'copy-term', 'fit',
 ]
