@@ -73,19 +73,19 @@ export const FACTORY_PINNED = [
   'up', 'down', 'left', 'right',
   // Editing — enter left of backspace
   'enter', 'backspace', 'tab',
-  // Control extras
-  'ctrl-l', 'ctrl-r',
+  // Navigation — ^A replaces ^L, ^E replaces ^R
+  'ctrl-a', 'ctrl-e',
   // Input — ^C right of ^V
   'backslash', 'ctrl-v', 'ctrl-c',
 ]
 
 export const FACTORY_EXPANDED = [
   // Navigation group
-  'ctrl-a', 'ctrl-e', 'alt-b', 'alt-f',
+  'alt-b', 'alt-f',
   // Editing group
   'ctrl-d', 'ctrl-u', 'ctrl-k', 'ctrl-y', 'ctrl-z', 'ctrl-j',
   // Control group
-  'ctrl-b', 'ctrl-o', 'ctrl-t', 'ctrl-f', 'ctrl-g',
+  'ctrl-l', 'ctrl-r', 'ctrl-b', 'ctrl-o', 'ctrl-t', 'ctrl-f', 'ctrl-g',
   // Input group
   'shift-tab', 'slash', 'bang', 'at',
   // UI Actions
