@@ -69,10 +69,10 @@ const ICONS: Record<IconName, React.ReactNode> = {
     <polyline points="18 15 12 9 6 15" />
   ),
   chevronLeft: (
-    <polyline points="9 6 15 12 9 18" />
+    <polyline points="15 6 9 12 15 18" />
   ),
   chevronRight: (
-    <polyline points="6 9 12 15 18 9" />
+    <polyline points="9 6 15 12 9 18" />
   ),
   grip: (
     <g>
