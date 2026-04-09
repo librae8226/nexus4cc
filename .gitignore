@@ -2,6 +2,10 @@
 # Claude Code persistence
 .claude-data/
 
+# Superpowers workspace
+.superpowers/
+docs/superpowers/
+
 # Sensitive scripts for reference only
 .scripts/
 
