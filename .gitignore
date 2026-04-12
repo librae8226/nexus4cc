@@ -1,6 +1,7 @@
 
 # Claude Code persistence
 .claude-data/
+.context/
 
 # Superpowers workspace
 .superpowers/
