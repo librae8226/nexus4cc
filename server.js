@@ -48,6 +48,7 @@ const {
   ACC_PASSWORD_HASH,
   TMUX_SESSION = '~',
   WORKSPACE_ROOT = '/workspace',
+  HOST = '0.0.0.0',
   PORT = '3000',
   CLAUDE_PROXY = '',
   TELEGRAM_BOT_TOKEN,
@@ -1806,8 +1807,8 @@ try {
   if (changed) saveTasks(staleTasks)
 } catch {}
 
-server.listen(Number(PORT), '0.0.0.0', () => {
-  console.log(`Nexus listening on :${PORT}`);
+server.listen(Number(PORT), HOST, () => {
+  console.log(`Nexus listening on ${HOST}:${PORT}`);
   console.log(`tmux session: ${TMUX_SESSION}`);
   console.log(`workspace: ${WORKSPACE_ROOT}`);
   // 启动时确保默认 tmux session 存在，窗口名使用 WORKSPACE_ROOT 的目录名

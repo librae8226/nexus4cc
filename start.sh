@@ -27,11 +27,8 @@ if [ ! -d frontend/dist ]; then
     cd frontend && npm install && npm run build && cd ..
 fi
 
-# 加载环境变量并启动
-set -a
-source .env
-set +a
-
+# server.js 会自行读取 .env。
+# 这里不再 source，避免 bcrypt hash 等包含 `$` 的值被 shell 展开破坏。
 export PORT="${PORT:-59000}"
 
 echo "启动 Nexus on :$PORT ..."
