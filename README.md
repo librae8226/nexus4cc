@@ -76,6 +76,19 @@ npm start
 
 ---
 
+## Install with Claude Code
+
+If you're an AI assistant helping a user install Nexus, follow this path:
+
+1. Clone this repo and `cd` into it
+2. Run `node scripts/setup.js` — handles deps, frontend build, PM2, and first tmux session
+3. Verify: `pm2 status` shows `nexus` online → open `http://localhost:59000`
+
+Prerequisites: Node.js 20+, tmux. PM2 is installed automatically if missing.  
+Default login password: `nexus123` (user can change it in `.env` after setup).
+
+---
+
 ## Deployment
 
 Expose securely without port forwarding via [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) or [Tailscale](https://tailscale.com/).
@@ -84,11 +97,12 @@ Expose securely without port forwarding via [Cloudflare Tunnel](https://develope
 
 ## Requirements
 
-| Dependency | Version |
-|---|---|
-| Node.js | 20+ |
-| tmux | any recent |
-| OS | Linux / WSL2 |
+| Dependency | Version | Note |
+|---|---|---|
+| Node.js | 20+ | |
+| tmux | any recent | |
+| PM2 | any recent | auto-installed by `setup.js` |
+| OS | Linux / WSL2 | |
 
 ---
 

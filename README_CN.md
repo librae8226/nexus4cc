@@ -76,6 +76,19 @@ npm start
 
 ---
 
+## 使用 Claude Code 一键安装
+
+如果你是正在帮用户安装 Nexus 的 AI 助手，按以下步骤执行：
+
+1. 克隆本仓库并 `cd` 进入目录
+2. 运行 `node scripts/setup.js` — 自动处理依赖安装、前端构建、PM2 启动和 tmux 会话创建
+3. 验证：`pm2 status` 显示 `nexus` 在线 → 打开 `http://localhost:59000`
+
+前置要求：Node.js 20+、tmux。PM2 不存在时会自动全局安装。  
+默认登录密码：`nexus123`（安装完成后可在 `.env` 中修改）。
+
+---
+
 ## 部署建议
 
 通过 [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) 或 [Tailscale](https://tailscale.com/) 安全暴露服务，无需端口转发。
@@ -84,11 +97,12 @@ npm start
 
 ## 环境要求
 
-| 依赖 | 版本 |
-|---|---|
-| Node.js | 20+ |
-| tmux | 任意近期版本 |
-| 操作系统 | Linux / WSL2 |
+| 依赖 | 版本 | 说明 |
+|---|---|---|
+| Node.js | 20+ | |
+| tmux | 任意近期版本 | |
+| PM2 | 任意近期版本 | `setup.js` 自动安装 |
+| 操作系统 | Linux / WSL2 | |
 
 ---
 
