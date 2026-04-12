@@ -7,7 +7,7 @@ import bcrypt from 'bcrypt';
 import { createServer } from 'node:http';
 import { exec, spawn, execSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { dirname, join, normalize, isAbsolute } from 'path';
+import { dirname, join, normalize, isAbsolute, basename } from 'path';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, statSync, rmdirSync, renameSync, cpSync, rmSync } from 'fs';
 import { readdir, stat as statAsync } from 'fs/promises';
 import https from 'node:https';
@@ -405,6 +405,9 @@ app.use('/workspace', (req, res, next) => {
     }
     if (!existsSync(fullPath) || !statSync(fullPath).isFile()) {
       return res.status(404).send('not found')
+    }
+    if (req.query.dl === '1') {
+      res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(basename(fullPath))}`)
     }
     res.sendFile(fullPath)
   } catch (err) {

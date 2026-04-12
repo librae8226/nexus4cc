@@ -343,17 +343,23 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
   // 打开文件（查看）
   function openFile(name: string) {
     const url = getFileUrl(name)
-    if (url) window.open(url, '_blank')
+    if (!url) return
+    const a = document.createElement('a')
+    a.href = url
+    a.target = '_blank'
+    a.rel = 'noopener noreferrer'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
   }
 
   // 下载文件
   function downloadFile(name: string) {
     const url = getFileUrl(name)
     if (!url) return
-
+    const dlUrl = url + '&dl=1'
     const a = document.createElement('a')
-    a.href = url
-    a.download = name
+    a.href = dlUrl
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
