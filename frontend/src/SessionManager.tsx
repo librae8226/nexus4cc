@@ -202,7 +202,7 @@ export default function SessionManager({ token, onClose }: Props) {
           </div>
           <div className="px-4 py-3 text-nexus-text-2 text-[11px] leading-relaxed">
             <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-2">{t('apiConfig.notes')}</div>
-            <p>每个配置对应一个 API provider。新建会话时选择配置后，会以该 provider 的 API key 启动 claude，且每个项目的会话历史独立保存在项目目录的 <code className="bg-nexus-bg-2 rounded px-1 font-mono text-[10px] text-nexus-accent">.claude-data/</code> 中，退出后再次进入可自动续接上下文。</p>
+            <p>每个配置对应一个 API provider。新建工作区时选择配置后，会使用该 provider 的 API key 启动 Claude；每个工作区的会话历史会独立保存在对应目录的 <code className="bg-nexus-bg-2 rounded px-1 font-mono text-[10px] text-nexus-accent">.claude-data/</code> 中，重新进入时可自动续接上下文。</p>
           </div>
         </div>
       </div>

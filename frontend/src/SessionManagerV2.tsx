@@ -201,7 +201,7 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
     setChannelMenu(null)
     setLongPressMenu(null)
     setSidebarChannelMenu(null)
-    const newName = window.prompt(`${t('common.rename')} Channel:`, channel.name)
+    const newName = window.prompt(t('sessionMgr.renameChannelPrompt'), channel.name)
     if (!newName || newName === channel.name) return
     try {
       const r = await fetch(`/api/sessions/${channel.index}/rename?session=${encodeURIComponent(currentProject)}`, {
@@ -235,7 +235,7 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
   const handleRenameProject = async (project: Project) => {
     setProjectMenu(null)
     setSidebarProjectMenu(null)
-    const newName = window.prompt(`${t('common.rename')} Project:`, project.name)
+    const newName = window.prompt(t('sessionMgr.renameProjectPrompt'), project.name)
     if (!newName || newName === project.name) return
     try {
       const r = await fetch(`/api/projects/${encodeURIComponent(project.name)}/rename`, {

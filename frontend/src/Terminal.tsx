@@ -1602,7 +1602,7 @@ EOF`}
                     <button
                       onClick={(e) => { e.stopPropagation(); openNewSessionDialog(); }}
                       className="w-12 h-10 bg-transparent border-none text-nexus-text-2 flex items-center justify-center cursor-pointer"
-                      title="新建项目"
+                      title={t('sessionMgr.newProject')}
                     >
                       <Icon name="folderPlus" size={18} />
                     </button>
@@ -1610,7 +1610,7 @@ EOF`}
                     <button
                       onClick={(e) => { e.stopPropagation(); handleCreateWindow(); }}
                       className="w-12 h-10 bg-transparent border-none text-nexus-text-2 flex items-center justify-center cursor-pointer"
-                      title="新建窗口"
+                      title={t('sessionMgr.newChannel')}
                     >
                       <Icon name="plus" size={18} />
                     </button>
@@ -1653,7 +1653,7 @@ EOF`}
                     <button
                       onClick={(e) => { e.stopPropagation(); setShowSessionManagerV2(true); }}
                       className="w-12 h-10 bg-transparent border-none text-nexus-text-2 flex items-center justify-center cursor-pointer"
-                      title="配置管理"
+                      title={t('sessionMgr.title')}
                     >
                       <Icon name="settings" size={18} />
                     </button>
@@ -1732,7 +1732,7 @@ EOF`}
           <div className="fixed inset-0 z-[400] bg-black/50" onPointerDown={() => { setShowSessionDrawer(false); setDrawerMenuIndex(null); setDrawerRenameIndex(null) }} />
           <div className="fixed bottom-0 left-0 right-0 z-[401] bg-nexus-menu-bg rounded-t-xl border border-nexus-border border-b-0 max-h-[70vh] flex flex-col shadow-[0_-4px_24px_rgba(0,0,0,0.4)]">
             <div className="flex items-center justify-between px-4 py-3.5 border-b border-nexus-border flex-shrink-0">
-              <span className="text-nexus-text font-semibold text-[15px]">会话管理</span>
+              <span className="text-nexus-text font-semibold text-[15px]">{t('sessionMgr.title')}</span>
               <button className="bg-transparent border-none text-nexus-text-2 cursor-pointer p-1 flex items-center justify-center" onPointerDown={(e) => { e.preventDefault(); setShowSessionDrawer(false); setDrawerMenuIndex(null); setDrawerRenameIndex(null); (document.activeElement as HTMLElement)?.blur() }}><Icon name="x" size={20} /></button>
             </div>
             <div className="flex-1 overflow-y-auto py-1.5">
@@ -1795,7 +1795,7 @@ EOF`}
               })}
               {/* tmux session 切换（多 session 时显示） */}
               {tmuxSessions.length > 1 && (
-                <div className="px-4 pt-2.5 pb-1 text-nexus-muted text-[11px] uppercase tracking-wide">Tmux Sessions</div>
+                <div className="px-4 pt-2.5 pb-1 text-nexus-muted text-[11px] uppercase tracking-wide">{t('sessionMgr.projects')}</div>
               )}
               {tmuxSessions.length > 1 && tmuxSessions.map(sess => (
                 <div
@@ -1814,7 +1814,7 @@ EOF`}
                 onClick={() => { setShowSessionDrawer(false); openNewSessionDialog() }}
               >
                 <span>📁</span>
-                <span>新项目</span>
+                <span>{t('sessionMgr.newProject')}</span>
               </button>
               <button
                 className="flex-1 bg-nexus-bg-2 border border-nexus-border rounded-lg text-nexus-text text-sm font-semibold py-3 cursor-pointer flex items-center justify-center gap-1.5"
@@ -1822,7 +1822,7 @@ EOF`}
                 onClick={() => { setShowSessionDrawer(false); handleCreateWindow() }}
               >
                 <span>➕</span>
-                <span>新窗口</span>
+                <span>{t('sessionMgr.newChannel')}</span>
               </button>
             </div>
           </div>
@@ -1906,9 +1906,9 @@ EOF`}
             <ul className="text-nexus-text-2 leading-relaxed text-sm pl-5 my-2">
               <li>黑色区域是终端，点击聚焦后可键盘输入</li>
               <li>底部工具栏提供 Esc/Tab/^C 等快捷键</li>
-                            <li className="flex items-center gap-1.5"><Icon name="paperclip" size={14} />上传图片/文件到当前 session 目录</li>
-              <li>📁 新项目：在选定目录创建窗口</li>
-              <li>➕ 新窗口：在当前项目目录创建窗口</li>
+                            <li className="flex items-center gap-1.5"><Icon name="paperclip" size={14} />上传图片或文件后，可在“上传文件”里复制路径使用</li>
+              <li>📁 新建工作区：在选定目录打开一个新的工作区</li>
+              <li>➕ 新建标签页：在当前工作区目录再开一个标签页</li>
             </ul>
             <p className="text-nexus-muted text-[11px] mt-2">
               Telegram Bot: /api/telegram/setup 一键配置

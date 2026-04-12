@@ -131,7 +131,7 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
       <div className={isDesktop ? 'bg-nexus-bg border border-nexus-border rounded-xl flex flex-col text-nexus-text w-full max-w-[600px] max-h-[85vh] shadow-[0_20px_60px_rgba(0,0,0,0.5)] overflow-hidden' : 'fixed inset-0 bg-nexus-bg flex flex-col text-nexus-text'}>
         {/* 顶部：标题 + 关闭 */}
         <div className="flex items-center justify-between px-4 py-3.5 border-b border-nexus-border shrink-0">
-          <span className="text-base font-semibold">{t('workspace.title')}</span>
+          <span className="text-base font-semibold">{t('workspace.selectorTitle')}</span>
           <button className="bg-transparent border-none text-nexus-text-2 cursor-pointer text-2xl leading-none px-1 flex items-center justify-center" onPointerDown={onClose}><Icon name="x" size={20} /></button>
         </div>
 

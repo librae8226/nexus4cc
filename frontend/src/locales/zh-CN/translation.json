@@ -29,17 +29,18 @@
     "connectionFailed": "连接失败"
   },
   "workspace": {
-    "title": "选择工作目录",
+    "title": "工作目录",
+    "selectorTitle": "新建工作区",
     "currentSelection": "当前选择",
     "inputPath": "输入路径",
-    "pathPlaceholder": "~ 或 /path/to/project",
+    "pathPlaceholder": "~ 或 /path/to/workspace",
     "pathHelp": "支持 ~ 表示 home 目录，或直接输入绝对路径",
     "shellType": "Shell 类型",
     "shellClaude": "Claude (默认)",
     "shellZsh": "Zsh",
-    "profileLabel": "配置 Profile (可选)",
-    "profileDefault": "默认 (不使用 profile)",
-    "profileHelp": "选择 profile 会使用该配置的 API key 和模型设置，数据隔离在项目目录",
+    "profileLabel": "Claude 配置（可选）",
+    "profileDefault": "默认配置",
+    "profileHelp": "选择后会使用对应的 API Key 和模型设置，会话数据保存在当前工作区目录。",
     "browseDir": "浏览目录",
     "selectThisDir": "选此目录",
     "rootDir": "根目录",
@@ -48,7 +49,7 @@
     "root": "根目录",
     "empty": "空目录",
     "parent": "上级目录",
-    "footer": "共 {{count}} 个项目",
+    "footer": "共 {{count}} 项",
     "view": "查看",
     "download": "下载",
     "newFolder": "新建文件夹",
@@ -75,10 +76,10 @@
     }
   },
   "newChannel": {
-    "title": "新建频道",
+    "title": "新建标签页",
     "shellType": "Shell 类型",
-    "profile": "Profile",
-    "profileDefault": "默认"
+    "profile": "Claude 配置",
+    "profileDefault": "默认配置"
   },
   "toolbar": {
     "pasteUpload": "粘贴 / 上传",
@@ -192,17 +193,20 @@
     "notesDesc": "配置文件存储在 .claude-data/ 目录"
   },
   "sessionMgr": {
-    "title": "会话管理",
-    "noProject": "未选择项目",
-    "noChannels": "该项目没有频道",
-    "project": "项目",
-    "projects": "项目",
-    "channel": "频道",
-    "channels": "频道",
-    "noProjects": "暂无项目",
-    "newProject": "新建项目",
-    "newChannel": "新建频道",
-    "closeProject": "关闭项目",
+    "title": "工作区与标签页",
+    "noProject": "未选择工作区",
+    "noChannels": "当前工作区还没有标签页",
+    "project": "工作区",
+    "projects": "工作区",
+    "channel": "标签页",
+    "channels": "标签页",
+    "noProjects": "还没有工作区",
+    "newProject": "新建工作区",
+    "newChannel": "新建标签页",
+    "closeProject": "关闭工作区",
+    "refresh": "刷新",
+    "renameProjectPrompt": "重命名工作区",
+    "renameChannelPrompt": "重命名标签页",
     "moreOptions": "更多选项",
     "renameFailed": "重命名失败",
     "closeFailed": "关闭失败",
@@ -249,13 +253,13 @@
     "disconnected": "未连接"
   },
   "tabBar": {
-    "currentSession": "当前 session: {{session}}",
-    "newSession": "新建会话",
+    "currentSession": "当前工作区: {{session}}",
+    "newSession": "新建工作区",
     "upload": "上传文件",
     "tasks": "任务面板",
     "settings": "设置",
     "lastOutput": "最后输出 ({{channel}})",
     "online": "● 在线",
-    "closeSession": "关闭会话"
+    "closeSession": "关闭工作区"
   }
 }
