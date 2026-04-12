@@ -1059,10 +1059,19 @@ export default function Terminal({ token }: Props) {
           if (xtermTa) { xtermTa.inputMode = 'none'; xtermTa.blur() }
         } else {
           keyboardVisibleRef.current = true
-          // Focus xterm's own textarea — term.onData handles all input natively
-          // (letters, numbers, IME/CJK) without the quirks of our hidden input.
-          if (xtermTa) { xtermTa.inputMode = 'text'; xtermTa.focus() }
-          if (inputRef.current) inputRef.current.inputMode = 'text'
+          const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+          if (isIOS) {
+            // iOS Safari won't reliably show the keyboard for xterm's internal
+            // textarea (tiny element + restrictive attributes). Use our standard
+            // <input> instead — iOS handles it correctly.
+            if (xtermTa) xtermTa.inputMode = 'none'
+            if (inputRef.current) { inputRef.current.inputMode = 'text'; inputRef.current.focus() }
+          } else {
+            // Android / other: focus xterm's own textarea — term.onData handles
+            // all input natively (letters, numbers, IME/CJK).
+            if (xtermTa) { xtermTa.inputMode = 'text'; xtermTa.focus() }
+            if (inputRef.current) inputRef.current.inputMode = 'text'
+          }
         }
       }
     }
