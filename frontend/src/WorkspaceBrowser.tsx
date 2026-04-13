@@ -152,7 +152,8 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
       setLoading(false)
       // Phase 2：空闲帧批量填入 size
       const allEntries: FileEntry[] = data.entries || []
-      requestIdleCallback(() => {
+      const scheduleIdle = window.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 1))
+      scheduleIdle(() => {
         if (ctrl.signal.aborted) return
         setEntries(allEntries)
         setSizesReady(true)
