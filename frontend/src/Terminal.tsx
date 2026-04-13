@@ -1260,15 +1260,41 @@ export default function Terminal({ token }: Props) {
 
   const isComposingRef = useRef(false)
 
+  // ── Unified input architecture (v3) ─────────────────────────────
+  // Design principles:
+  //   1. ALL text goes through handleInputChange (single path)
+  //   2. handleKeyDown ONLY handles special keys (Enter/Backspace/arrows/Ctrl)
+  //   3. Differential send: only send NEW characters, never re-send
+  //   4. Deferred clear: don't disrupt IME engines (Doubao voice etc.)
+  //   5. compositionStart cancels pending clears
+  const sentTextRef = useRef('')
+  const clearTimerRef = useRef(0)
+
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
-    if (isComposingRef.current) return // handled by compositionEnd
-    // Fallback for Android (keydown fires key='Unidentified', onChange is reliable there)
+    if (isComposingRef.current) return // composing in progress, wait for end
     const val = e.target.value
-    if (val) { sendToWs(val); e.target.value = '' }
+    if (!val) return
+    // Differential send: only send what's new since last send
+    const prev = sentTextRef.current
+    if (val === prev) return // duplicate onChange, skip
+    const newPart = val.startsWith(prev) ? val.slice(prev.length) : val
+    if (newPart) sendToWs(newPart)
+    sentTextRef.current = val
+    // Deferred clear: wait 300ms for IME to settle, then reset
+    // If new composition starts before then, the clear is cancelled
+    window.clearTimeout(clearTimerRef.current)
+    clearTimerRef.current = window.setTimeout(() => {
+      const inp = inputRef.current
+      if (inp && !isComposingRef.current) {
+        inp.value = ''
+        sentTextRef.current = ''
+      }
+    }, 300)
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (isComposingRef.current) return
+    // Special keys only — these need escape sequences that onChange can't produce
     if (e.key === 'Enter') { e.preventDefault(); sendToWs('\r') }
     else if (e.key === 'Backspace') { e.preventDefault(); sendToWs('\x7f') }
     else if (e.key === 'Tab') { e.preventDefault(); sendToWs('\t') }
@@ -1286,20 +1312,18 @@ export default function Terminal({ token }: Props) {
       e.preventDefault()
       sendToWs(String.fromCharCode(e.key.toLowerCase().charCodeAt(0) - 96))
     }
-    else if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
-      // Intercept printable chars (letters, digits, punctuation) directly from keydown.
-      // preventDefault stops the browser from updating input.value, so onChange won't
-      // double-fire. This is reliable on iOS/desktop where e.key is always correct.
-      e.preventDefault()
-      sendToWs(e.key)
-    }
+    // Printable chars: do NOT intercept — let onChange handle them.
   }
 
-  function handleCompositionEnd(e: React.CompositionEvent<HTMLInputElement>) {
+  function handleCompositionStart() {
+    isComposingRef.current = true
+    // Cancel any pending clear — IME is starting a new session
+    window.clearTimeout(clearTimerRef.current)
+  }
+
+  function handleCompositionEnd(_e: React.CompositionEvent<HTMLInputElement>) {
     isComposingRef.current = false
-    const text = e.data
-    if (text) sendToWs(text)
-    ;(e.currentTarget as HTMLInputElement).value = ''
+    // Don't send or clear here — let onChange handle it.
   }
 
   // Track keyboard visibility and adjust layout height on mobile
@@ -1515,7 +1539,7 @@ EOF`}
         spellCheck={false}
         onChange={handleInputChange}
         onKeyDown={handleKeyDown}
-        onCompositionStart={() => { isComposingRef.current = true }}
+        onCompositionStart={handleCompositionStart}
         onCompositionEnd={handleCompositionEnd}
         aria-hidden="true"
       />

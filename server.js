@@ -1716,7 +1716,8 @@ wss.on('connection', (ws, req) => {
   const token = url.searchParams.get('token');
   const windowParam = url.searchParams.get('window') || '0';
   const windowIndex = parseInt(windowParam, 10) || 0;
-  const session = url.searchParams.get('session') || TMUX_SESSION;
+  const rawSession = url.searchParams.get('session') || TMUX_SESSION;
+  const session = (rawSession === '~') ? TMUX_SESSION : rawSession;
 
   try {
     jwt.verify(token, JWT_SECRET);
