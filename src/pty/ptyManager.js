@@ -16,15 +16,22 @@ class PtyManager {
     const key = this.ptyKey(session, windowIndex);
     if (this.ptyMap.has(key)) return { key, entry: this.ptyMap.get(key) };
 
-    // Ensure tmux session exists
+    // Check if tmux session exists - DO NOT auto-create
+    let sessionExists = false;
     try {
-      execFileSync('tmux', ['has-session', '-t', session], { stdio: 'ignore' })
+      execFileSync('tmux', ['has-session', '-t', session], { stdio: 'ignore' });
+      sessionExists = true;
     } catch {
-      // best-effort create if missing
-      try { execFileSync('tmux', ['new-session', '-d', '-s', session, '-n', 'shell', 'zsh'], { stdio: 'ignore' }) } catch {}
+      // Session does not exist - return null, let user decide to create
+      console.log(`Session '${session}' does not exist - user must create via API`);
+      return { key: null, entry: null, error: 'session_not_found' };
     }
 
-    // Check/window existence; fall back if necessary
+    if (!sessionExists) {
+      return { key: null, entry: null, error: 'session_not_found' };
+    }
+
+    // Check window existence; fall back if necessary
     let targetWindow = windowIndex;
     try {
       const list = execFileSync('tmux', ['list-windows', '-t', session, '-F', '#I'], { encoding: 'utf8' })

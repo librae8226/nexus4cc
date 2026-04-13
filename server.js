@@ -37,7 +37,7 @@ function shEscape(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
 if (!JWT_SECRET || !ACC_PASSWORD_HASH) { console.error('ERROR: JWT_SECRET and ACC_PASSWORD_HASH required'); process.exit(1); }
 
 // ── config ──
-const TMUX_SESSION = process.env.TMUX_SESSION || '~';
+const TMUX_SESSION = process.env.TMUX_SESSION || 'nexus';
 const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || '/workspace';
 const DEFAULT_WORKSPACE = join(process.env.HOME || '/root', '.nexus_workspace');
 if (!existsSync(DEFAULT_WORKSPACE)) mkdirSync(DEFAULT_WORKSPACE, { recursive: true });
@@ -92,7 +92,39 @@ function authMiddleware(req, res, next) {
 // ── safe tmux helpers ──
 function tmuxHasSession(s) { try { execFileSync('tmux', ['has-session', '-t', s], { stdio: 'ignore' }); return true; } catch { return false; } }
 function setTmuxEnv(s, k, v) { try { execFileSync('tmux', ['set-environment', '-t', s, k, v], { stdio: 'ignore' }); } catch {} }
-function ensureTmuxSession(s) { if (!tmuxHasSession(s)) try { execFileSync('tmux', ['new-session', '-d', '-s', s, '-n', 'shell', 'zsh'], { stdio: 'ignore' }); } catch {} }
+// Central session cwd management: use tmux user option @nexus_cwd with pane_current_path fallback
+function getSessionCwd(session, fallback = DEFAULT_WORKSPACE) {
+  try {
+    const opt = execFileSync('tmux', ['show-options', '-t', session, '@nexus_cwd'], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    const m = opt.match(/^@nexus_cwd\s+"?([^"]+)"?$/);
+    if (m && m[1]) return m[1];
+  } catch {}
+  try {
+    const path = execFileSync('tmux', ['display-message', '-t', session, '-p', '#{pane_current_path}'], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    if (path) return path;
+  } catch {}
+  return fallback;
+}
+function setSessionCwd(session, cwd) {
+  try { execFileSync('tmux', ['set-option', '-t', session, '@nexus_cwd', cwd], { stdio: 'ignore' }); } catch {}
+}
+function getLastChannel(session) {
+  try {
+    const opt = execFileSync('tmux', ['show-options', '-t', session, '@nexus_last_channel'], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    const m = opt.match(/^@nexus_last_channel\s+(\d+)$/);
+    if (m) return parseInt(m[1], 10);
+  } catch {}
+  return null;
+}
+function setLastChannel(session, idx) {
+  try { execFileSync('tmux', ['set-option', '-t', session, '@nexus_last_channel', idx], { stdio: 'ignore' }); } catch {}
+}
+function ensureTmuxSession(s, defaultCwd = DEFAULT_WORKSPACE) {
+  if (!tmuxHasSession(s)) {
+    return false;
+  }
+  return true;
+}
 function proxyVars() {
   return {
     ...(process.env.HTTP_PROXY  ? { HTTP_PROXY:  process.env.HTTP_PROXY  } : {}),
@@ -128,10 +160,9 @@ app.post('/api/windows', apiLimiter, authMiddleware, (req, res) => {
   let cwd;
   if (rel_path) {
     cwd = rel_path.startsWith('/') ? rel_path : `${WORKSPACE_ROOT}/${rel_path}`;
-    setTmuxEnv(ts, 'NEXUS_CWD', cwd);
+    setSessionCwd(ts, cwd);
   } else {
-    try { const e = execFileSync('tmux', ['show-environment', '-t', ts, 'NEXUS_CWD'], { encoding: 'utf8' }).trim(); const m = e.match(/^NEXUS_CWD=(.+)$/); cwd = m ? m[1] : DEFAULT_WORKSPACE; }
-    catch { cwd = DEFAULT_WORKSPACE; }
+    cwd = getSessionCwd(ts);
   }
   const name = cwd.replace(/^\/+|\/+$/g, '').replace(/\//g, '-') || 'window';
   const pv = proxyVars();
@@ -141,7 +172,7 @@ app.post('/api/windows', apiLimiter, authMiddleware, (req, res) => {
   if (shell_type === 'bash') shellCmd = `${pp}exec zsh -i`;
   else if (profile) { const rs = join(__dirname, 'nexus-run-claude.sh'); shellCmd = `${pp}bash ${shEscape(rs)} ${shEscape(profile)} ${shEscape(cwd)}`; }
   else shellCmd = `${pp}claude --dangerously-skip-permissions; exec zsh -i`;
-  ensureTmuxSession(ts);
+  if (!ensureTmuxSession(ts, cwd)) return res.status(404).json({ error: `session '${ts}' not found. Create via POST /api/projects first.` });
   for (const [k,v] of Object.entries(pv)) setTmuxEnv(ts, k, v);
   execFile('tmux', ['new-window', '-t', ts, '-c', cwd, '-n', name, shellCmd], (err) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -163,7 +194,7 @@ app.post('/api/sessions', apiLimiter, authMiddleware, (req, res) => {
   if (shell_type === 'bash') shellCmd = `${pp}exec zsh -i`;
   else if (profile) { const rs = join(__dirname, 'nexus-run-claude.sh'); shellCmd = `${pp}bash ${shEscape(rs)} ${shEscape(profile)} ${shEscape(cwd)}`; }
   else shellCmd = `${pp}claude --dangerously-skip-permissions; exec zsh -i`;
-  ensureTmuxSession(ts);
+  if (!ensureTmuxSession(ts, cwd)) return res.status(404).json({ error: `session '${ts}' not found. Create via POST /api/projects first.` });
   for (const [k,v] of Object.entries(pv)) setTmuxEnv(ts, k, v);
   execFile('tmux', ['new-window', '-t', ts, '-c', cwd, '-n', name, shellCmd], (err) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -328,16 +359,14 @@ app.get('/api/projects', apiLimiter, authMiddleware, (req, res) => {
       const [name, windows] = line.split('|'); let path = ''; let valid = true;
       try { execFileSync('tmux', ['show-environment', '-t', name], { encoding: 'utf8' }); } catch { valid = false; }
       if (!valid) return null;
-      try { const e = execFileSync('tmux', ['show-environment', '-t', name, 'NEXUS_CWD'], { encoding: 'utf8' }).trim(); const m = e.match(/^NEXUS_CWD=(.+)$/); if (m) path = m[1]; } catch {}
-      if (!path && windows !== '0') { try { const p = execFileSync('tmux', ['list-windows', '-t', name, '-F', '#{pane_current_path}'], { encoding: 'utf8' }).trim(); if (p) path = p.split('\n')[0]; } catch {} }
-      return { name, path: path || DEFAULT_WORKSPACE, active: name === TMUX_SESSION, channelCount: Number(windows) || 0 };
+      path = getSessionCwd(name);
+      return { name, path, active: name === TMUX_SESSION, channelCount: Number(windows) || 0 };
     }).filter(Boolean); projects.reverse(); res.json(projects);
   });
 });
 app.get('/api/session-cwd', apiLimiter, authMiddleware, (req, res) => {
-  const session = req.query.session || TMUX_SESSION; let cwd = DEFAULT_WORKSPACE;
-  try { const e = execFileSync('tmux', ['show-environment', '-t', session, 'NEXUS_CWD'], { encoding: 'utf8' }).trim(); const m = e.match(/^NEXUS_CWD=(.+)$/); if (m) cwd = m[1]; } catch {}
-  if (cwd === DEFAULT_WORKSPACE) { try { const p = execFileSync('tmux', ['display-message', '-t', session, '-p', '#{pane_current_path}'], { encoding: 'utf8' }).trim(); if (p) cwd = p; } catch {} }
+  const session = req.query.session || TMUX_SESSION;
+  const cwd = getSessionCwd(session);
   res.json({ cwd, relative: cwd.startsWith(WORKSPACE_ROOT) ? cwd.slice(WORKSPACE_ROOT.length).replace(/^\/+/, '') : '' });
 });
 app.get('/api/projects/:name/channels', apiLimiter, authMiddleware, (req, res) => {
@@ -358,21 +387,21 @@ app.post('/api/projects', apiLimiter, authMiddleware, (req, res) => {
   const pv = proxyVars(); const px = Object.entries(pv).map(([k,v]) => `export ${k}='${v}'`).join('; '); const pp = px ? `${px}; ` : '';
   let shellCmd; if (shell_type === 'bash') shellCmd = `${pp}exec zsh -i`; else if (profile) shellCmd = `${pp}bash ${shEscape(join(__dirname, 'nexus-run-claude.sh'))} ${shEscape(profile)} ${shEscape(cwd)}`; else shellCmd = `${pp}claude --dangerously-skip-permissions; exec zsh -i`;
   const dn = cwd.replace(/^\/+|\/+$/g, '').split('/').pop() || '~'; const iwn = profile ? `${dn}-${profile}` : dn;
-  try { execFileSync('tmux', ['new-session', '-d', '-s', finalName, '-n', iwn, '-c', cwd, shellCmd], { stdio: 'ignore' }); setTmuxEnv(finalName, 'NEXUS_CWD', cwd); for (const [k,v] of Object.entries(pv)) setTmuxEnv(finalName, k, v); } catch (err) { return res.status(500).json({ error: 'failed to create project: ' + err.message }); }
+  try { execFileSync('tmux', ['new-session', '-d', '-s', finalName, '-n', iwn, '-c', cwd, shellCmd], { stdio: 'ignore' }); setSessionCwd(finalName, cwd); for (const [k,v] of Object.entries(pv)) setTmuxEnv(finalName, k, v); } catch (err) { return res.status(500).json({ error: 'failed to create project: ' + err.message }); }
   res.json({ name: finalName, path: cwd, shell_type, profile: profile || null });
 });
 app.post('/api/projects/:name/channels', apiLimiter, authMiddleware, (req, res) => {
   const sn = req.params.name; const { shell_type = 'claude', profile, path: bp } = req.body || {};
-  let cwd = DEFAULT_WORKSPACE; if (bp) cwd = bp; else { try { const e = execFileSync('tmux', ['show-environment', '-t', sn, 'NEXUS_CWD'], { encoding: 'utf8' }).trim(); const m = e.match(/^NEXUS_CWD=(.+)$/); if (m) cwd = m[1]; } catch {} }
+  const cwd = bp ? (bp.startsWith('/') ? bp : `${WORKSPACE_ROOT}/${bp}`) : getSessionCwd(sn);
   const bn = profile || 'channel'; let cn = bn; try { const ex = execFileSync('tmux', ['list-windows', '-t', sn, '-F', '#{window_name}'], { encoding: 'utf8' }).trim().split('\n'); let c = 1; while (ex.includes(cn)) cn = `${bn}-${c++}`; } catch {}
   const pv = proxyVars(); const px = Object.entries(pv).map(([k,v]) => `export ${k}='${v}'`).join('; '); const pp = px ? `${px}; ` : '';
   let shellCmd; if (shell_type === 'bash') shellCmd = `${pp}exec zsh -i`; else if (profile) shellCmd = `${pp}bash ${shEscape(join(__dirname, 'nexus-run-claude.sh'))} ${shEscape(profile)} ${shEscape(cwd)}`; else shellCmd = `${pp}claude --dangerously-skip-permissions; exec zsh -i`;
-  ensureTmuxSession(sn);
+  if (!ensureTmuxSession(sn, cwd)) return res.status(404).json({ error: `project '${sn}' not found` });
   execFile('tmux', ['new-window', '-t', sn, '-c', cwd, '-n', cn, shellCmd], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ name: cn, cwd, shell_type, profile: profile || null, project: sn }); });
 });
 app.post('/api/projects/:name/activate', apiLimiter, authMiddleware, (req, res) => {
   const sn = req.params.name; if (!tmuxHasSession(sn)) return res.status(404).json({ error: 'project not found' });
-  let lc = null; try { const e = execFileSync('tmux', ['show-environment', '-t', sn, 'NEXUS_LAST_CHANNEL'], { encoding: 'utf8' }).trim(); const m = e.match(/^NEXUS_LAST_CHANNEL=(\d+)$/); if (m) lc = parseInt(m[1], 10); } catch {}
+  let lc = getLastChannel(sn);
   if (lc !== null) { try { const w = execFileSync('tmux', ['list-windows', '-t', sn, '-F', '#I'], { encoding: 'utf8' }).trim().split('\n'); if (!w.includes(String(lc))) lc = null; } catch { lc = null; } }
   res.json({ active: true, project: sn, lastChannel: lc });
 });
@@ -406,7 +435,7 @@ app.delete('/api/sessions/:id', apiLimiter, authMiddleware, (req, res) => {
 app.post('/api/sessions/:id/attach', apiLimiter, authMiddleware, (req, res) => {
   const idx = req.params.id; const session = req.query.session || TMUX_SESSION;
   execFile('tmux', ['select-window', '-t', `${session}:${idx}`], (err) => {
-    if (err) return res.status(500).json({ error: err.message }); setTmuxEnv(session, 'NEXUS_LAST_CHANNEL', idx); res.json({ ok: true });
+    if (err) return res.status(500).json({ error: err.message }); setLastChannel(session, idx); res.json({ ok: true });
   });
 });
 
@@ -504,7 +533,7 @@ app.get('*', (req, res) => { const idx = join(__dirname, 'frontend', 'dist', 'in
 // ── PTY management ──
 function ensureWindowPty(session, windowIndex, defaultSession) {
   const key = ptyKey(session, windowIndex); if (ptyMap.has(key)) return { key, entry: ptyMap.get(key) };
-  if (!tmuxHasSession(session)) try { execFileSync('tmux', ['new-session', '-d', '-s', session, '-n', 'shell', 'zsh'], { stdio: 'ignore' }); } catch {}
+  if (!tmuxHasSession(session)) { console.log(`Session '${session}' not found`); return { key: null, entry: null, error: 'session_not_found' }; }
   let tw = windowIndex; try { const w = execFileSync('tmux', ['list-windows', '-t', session, '-F', '#I'], { encoding: 'utf8' }).trim().split('\n'); if (!w.includes(String(windowIndex))) { tw = w.length > 0 ? parseInt(w[0], 10) : 0; if (w.length === 0) try { execFileSync('tmux', ['new-window', '-t', session, '-n', 'shell', 'zsh'], { stdio: 'ignore' }); } catch {} } } catch { tw = 0; }
   const ak = ptyKey(session, tw); if (ptyMap.has(ak)) return { key: ak, entry: ptyMap.get(ak) };
   const ppy = pty.spawn('tmux', ['attach-session', '-t', `${session}:${tw}`], { name: 'xterm-256color', cols: 120, rows: 30, env: { ...process.env, LANG: 'C.UTF-8', TERM: 'xterm-256color' } });
@@ -555,9 +584,5 @@ server.listen(Number(PORT), '0.0.0.0', () => {
   console.log(`Nexus v4.4.2 listening on :${PORT}`);
   console.log(`tmux session: ${TMUX_SESSION}`);
   console.log(`workspace: ${WORKSPACE_ROOT}`);
-  try {
-    const dn = WORKSPACE_ROOT.replace(/^\/+|\/+$/g, '').split('/').pop() || '~';
-    if (!tmuxHasSession(TMUX_SESSION)) { execFileSync('tmux', ['new-session', '-d', '-s', TMUX_SESSION, '-n', dn, '-c', WORKSPACE_ROOT, 'zsh'], { stdio: 'ignore' }); console.log(`Created session '${TMUX_SESSION}'`); }
-    else console.log(`Session '${TMUX_SESSION}' ready`);
-  } catch (e) { console.warn('tmux init failed:', e.message); }
+  console.log(`Default session: '${TMUX_SESSION}' (create via API if needed)`);
 });

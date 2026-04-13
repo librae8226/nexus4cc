@@ -8,7 +8,7 @@ import { URL } from 'url'
 // - setupWebSocket(server, ptyManager, JWT_SECRET)
 
 export function createWebSocketHandler(wss, ptyManager, JWT_SECRET) {
-  const TMUX_SESSION_DEFAULT = process.env.TMUX_SESSION || '~'
+  const TMUX_SESSION_DEFAULT = process.env.TMUX_SESSION || 'nexus'
 
   wss.on('connection', (ws, req) => {
     // Per-connection state
@@ -33,15 +33,24 @@ export function createWebSocketHandler(wss, ptyManager, JWT_SECRET) {
     // Helper to attach to a PTY
     const attachToPty = (sess, winIdx) => {
       const res = ptyManager.getOrCreatePty(sess, winIdx, TMUX_SESSION_DEFAULT)
+      if (res.error === 'session_not_found') {
+        ws.send(JSON.stringify({ error: 'session_not_found', session: sess, message: 'Session does not exist. Create via /api/projects first.' }))
+        return false
+      }
       ptyKey = res.key
       ptyEntry = res.entry
+      if (!ptyKey || !ptyEntry) {
+        ws.send(JSON.stringify({ error: 'pty_error', message: 'Failed to attach to PTY' }))
+        return false
+      }
       ptyManager.addClient(ptyKey, ws)
       authed = true
       clearTimeout(authTimeout)
-      // Send recent output for initial render
+      console.log(`Client connected to ${ptyKey} (${ptyEntry.clients.size})`)
       if (ptyEntry && ptyEntry.lastOutput) {
         ws.send(ptyEntry.lastOutput.slice(-2000))
       }
+      return true
     }
 
     // Try token-based auth from query (preferred path)
@@ -56,7 +65,6 @@ export function createWebSocketHandler(wss, ptyManager, JWT_SECRET) {
 
     ws.on('message', (msg) => {
       if (!authed) {
-        // Expect a JSON auth message: { type: 'auth', token, session, window }
         let parsed = null
         try { parsed = typeof msg === 'string' ? JSON.parse(msg) : JSON.parse(msg.toString()) } catch {}
         if (parsed && parsed.type === 'auth' && parsed.token) {
@@ -64,7 +72,10 @@ export function createWebSocketHandler(wss, ptyManager, JWT_SECRET) {
             jwt.verify(parsed.token, JWT_SECRET)
             const sess = parsed.session || session
             const win = Number.isFinite(parsed.window) ? parsed.window : windowIndex
-            attachToPty(sess, win)
+            if (!attachToPty(sess, win)) {
+              // session_not_found - keep connection open, inform user
+              return
+            }
           } catch {
             ws.close(4001, 'unauthorized')
           }
