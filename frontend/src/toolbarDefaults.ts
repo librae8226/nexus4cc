@@ -75,7 +75,7 @@ export const FACTORY_PINNED = [
   // Input — \ / adjacent
   'backslash', 'slash',
   // Clipboard
-  'ctrl-c', 'ctrl-v',  'enter', 
+  'ctrl-c', 'ctrl-v',  'enter', 'tab',
 ]
 
 export const FACTORY_EXPANDED = [
@@ -86,7 +86,7 @@ export const FACTORY_EXPANDED = [
   // Control group
   'ctrl-r', 'ctrl-b', 'ctrl-o', 'ctrl-t', 'ctrl-f', 'ctrl-g',
   // Input group
-  'tab', 'shift-tab', 'bang', 'at',
+  'shift-tab', 'bang', 'at',
   // UI Actions
   'scroll-btm', 'copy-term', 'fit',
 ]
