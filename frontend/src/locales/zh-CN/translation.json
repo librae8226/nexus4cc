@@ -37,10 +37,6 @@
     "shellType": "Shell 类型",
     "shellClaude": "Claude (默认)",
     "shellZsh": "Zsh",
-    "shellOpencode": "Crush (OpenCode)",
-    "profileLabel": "配置 Profile (可选)",
-    "profileDefault": "默认 (不使用 profile)",
-    "profileHelp": "选择 profile 会使用该配置的 API key 和模型设置，数据隔离在项目目录",
     "browseDir": "浏览目录",
     "selectThisDir": "选此目录",
     "rootDir": "根目录",
@@ -77,9 +73,7 @@
   },
   "newChannel": {
     "title": "新建频道",
-    "shellType": "Shell 类型",
-    "profile": "Profile",
-    "profileDefault": "默认"
+    "shellType": "Shell 类型"
   },
   "toolbar": {
     "pasteUpload": "粘贴 / 上传",

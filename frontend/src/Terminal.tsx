@@ -209,27 +209,6 @@ export default function Terminal({ token }: Props) {
   }
   const [projects, setProjects] = useState<ProjectInfo[]>([])
 
-  // F-XX: Profile 检查与引导
-  const [hasProfiles, setHasProfiles] = useState<boolean | null>(null)
-  const [showProfileGuide, setShowProfileGuide] = useState(false)
-
-  // 检查是否有 profile
-  useEffect(() => {
-    if (hasProfiles !== null) return // 已经检查过了
-    fetch('/api/configs', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(configs => {
-        const hasAny = Array.isArray(configs) && configs.length > 0
-        setHasProfiles(hasAny)
-        if (!hasAny) {
-          setShowProfileGuide(true)
-        }
-      })
-      .catch(() => {
-        setHasProfiles(true)
-      })
-  }, [token, hasProfiles])
-
   // 加载服务端默认 session
   useEffect(() => {
     fetch('/api/config', { headers: { Authorization: `Bearer ${token}` } })
@@ -598,13 +577,13 @@ export default function Terminal({ token }: Props) {
     }
   }
 
-  async function createSession(relPath: string, shellType: 'claude' | 'opencode' | 'bash' = 'claude', profile?: string) {
+  async function createSession(relPath: string, shellType: 'claude' | 'bash' = 'claude') {
     try {
       // F-20: 使用 /api/projects 创建新的 project（tmux session）
       const r = await fetch('/api/projects', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: relPath, shell_type: shellType, profile }),
+        body: JSON.stringify({ path: relPath, shell_type: shellType }),
       })
       if (r.ok) {
         const { name: newProjectName } = await r.json()
@@ -617,7 +596,7 @@ export default function Terminal({ token }: Props) {
   }
 
   // F-19: 创建新窗口（继承当前项目目录）
-  async function createWindow(shellType: 'claude' | 'opencode' | 'bash' = 'claude', profile?: string) {
+  async function createWindow(shellType: 'claude' | 'bash' = 'claude') {
     try {
       const session = activeTmuxSessionRef.current
       // 获取当前 project 的路径
@@ -627,7 +606,7 @@ export default function Terminal({ token }: Props) {
       const r = await fetch(`/api/projects/${encodeURIComponent(session)}/channels`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shell_type: shellType, profile, path: projectPath }),
+        body: JSON.stringify({ shell_type: shellType, path: projectPath }),
       })
       if (r.ok) {
         const { name: newWindowName } = await r.json()
@@ -655,9 +634,9 @@ export default function Terminal({ token }: Props) {
     setShowNewSession(true)
   }
 
-  function handleCreateSession(path: string, shellType: 'claude' | 'opencode' | 'bash', profile?: string) {
+  function handleCreateSession(path: string, shellType: 'claude' | 'bash') {
     setShowNewSession(false)
-    createSession(path, shellType, profile)
+    createSession(path, shellType)
   }
 
   // F-19: 处理新窗口创建（打开配置对话框）
@@ -665,9 +644,9 @@ export default function Terminal({ token }: Props) {
     setShowNewWindow(true)
   }
 
-  function handleNewWindowConfirm(shellType: 'claude' | 'opencode' | 'bash', profile?: string) {
+  function handleNewWindowConfirm(shellType: 'claude' | 'bash') {
     setShowNewWindow(false)
-    createWindow(shellType, profile)
+    createWindow(shellType)
     setTimeout(() => sessionManagerRef.current?.refresh(), 500)
   }
 
@@ -1451,74 +1430,6 @@ export default function Terminal({ token }: Props) {
 
   return (
     <div className="flex flex-col w-full relative" style={{ height: vvHeight ?? '100dvh' }}>
-      {/* Profile 引导界面 */}
-      {showProfileGuide && (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-nexus-bg/95 backdrop-blur-sm p-4">
-          <div className="bg-nexus-bg-2 rounded-xl p-8 max-w-md w-full shadow-[0_8px_32px_rgba(0,0,0,0.4)] border border-nexus-border">
-            <div className="text-center mb-6">
-              <div className="w-16 h-16 bg-nexus-accent/10 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Icon name="settings" size={32} className="text-nexus-accent" />
-              </div>
-              <h2 className="text-nexus-text text-xl font-bold mb-2">需要创建 Claude Profile</h2>
-              <p className="text-nexus-text-2 text-sm">
-                检测到还没有配置 Claude API Profile。在使用 Nexus 之前，需要先创建一个配置文件。
-              </p>
-            </div>
-
-            <div className="bg-nexus-bg rounded-lg p-4 mb-6 border border-nexus-border">
-              <p className="text-nexus-text text-sm font-medium mb-2">在服务器上执行以下命令：</p>
-              <code className="block bg-nexus-bg-2 rounded p-3 text-nexus-muted text-xs font-mono overflow-x-auto whitespace-pre">
-{`mkdir -p data/configs
-cat > data/configs/anthropic.json << 'EOF'
-{
-  "label": "Anthropic Claude",
-  "BASE_URL": "",
-  "AUTH_TOKEN": "",
-  "API_KEY": "",
-  "DEFAULT_MODEL": "claude-sonnet-4-6",
-  "THINK_MODEL": "claude-opus-4-6",
-  "LONG_CONTEXT_MODEL": "claude-opus-4-6",
-  "DEFAULT_HAIKU_MODEL": "claude-haiku-4-5-20251001",
-  "API_TIMEOUT_MS": "3000000"
-}
-EOF`}
-              </code>
-            </div>
-
-            <div className="flex flex-col gap-3">
-              <button
-                onClick={() => {
-                  fetch('/api/configs', { headers: { Authorization: `Bearer ${token}` } })
-                    .then(r => r.json())
-                    .then(configs => {
-                      const hasAny = Array.isArray(configs) && configs.length > 0
-                      if (hasAny) {
-                        setHasProfiles(true)
-                        setShowProfileGuide(false)
-                      } else {
-                        alert('仍未检测到 Profile，请先执行上方命令创建')
-                      }
-                    })
-                }}
-                className="w-full bg-nexus-accent border-none rounded-lg text-white text-base font-semibold py-3 cursor-pointer hover:bg-nexus-accent/90 transition-colors"
-              >
-                我已创建，重新检测
-              </button>
-              <button
-                onClick={() => setShowProfileGuide(false)}
-                className="w-full bg-transparent border border-nexus-border rounded-lg text-nexus-text-2 text-base py-3 cursor-pointer hover:bg-nexus-bg transition-colors"
-              >
-                稍后设置
-              </button>
-            </div>
-
-            <p className="text-nexus-muted text-xs text-center mt-4">
-              详细说明请参考 <a href="https://github.com/librae8226/nexus4cc/blob/master/docs/QUICKSTART.md" target="_blank" rel="noopener noreferrer" className="text-nexus-accent hover:underline">QUICKSTART.md</a>
-            </p>
-          </div>
-        </div>
-      )}
-
       <input
         ref={inputRef}
         className="fixed top-0 left-0 w-px h-px opacity-[0.01] text-base pointer-events-none -z-10"

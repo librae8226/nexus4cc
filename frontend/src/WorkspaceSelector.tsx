@@ -9,15 +9,10 @@ interface BrowseResult {
   dirs: { name: string; path: string }[]
 }
 
-interface Config {
-  id: string
-  label: string
-}
-
 interface Props {
   token: string
   onClose: () => void
-  onConfirm: (path: string, shellType: 'claude' | 'opencode' | 'bash', profile?: string) => void
+  onConfirm: (path: string, shellType: 'claude' | 'bash') => void
 }
 
 // 检测是否为 PC 端（>= 768px）
@@ -36,9 +31,7 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
   const isDesktop = useIsDesktop()
   const [selectedPath, setSelectedPath] = useState(() => localStorage.getItem('nexus_last_path') || '/workspace')
   const [inputPath, setInputPath] = useState(() => localStorage.getItem('nexus_last_path') || '/workspace')
-  const [shellType, setShellType] = useState<'claude' | 'opencode' | 'bash'>('claude')
-  const [configs, setConfigs] = useState<Config[]>([])
-  const [selectedProfile, setSelectedProfile] = useState<string>(() => localStorage.getItem('nexus_last_profile') || '')
+  const [shellType, setShellType] = useState<'claude' | 'bash'>('claude')
 
   // 文件浏览器状态
   const [browsePath, setBrowsePath] = useState<string | null>(null)
@@ -68,24 +61,8 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
   }
 
   useEffect(() => {
-    fetchConfigs()
     browseDir(null)
   }, [])
-
-  async function fetchConfigs() {
-    try {
-      const r = await fetch('/api/configs', { headers })
-      if (r.ok) {
-        const data = await r.json()
-        setConfigs(data)
-        if (!localStorage.getItem('nexus_last_profile') && data.length > 0) {
-          setSelectedProfile(data[0].id)
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
 
   function handleSelect(path: string) {
     setSelectedPath(path)
@@ -97,18 +74,11 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
     setSelectedPath(value)
   }
 
-  function handleProfileChange(id: string) {
-    setSelectedProfile(id)
-    if (id) localStorage.setItem('nexus_last_profile', id)
-  }
-
   function handleConfirm() {
     const path = inputPath.trim()
     if (!path) return
-    const profile = shellType === 'claude' && selectedProfile ? selectedProfile : undefined
     localStorage.setItem('nexus_last_path', path)
-    if (profile) localStorage.setItem('nexus_last_profile', profile)
-    onConfirm(path, shellType, profile)
+    onConfirm(path, shellType)
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -175,16 +145,6 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
                 />
                 <span>{t('workspace.shellClaude')}</span>
             </label>
-            <label className="flex items-center gap-2 text-nexus-text text-sm cursor-pointer">
-              <input
-                type="radio"
-                name="shellType"
-                value="opencode"
-                checked={shellType === 'opencode'}
-                onChange={() => setShellType('opencode')}
-              />
-              <span>{t('workspace.shellOpencode')}</span>
-            </label>
               <label className="flex items-center gap-2 text-nexus-text text-sm cursor-pointer">
                 <input
                   type="radio"
@@ -197,26 +157,6 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
               </label>
             </div>
           </div>
-
-          {/* Profile 选择 (仅 claude 模式) */}
-          {shellType === 'claude' && (
-            <div className="px-4 py-3 border-b border-nexus-border">
-              <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-0">{t('workspace.profileLabel')}</div>
-              <select
-                className="bg-nexus-bg-2 border border-nexus-border rounded-md text-nexus-text text-sm px-2.5 py-2 w-full outline-none mt-2"
-                value={selectedProfile}
-                onChange={(e) => handleProfileChange(e.target.value)}
-              >
-                <option value="">{t('workspace.profileDefault')}</option>
-                {configs.map((cfg) => (
-                  <option key={cfg.id} value={cfg.id}>
-                    {cfg.label}
-                  </option>
-                ))}
-              </select>
-              <div className="text-nexus-muted text-[11px] mt-1.5">{t('workspace.profileHelp')}</div>
-            </div>
-          )}
 
           {/* 目录浏览器 */}
           <div className="px-4 py-3 border-b border-nexus-border">

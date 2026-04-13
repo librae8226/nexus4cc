@@ -1,46 +1,20 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import GhostShield from './GhostShield'
 import { Icon } from './icons'
 
-interface Config {
-  id: string
-  label: string
-}
-
 interface Props {
   token: string
   onClose: () => void
-  onConfirm: (shellType: 'claude' | 'opencode' | 'bash', profile?: string) => void
+  onConfirm: (shellType: 'claude' | 'bash') => void
 }
 
-export default function NewWindowDialog({ token, onClose, onConfirm }: Props) {
+export default function NewWindowDialog({ token: _token, onClose, onConfirm }: Props) {
   const { t } = useTranslation()
-  const [shellType, setShellType] = useState<'claude' | 'opencode' | 'bash'>('claude')
-  const [configs, setConfigs] = useState<Config[]>([])
-  const [selectedProfile, setSelectedProfile] = useState<string>(() => localStorage.getItem('nexus_last_profile') || '')
-
-  useEffect(() => {
-    fetch('/api/configs', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.ok ? r.json() : [])
-      .then((data: Config[]) => {
-        setConfigs(data)
-        if (!localStorage.getItem('nexus_last_profile') && data.length > 0) {
-          setSelectedProfile(data[0].id)
-        }
-      })
-      .catch(() => {})
-  }, [token])
+  const [shellType, setShellType] = useState<'claude' | 'bash'>('claude')
 
   function handleConfirm() {
-    const profile = shellType === 'claude' && selectedProfile ? selectedProfile : undefined
-    if (profile) localStorage.setItem('nexus_last_profile', profile)
-    onConfirm(shellType, profile)
-  }
-
-  function handleProfileChange(id: string) {
-    setSelectedProfile(id)
-    if (id) localStorage.setItem('nexus_last_profile', id)
+    onConfirm(shellType)
   }
 
   return (
@@ -87,31 +61,14 @@ export default function NewWindowDialog({ token, onClose, onConfirm }: Props) {
                 <input
                   type="radio"
                   name="shellType"
-                  value="opencode"
-                  checked={shellType === 'opencode'}
-                  onChange={() => setShellType('opencode')}
+                  value="bash"
+                  checked={shellType === 'bash'}
+                  onChange={() => setShellType('bash')}
                 />
-                <span>{t('workspace.shellOpencode')}</span>
+                <span>Zsh</span>
               </label>
             </div>
           </div>
-
-          {/* Profile */}
-          {shellType === 'claude' && configs.length > 0 && (
-            <div>
-              <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-2">{t('newChannel.profile')}</div>
-              <select
-                className="bg-nexus-bg-2 border border-nexus-border rounded-md text-nexus-text text-sm px-2.5 py-2 w-full outline-none"
-                value={selectedProfile}
-                onChange={e => handleProfileChange(e.target.value)}
-              >
-                <option value="">{t('newChannel.profileDefault')}</option>
-                {configs.map(cfg => (
-                  <option key={cfg.id} value={cfg.id}>{cfg.label}</option>
-                ))}
-              </select>
-            </div>
-          )}
         </div>
 
         {/* 底部按钮 */}

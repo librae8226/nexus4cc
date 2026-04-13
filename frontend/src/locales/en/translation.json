@@ -37,10 +37,6 @@
     "shellType": "Shell Type",
     "shellClaude": "Claude",
     "shellZsh": "Zsh",
-    "shellOpencode": "Crush (OpenCode)",
-    "profileLabel": "Config Profile (optional)",
-    "profileDefault": "Default (no profile)",
-    "profileHelp": "Profile sets the API key and model. Data is isolated per project directory.",
     "browseDir": "Browse Directory",
     "selectThisDir": "Select",
     "rootDir": "Root",
@@ -77,9 +73,7 @@
   },
   "newChannel": {
     "title": "New Channel",
-    "shellType": "Shell Type",
-    "profile": "Profile",
-    "profileDefault": "Default"
+    "shellType": "Shell Type"
   },
   "toolbar": {
     "pasteUpload": "Paste / Upload",
