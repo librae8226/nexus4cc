@@ -1,19 +1,20 @@
-// server.js — Nexus WebSocket tmux 桥接服务
+// server.js — Nexus v4.4.2 (security-hardened)
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import * as pty from 'node-pty';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { createServer } from 'node:http';
-import { exec, spawn, execSync } from 'child_process';
-import { fileURLToPath } from 'url';
-import { dirname, join, normalize, isAbsolute, basename } from 'path';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, statSync, rmdirSync, renameSync, cpSync, rmSync } from 'fs';
-import { readdir, stat as statAsync } from 'fs/promises';
+import { execFile, spawn, execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, join, normalize, isAbsolute, basename } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, statSync, rmdirSync, renameSync, cpSync, rmSync } from 'node:fs';
+import { readdir, stat as statAsync } from 'node:fs/promises';
 import https from 'node:https';
 import multer from 'multer';
+import cookieParser from 'cookie-parser';
 
-// 加载 .env 文件（如果存在）
+// ── env loading ──
 try {
   const envPath = join(dirname(fileURLToPath(import.meta.url)), '.env');
   const lines = readFileSync(envPath, 'utf8').split('\n');
@@ -26,1794 +27,535 @@ try {
     const val = trimmed.slice(idx + 1).trim();
     if (key && !(key in process.env)) process.env[key] = val;
   }
-} catch { /* .env 不存在时忽略 */ }
+} catch { /* .env not found */ }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const { JWT_SECRET, ACC_PASSWORD_HASH } = process.env;
+ 
+// escape shell arguments for tmux commands
+function shEscape(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
+if (!JWT_SECRET || !ACC_PASSWORD_HASH) { console.error('ERROR: JWT_SECRET and ACC_PASSWORD_HASH required'); process.exit(1); }
 
-// 持久化数据目录（通过 Docker volume 挂载，重建容器不丢失）
+// ── config ──
+const TMUX_SESSION = process.env.TMUX_SESSION || '~';
+const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || '/workspace';
+const PORT = process.env.PORT || '3000';
+const CLAUDE_PROXY = process.env.CLAUDE_PROXY || '';
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
+const TELEGRAM_DEFAULT_SESSION = process.env.TELEGRAM_DEFAULT_SESSION || '';
+const GITHUB_REPO = process.env.GITHUB_REPO || 'librae8226/nexus4cc';
+
+// ── data dirs ──
 const DATA_DIR = join(__dirname, 'data');
 const TOOLBAR_CONFIG_FILE = join(DATA_DIR, 'toolbar-config.json');
 const CONFIGS_DIR = join(DATA_DIR, 'configs');
 const TASKS_FILE = join(DATA_DIR, 'tasks.json');
 const UPLOADS_DIR = join(DATA_DIR, 'uploads');
-if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-if (!existsSync(CONFIGS_DIR)) mkdirSync(CONFIGS_DIR, { recursive: true });
-if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
+[DATA_DIR, CONFIGS_DIR, UPLOADS_DIR].forEach(d => { if (!existsSync(d)) mkdirSync(d, { recursive: true }); });
 
+// ── app setup ──
 const app = express();
 app.use(express.json());
-
-const {
-  JWT_SECRET,
-  ACC_PASSWORD_HASH,
-  TMUX_SESSION = '~',
-  WORKSPACE_ROOT = '/workspace',
-  PORT = '3000',
-  CLAUDE_PROXY = '',
-  TELEGRAM_BOT_TOKEN,
-  TELEGRAM_WEBHOOK_SECRET,
-  TELEGRAM_DEFAULT_SESSION = '',
-  GITHUB_REPO = 'librae8226/nexus4cc',
-} = process.env;
-
-if (!JWT_SECRET || !ACC_PASSWORD_HASH) {
-  console.error('ERROR: JWT_SECRET and ACC_PASSWORD_HASH must be set in environment');
-  process.exit(1);
-}
-
-// 静态文件：frontend/dist 和 public
+app.use(cookieParser());
 app.use(express.static(join(__dirname, 'public')));
 app.use(express.static(join(__dirname, 'frontend', 'dist')));
 
-// Auth middleware
+// ── rate limiter (in-memory) ──
+const limiterStore = new Map();
+function createRateLimiter({ windowMs = 60000, max = 60, keyFn = (r) => r.ip || r.connection?.remoteAddress || '' }) {
+  return (req, res, next) => {
+    const key = String(keyFn(req) || 'default');
+    const now = Date.now();
+    let entry = limiterStore.get(key);
+    if (!entry || now > entry.resetAt) entry = { count: 0, resetAt: now + windowMs };
+    if (entry.count < max) { entry.count++; return next(); }
+    res.status(429).json({ error: 'too many requests', retryAfter: Math.ceil((entry.resetAt - now) / 1000) });
+  };
+}
+const loginLimiter = createRateLimiter({ windowMs: 60_000, max: 5, keyFn: (r) => r.ip || r.connection?.remoteAddress || '' });
+const apiLimiter = createRateLimiter({ windowMs: 60_000, max: 100, keyFn: (r) => r.ip || r.connection?.remoteAddress || '' });
+setInterval(() => { const now = Date.now(); for (const [k, e] of limiterStore) if (now > e.resetAt) limiterStore.delete(k); }, 60_000);
+
+// ── auth middleware ──
 function authMiddleware(req, res, next) {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'unauthorized' });
-  try {
-    jwt.verify(token, JWT_SECRET);
-    next();
-  } catch {
-    res.status(401).json({ error: 'unauthorized' });
-  }
+  if (token) { try { jwt.verify(token, JWT_SECRET); req.authenticated = true; return next(); } catch {} }
+  const cookieToken = req.cookies?.nexus_token;
+  if (cookieToken) { try { jwt.verify(cookieToken, JWT_SECRET); req.authenticated = true; return next(); } catch {} }
+  res.status(401).json({ error: 'unauthorized' });
 }
 
-// POST /api/auth/login
-app.post('/api/auth/login', async (req, res) => {
+// ── safe tmux helpers ──
+function tmuxHasSession(s) { try { execFileSync('tmux', ['has-session', '-t', s], { stdio: 'ignore' }); return true; } catch { return false; } }
+function setTmuxEnv(s, k, v) { try { execFileSync('tmux', ['set-environment', '-t', s, k, v], { stdio: 'ignore' }); } catch {} }
+function ensureTmuxSession(s) { if (!tmuxHasSession(s)) try { execFileSync('tmux', ['new-session', '-d', '-s', s, '-n', 'shell', 'zsh'], { stdio: 'ignore' }); } catch {} }
+function proxyVars() {
+  return {
+    ...(process.env.HTTP_PROXY  ? { HTTP_PROXY:  process.env.HTTP_PROXY  } : {}),
+    ...(process.env.HTTPS_PROXY ? { HTTPS_PROXY: process.env.HTTPS_PROXY } : {}),
+    ...(process.env.ALL_PROXY   ? { ALL_PROXY:   process.env.ALL_PROXY   } : {}),
+    ...(process.env.http_proxy  ? { http_proxy:  process.env.http_proxy  } : {}),
+    ...(process.env.https_proxy ? { https_proxy: process.env.https_proxy } : {}),
+    ...(CLAUDE_PROXY ? { ALL_PROXY: CLAUDE_PROXY, HTTPS_PROXY: CLAUDE_PROXY, HTTP_PROXY: CLAUDE_PROXY, NEXUS_PROXY: CLAUDE_PROXY } : {}),
+  };
+}
+
+// ── PTY map ──
+const ptyMap = new Map();
+function ptyKey(s, w) { return `${s}:${w}`; }
+
+// ── POST /api/auth/login ──
+app.post('/api/auth/login', loginLimiter, async (req, res) => {
   const { password } = req.body || {};
   if (!password) return res.status(400).json({ error: 'password required' });
   try {
     const ok = await bcrypt.compare(password, ACC_PASSWORD_HASH);
     if (!ok) return res.status(401).json({ error: 'unauthorized' });
     const token = jwt.sign({}, JWT_SECRET, { expiresIn: '30d' });
+    res.cookie('nexus_token', jwt.sign({}, JWT_SECRET, { expiresIn: '7d' }), { httpOnly: true, secure: true, sameSite: 'lax', maxAge: 7*24*60*60*1000, path: '/' });
     res.json({ token });
-  } catch (err) {
-    res.status(500).json({ error: 'internal error' });
-  }
+  } catch (err) { res.status(500).json({ error: 'internal error' }); }
 });
 
-// POST /api/windows — F-19: 项目-窗口两级结构
-// body: { rel_path?, shell_type?, profile? }
-// - 提供 rel_path: 设置 NEXUS_CWD 并在此目录创建窗口（新项目）
-// - 不提供 rel_path: 读取 NEXUS_CWD 并在此目录创建窗口（新窗口）
-app.post('/api/windows', authMiddleware, (req, res) => {
+// ── POST /api/windows ──
+app.post('/api/windows', apiLimiter, authMiddleware, (req, res) => {
   const { rel_path, shell_type = 'claude', profile } = req.body || {};
-  const tmuxSession = req.query.session || TMUX_SESSION;
-
+  const ts = req.query.session || TMUX_SESSION;
   let cwd;
   if (rel_path) {
-    // 新项目：设置 NEXUS_CWD
     cwd = rel_path.startsWith('/') ? rel_path : `${WORKSPACE_ROOT}/${rel_path}`;
-    try {
-      execSync(`tmux set-environment -t ${tmuxSession} NEXUS_CWD "${cwd}"`);
-    } catch (err) {
-      return res.status(500).json({ error: 'failed to set NEXUS_CWD: ' + err.message });
-    }
+    setTmuxEnv(ts, 'NEXUS_CWD', cwd);
   } else {
-    // 新窗口：读取 NEXUS_CWD
-    try {
-      const envOutput = execSync(`tmux show-environment -t ${tmuxSession} NEXUS_CWD 2>/dev/null`).toString().trim();
-      const match = envOutput.match(/^NEXUS_CWD=(.+)$/);
-      cwd = match ? match[1] : WORKSPACE_ROOT;
-    } catch {
-      cwd = WORKSPACE_ROOT;
-    }
+    try { const e = execFileSync('tmux', ['show-environment', '-t', ts, 'NEXUS_CWD'], { encoding: 'utf8' }).trim(); const m = e.match(/^NEXUS_CWD=(.+)$/); cwd = m ? m[1] : WORKSPACE_ROOT; }
+    catch { cwd = WORKSPACE_ROOT; }
   }
-
-  // 窗口名称基于目录
   const name = cwd.replace(/^\/+|\/+$/g, '').replace(/\//g, '-') || 'window';
-
-  // 构建 shell 命令
-  const proxyVars = {
-    ...(process.env.HTTP_PROXY  ? { HTTP_PROXY:  process.env.HTTP_PROXY  } : {}),
-    ...(process.env.HTTPS_PROXY ? { HTTPS_PROXY: process.env.HTTPS_PROXY } : {}),
-    ...(process.env.ALL_PROXY   ? { ALL_PROXY:   process.env.ALL_PROXY   } : {}),
-    ...(process.env.http_proxy  ? { http_proxy:  process.env.http_proxy  } : {}),
-    ...(process.env.https_proxy ? { https_proxy: process.env.https_proxy } : {}),
-    ...(CLAUDE_PROXY ? { ALL_PROXY: CLAUDE_PROXY, HTTPS_PROXY: CLAUDE_PROXY, HTTP_PROXY: CLAUDE_PROXY, NEXUS_PROXY: CLAUDE_PROXY } : {}),
-  };
-  const proxyExports = Object.entries(proxyVars).map(([k, v]) => `export ${k}='${v}'`).join('; ');
-  const proxyPrefix = proxyExports ? `${proxyExports}; ` : '';
-
+  const pv = proxyVars();
+  const px = Object.entries(pv).map(([k,v]) => `export ${k}='${v}'`).join('; ');
+  const pp = px ? `${px}; ` : '';
   let shellCmd;
-  if (shell_type === 'bash') {
-    shellCmd = `${proxyPrefix}exec zsh -i`;
-  } else {
-    if (profile) {
-      const runScript = join(__dirname, 'nexus-run-claude.sh');
-      shellCmd = `${proxyPrefix}bash "${runScript}" ${profile} ${cwd}`;
-    } else {
-      shellCmd = `${proxyPrefix}claude --dangerously-skip-permissions; exec zsh -i`;
-    }
-  }
-
-  // 确保 tmux session 存在
-  try {
-    execSync(`tmux has-session -t ${tmuxSession} 2>/dev/null || tmux new-session -d -s ${tmuxSession} -n shell "zsh"`);
-  } catch {}
-
-  // 将代理变量设置到 tmux session 环境
-  for (const [key, value] of Object.entries(proxyVars)) {
-    try {
-      execSync(`tmux set-environment -t ${tmuxSession} ${key} "${value}" 2>/dev/null`);
-    } catch {}
-  }
-
-  const cmd = `tmux new-window -t ${tmuxSession} -c "${cwd}" -n "${name}" "${shellCmd}"`;
-  exec(cmd, (err) => {
+  if (shell_type === 'bash') shellCmd = `${pp}exec zsh -i`;
+  else if (shell_type === 'opencode') { const rs = join(__dirname, 'nexus-run-crush.sh'); shellCmd = `${pp}bash ${shEscape(rs)} ${shEscape(cwd)}`; }
+  else if (profile) { const rs = join(__dirname, 'nexus-run-claude.sh'); shellCmd = `${pp}bash ${shEscape(rs)} ${shEscape(profile)} ${shEscape(cwd)}`; }
+  else shellCmd = `${pp}claude --dangerously-skip-permissions; exec zsh -i`;
+  ensureTmuxSession(ts);
+  for (const [k,v] of Object.entries(pv)) setTmuxEnv(ts, k, v);
+  execFile('tmux', ['new-window', '-t', ts, '-c', cwd, '-n', name, shellCmd], (err) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json({ name, cwd, shell_type, profile: profile || null, session: tmuxSession });
+    res.json({ name, cwd, shell_type, profile: profile || null, session: ts });
   });
 });
 
-// POST /api/sessions — 在 tmux 中创建新 window
-// body: { rel_path, shell_type?, profile?, session? }
-//   shell_type: 'claude' | 'bash' (default: 'claude')
-//   当 shell_type='claude' 时，profile 可选，使用 nexus-run-claude.sh 启动
-//   当 shell_type='bash' 时，直接启动 bash
-app.post('/api/sessions', authMiddleware, (req, res) => {
+// ── POST /api/sessions ──
+app.post('/api/sessions', apiLimiter, authMiddleware, (req, res) => {
   const { rel_path, shell_type = 'claude', profile, session } = req.body || {};
-  const tmuxSession = session || TMUX_SESSION;
+  const ts = session || TMUX_SESSION;
   if (!rel_path) return res.status(400).json({ error: 'rel_path required' });
   const cwd = rel_path.startsWith('/') ? rel_path : `${WORKSPACE_ROOT}/${rel_path}`;
   const name = cwd.replace(/^\/+|\/+$/g, '').replace(/\//g, '-') || 'session';
-
-  // 收集代理变量（宿主机环境 + CLAUDE_PROXY 覆盖）
-  const proxyVars = {
-    ...(process.env.HTTP_PROXY  ? { HTTP_PROXY:  process.env.HTTP_PROXY  } : {}),
-    ...(process.env.HTTPS_PROXY ? { HTTPS_PROXY: process.env.HTTPS_PROXY } : {}),
-    ...(process.env.ALL_PROXY   ? { ALL_PROXY:   process.env.ALL_PROXY   } : {}),
-    ...(process.env.http_proxy  ? { http_proxy:  process.env.http_proxy  } : {}),
-    ...(process.env.https_proxy ? { https_proxy: process.env.https_proxy } : {}),
-    ...(CLAUDE_PROXY ? { ALL_PROXY: CLAUDE_PROXY, HTTPS_PROXY: CLAUDE_PROXY, HTTP_PROXY: CLAUDE_PROXY, NEXUS_PROXY: CLAUDE_PROXY } : {}),
-  };
-
-  const proxyExports = Object.entries(proxyVars).map(([k, v]) => `export ${k}='${v}'`).join('; ');
-  const proxyPrefix = proxyExports ? `${proxyExports}; ` : '';
-
+  const pv = proxyVars();
+  const px = Object.entries(pv).map(([k,v]) => `export ${k}='${v}'`).join('; ');
+  const pp = px ? `${px}; ` : '';
   let shellCmd;
-  if (shell_type === 'bash') {
-    shellCmd = `${proxyPrefix}exec zsh -i`;
-  } else {
-    if (profile) {
-      const runScript = join(__dirname, 'nexus-run-claude.sh');
-      shellCmd = `${proxyPrefix}bash "${runScript}" ${profile} ${cwd}`;
-    } else {
-      shellCmd = `${proxyPrefix}claude --dangerously-skip-permissions; exec zsh -i`;
-    }
-  }
-
-  // 确保 tmux session 存在
-  try {
-    execSync(`tmux has-session -t ${tmuxSession} 2>/dev/null || tmux new-session -d -s ${tmuxSession} -n shell "zsh"`);
-  } catch {}
-
-  // 将代理变量设置到 tmux session 环境，新窗口才能继承
-  for (const [key, value] of Object.entries(proxyVars)) {
-    try {
-      execSync(`tmux set-environment -t ${tmuxSession} ${key} "${value}" 2>/dev/null`);
-    } catch {}
-  }
-
-  const cmd = `tmux new-window -t ${tmuxSession} -c "${cwd}" -n "${name}" "${shellCmd}"`;
-  exec(cmd, (err) => {
+  if (shell_type === 'bash') shellCmd = `${pp}exec zsh -i`;
+  else if (shell_type === 'opencode') { const rs = join(__dirname, 'nexus-run-crush.sh'); shellCmd = `${pp}bash ${shEscape(rs)} ${shEscape(cwd)}`; }
+  else if (profile) { const rs = join(__dirname, 'nexus-run-claude.sh'); shellCmd = `${pp}bash ${shEscape(rs)} ${shEscape(profile)} ${shEscape(cwd)}`; }
+  else shellCmd = `${pp}claude --dangerously-skip-permissions; exec zsh -i`;
+  ensureTmuxSession(ts);
+  for (const [k,v] of Object.entries(pv)) setTmuxEnv(ts, k, v);
+  execFile('tmux', ['new-window', '-t', ts, '-c', cwd, '-n', name, shellCmd], (err) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json({ name, cwd, shell_type, profile: profile || null, session: tmuxSession });
+    res.json({ name, cwd, shell_type, profile: profile || null, session: ts });
   });
 });
 
-// GET /api/configs — 列出所有 claude 配置 profile
-app.get('/api/configs', authMiddleware, (req, res) => {
+// ── Configs ──
+app.get('/api/configs', apiLimiter, authMiddleware, (req, res) => {
   try {
-    const files = readdirSync(CONFIGS_DIR, { withFileTypes: true })
-      .filter(f => f.isFile() && f.name.endsWith('.json'))
-      .map(f => ({
-        name: f.name,
-        mtime: statSync(join(CONFIGS_DIR, f.name)).mtimeMs,
-      }))
-      .sort((a, b) => b.mtime - a.mtime)
-      .map(f => f.name);
-    const configs = files.map(f => {
-      const id = f.replace('.json', '');
-      try {
-        const data = JSON.parse(readFileSync(join(CONFIGS_DIR, f), 'utf8'));
-        return { id, label: data.label || id, ...data };
-      } catch {
-        return { id, label: id };
-      }
-    });
-    res.json(configs);
-  } catch {
-    res.json([]);
-  }
+    const files = readdirSync(CONFIGS_DIR, { withFileTypes: true }).filter(f => f.isFile() && f.name.endsWith('.json')).map(f => ({ name: f.name, mtime: statSync(join(CONFIGS_DIR, f.name)).mtimeMs })).sort((a,b) => b.mtime - a.mtime).map(f => f.name);
+    res.json(files.map(f => { try { const d = JSON.parse(readFileSync(join(CONFIGS_DIR, f), 'utf8')); return { id: f.replace('.json',''), label: d.label || f.replace('.json',''), ...d }; } catch { return { id: f.replace('.json',''), label: f.replace('.json','') }; } }));
+  } catch { res.json([]); }
 });
-
-// POST /api/configs/:id — 创建或更新配置 profile
-app.post('/api/configs/:id', authMiddleware, (req, res) => {
-  const id = req.params.id.replace(/[^a-z0-9_-]/gi, '-').toLowerCase();
-  if (!id) return res.status(400).json({ error: 'invalid id' });
-  try {
-    writeFileSync(join(CONFIGS_DIR, `${id}.json`), JSON.stringify(req.body, null, 2), 'utf8');
-    res.json({ ok: true, id });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+app.post('/api/configs/:id', apiLimiter, authMiddleware, (req, res) => {
+  const id = req.params.id.replace(/[^a-z0-9_-]/gi, '-').toLowerCase(); if (!id) return res.status(400).json({ error: 'invalid id' });
+  try { writeFileSync(join(CONFIGS_DIR, `${id}.json`), JSON.stringify(req.body, null, 2), 'utf8'); res.json({ ok: true, id }); } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
-// DELETE /api/configs/:id — 删除配置 profile
-app.delete('/api/configs/:id', authMiddleware, (req, res) => {
+app.delete('/api/configs/:id', apiLimiter, authMiddleware, (req, res) => {
   const file = join(CONFIGS_DIR, `${req.params.id}.json`);
-  try {
-    if (existsSync(file)) unlinkSync(file);
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  try { if (existsSync(file)) unlinkSync(file); res.json({ ok: true }); } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/toolbar-config — 读取工具栏配置
-app.get('/api/toolbar-config', authMiddleware, (req, res) => {
-  try {
-    if (!existsSync(TOOLBAR_CONFIG_FILE)) return res.json(null);
-    const data = readFileSync(TOOLBAR_CONFIG_FILE, 'utf8');
-    res.json(JSON.parse(data));
-  } catch {
-    res.json(null);
-  }
+// ── Toolbar ──
+app.get('/api/toolbar-config', apiLimiter, authMiddleware, (req, res) => {
+  try { if (!existsSync(TOOLBAR_CONFIG_FILE)) return res.json(null); res.json(JSON.parse(readFileSync(TOOLBAR_CONFIG_FILE, 'utf8'))); } catch { res.json(null); }
+});
+app.post('/api/toolbar-config', apiLimiter, authMiddleware, (req, res) => {
+  try { writeFileSync(TOOLBAR_CONFIG_FILE, JSON.stringify(req.body), 'utf8'); res.json({ ok: true }); } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// POST /api/toolbar-config — 保存工具栏配置
-app.post('/api/toolbar-config', authMiddleware, (req, res) => {
+// ── Version ──
+app.get('/api/version', apiLimiter, authMiddleware, (req, res) => {
   try {
-    writeFileSync(TOOLBAR_CONFIG_FILE, JSON.stringify(req.body), 'utf8');
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/version — 当前版本号及工作区状态
-app.get('/api/version', authMiddleware, (req, res) => {
-  try {
-    const current = execSync('git describe --tags --abbrev=0', { cwd: __dirname }).toString().trim();
-    const dirty = execSync('git status --porcelain', { cwd: __dirname }).toString().trim();
+    const current = execFileSync('git', ['describe', '--tags', '--abbrev=0'], { cwd: __dirname, encoding: 'utf8' }).trim();
+    const dirty = execFileSync('git', ['status', '--porcelain'], { cwd: __dirname, encoding: 'utf8' }).trim();
     res.json({ current, clean: dirty === '' });
-  } catch {
-    res.json({ current: 'unknown', clean: true });
-  }
+  } catch { res.json({ current: 'unknown', clean: true }); }
 });
-
-// GET /api/version/latest — 代理 GitHub Tags API 获取最新版本（兼容只有 tag 没有 Release 的 repo）
-app.get('/api/version/latest', authMiddleware, (req, res) => {
-  const options = {
-    hostname: 'api.github.com',
-    path: `/repos/${GITHUB_REPO}/tags`,
-    headers: { 'User-Agent': 'nexus-update-check' },
-  };
-  https.get(options, (ghRes) => {
-    let data = '';
-    ghRes.on('data', chunk => { data += chunk; });
-    ghRes.on('end', () => {
-      try {
-        const json = JSON.parse(data);
-        if (!Array.isArray(json) || json.length === 0) return res.status(502).json({ error: 'no tags found' });
-        const latest = json[0].name;
-        res.json({ latest, url: `https://github.com/${GITHUB_REPO}/releases/tag/${latest}` });
-      } catch {
-        res.status(502).json({ error: 'invalid response from GitHub' });
-      }
+app.get('/api/version/latest', apiLimiter, authMiddleware, (req, res) => {
+  const rq = https.request({ hostname: 'api.github.com', path: `/repos/${GITHUB_REPO}/tags`, headers: { 'User-Agent': 'nexus-update-check' } }, (ghRes) => {
+    let data = ''; ghRes.on('data', c => data += c); ghRes.on('end', () => {
+      try { const json = JSON.parse(data); if (!Array.isArray(json) || !json.length) return res.status(502).json({ error: 'no tags found' }); res.json({ latest: json[0].name, url: `https://github.com/${GITHUB_REPO}/releases/tag/${json[0].name}` }); } catch { res.status(502).json({ error: 'invalid response' }); }
     });
-  }).on('error', () => {
-    res.status(502).json({ error: 'cannot reach GitHub' });
-  });
+  }); rq.on('error', () => res.status(502).json({ error: 'cannot reach GitHub' })); rq.end();
 });
 
-app.get('/api/browse', authMiddleware, (req, res) => {
+// ── Workspace browse ──
+app.get('/api/browse', apiLimiter, authMiddleware, (req, res) => {
   try {
-    let p = req.query.path || WORKSPACE_ROOT
-    if (p === '~') p = WORKSPACE_ROOT
-    if (!isAbsolute(p)) p = join(WORKSPACE_ROOT, p)
-    p = normalize(p)
-    const entries = readdirSync(p, { withFileTypes: true })
-    const dirs = entries
-      .filter(e => e.isDirectory() && !e.name.startsWith('.'))
-      .map(e => ({ name: e.name, path: join(p, e.name) }))
-      .sort((a, b) => a.name.localeCompare(b.name))
-    const parent = dirname(p) !== p ? dirname(p) : null
-    res.json({ path: p, parent, dirs })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-// GET /api/workspace/files — 浏览文件系统（支持文件和目录，任意路径）
-app.get('/api/workspace/files', authMiddleware, async (req, res) => {
+    let p = req.query.path || WORKSPACE_ROOT; if (p === '~') p = WORKSPACE_ROOT; if (!isAbsolute(p)) p = join(WORKSPACE_ROOT, p); p = normalize(p);
+    const entries = readdirSync(p, { withFileTypes: true }); const dirs = entries.filter(e => e.isDirectory() && !e.name.startsWith('.')).map(e => ({ name: e.name, path: join(p, e.name) })).sort((a,b) => a.name.localeCompare(b.name));
+    res.json({ path: p, parent: dirname(p) !== p ? dirname(p) : null, dirs });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.get('/api/workspace/files', apiLimiter, authMiddleware, async (req, res) => {
   try {
-    let p = req.query.path || WORKSPACE_ROOT
-    if (p === '~') p = WORKSPACE_ROOT
-    if (!isAbsolute(p)) p = join(WORKSPACE_ROOT, p)
-    p = normalize(p)
-    const dirents = await readdir(p, { withFileTypes: true })
-    const visible = dirents.filter(e => !e.name.startsWith('.'))
-    const entries = await Promise.all(visible.map(async e => {
-      const fullPath = join(p, e.name)
-      const st = await statAsync(fullPath)
-      return {
-        name: e.name,
-        type: e.isDirectory() ? 'dir' : 'file',
-        size: e.isFile() ? st.size : undefined,
-        mtime: st.mtimeMs,
-      }
-    }))
-    res.json({ path: p, entries })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
+    let p = req.query.path || WORKSPACE_ROOT; if (p === '~') p = WORKSPACE_ROOT; if (!isAbsolute(p)) p = join(WORKSPACE_ROOT, p); p = normalize(p);
+    const dirents = await readdir(p, { withFileTypes: true });
+    const entries = await Promise.all(dirents.filter(e => !e.name.startsWith('.')).map(async e => { const fp = join(p, e.name); const st = await statAsync(fp); return { name: e.name, type: e.isDirectory() ? 'dir' : 'file', size: e.isFile() ? st.size : undefined, mtime: st.mtimeMs }; }));
+    res.json({ path: p, entries });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
-// 静态文件服务：工作目录文件直接访问（/workspace/相对路径）
-// 支持 header 或 query string 传递 token（浏览器直接打开时用 query string）
-// 支持通过 ?path=/absolute/path 访问任意路径（仍然限制在 workspaceRoot 内）
+// ── /workspace static file serving ──
 app.use('/workspace', (req, res, next) => {
-  // 尝试从 query string 获取 token
-  const token = req.query.token
-  if (token) {
-    try {
-      jwt.verify(token, JWT_SECRET)
-      return next()
-    } catch {
-      return res.status(401).send('unauthorized')
-    }
-  }
-  // 否则使用 header auth
-  return authMiddleware(req, res, next)
+  const token = req.query.token;
+  if (token) { try { jwt.verify(String(token), JWT_SECRET); return next(); } catch { return res.status(401).send('unauthorized'); } }
+  const ct = req.cookies?.nexus_token; if (ct) { try { jwt.verify(ct, JWT_SECRET); return next(); } catch {} }
+  return authMiddleware(req, res, next);
 }, (req, res) => {
   try {
-    let fullPath
-    // 如果提供了 path 参数，使用它（绝对路径）
-    if (req.query.path) {
-      fullPath = normalize(decodeURIComponent(req.query.path))
-    } else {
-      // 否则使用相对路径（基于 WORKSPACE_ROOT）
-      let relPath = decodeURIComponent(req.path)
-      relPath = normalize(relPath).replace(/^(\.\.(\/|\|$))+/, '')
-      fullPath = join(WORKSPACE_ROOT, relPath)
-    }
-    // 安全检查：防止路径遍历攻击（规范化后检查是否包含 ..）
-    if (fullPath.includes('..')) {
-      return res.status(403).send('access denied: invalid path')
-    }
-    if (!existsSync(fullPath) || !statSync(fullPath).isFile()) {
-      return res.status(404).send('not found')
-    }
-    if (req.query.dl === '1') {
-      res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(basename(fullPath))}`)
-    }
-    res.sendFile(fullPath)
-  } catch (err) {
-    res.status(500).send(err.message)
-  }
-})
+    let fp; if (req.query.path) { fp = normalize(decodeURIComponent(String(req.query.path))); }
+    else { let rp = normalize(decodeURIComponent(req.path)).replace(/^(\.\.(\/|\|$))+/, ''); fp = join(WORKSPACE_ROOT, rp); }
+    if (fp.includes('..')) return res.status(403).send('access denied');
+    if (!existsSync(fp) || !statSync(fp).isFile()) return res.status(404).send('not found');
+    if (req.query.dl === '1') res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(basename(fp))}`);
+    res.sendFile(fp);
+  } catch (err) { res.status(500).send(err.message); }
+});
 
-// POST /api/workspace/mkdir — 创建文件夹
-app.post('/api/workspace/mkdir', authMiddleware, (req, res) => {
-  try {
-    let { path: targetPath, name } = req.body
-    if (!name) return res.status(400).json({ error: 'name required' })
-    if (!isAbsolute(targetPath)) targetPath = join(WORKSPACE_ROOT, targetPath)
-    targetPath = normalize(targetPath)
-    const dirPath = join(targetPath, name)
-    if (dirPath.includes('..')) {
-      return res.status(403).json({ error: 'invalid path' })
-    }
-    if (existsSync(dirPath)) {
-      return res.status(409).json({ error: 'already exists' })
-    }
-    mkdirSync(dirPath, { recursive: true })
-    res.json({ ok: true, path: dirPath })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
+// ── Workspace CRUD ──
+app.post('/api/workspace/mkdir', apiLimiter, authMiddleware, (req, res) => {
+  try { let { path: tp, name } = req.body; if (!name) return res.status(400).json({ error: 'name required' }); if (!isAbsolute(tp)) tp = join(WORKSPACE_ROOT, tp); tp = normalize(tp); const dp = join(tp, name); if (dp.includes('..')) return res.status(403).json({ error: 'invalid path' }); if (existsSync(dp)) return res.status(409).json({ error: 'already exists' }); mkdirSync(dp, { recursive: true }); res.json({ ok: true, path: dp }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/workspace/files', apiLimiter, authMiddleware, (req, res) => {
+  try { let { path: tp, name, content = '' } = req.body; if (!name) return res.status(400).json({ error: 'name required' }); if (!isAbsolute(tp)) tp = join(WORKSPACE_ROOT, tp); tp = normalize(tp); const fp = join(tp, name); if (fp.includes('..')) return res.status(403).json({ error: 'invalid path' }); if (existsSync(fp)) return res.status(409).json({ error: 'already exists' }); writeFileSync(fp, content, 'utf8'); res.json({ ok: true, path: fp }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.get('/api/workspace/file', apiLimiter, authMiddleware, (req, res) => {
+  try { let p = req.query.path || ''; if (!isAbsolute(p)) p = join(WORKSPACE_ROOT, p); p = normalize(p); if (p.includes('..')) return res.status(403).json({ error: 'invalid path' }); if (!existsSync(p) || !statSync(p).isFile()) return res.status(404).json({ error: 'not found' }); res.json({ path: p, content: readFileSync(p, 'utf8') }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.put('/api/workspace/file', apiLimiter, authMiddleware, (req, res) => {
+  try { let { path: fp, content = '' } = req.body; if (!fp) return res.status(400).json({ error: 'path required' }); if (!isAbsolute(fp)) fp = join(WORKSPACE_ROOT, fp); fp = normalize(fp); if (fp.includes('..')) return res.status(403).json({ error: 'invalid path' }); writeFileSync(fp, content, 'utf8'); res.json({ ok: true, path: fp }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.delete('/api/workspace/entry', apiLimiter, authMiddleware, (req, res) => {
+  try { let p = req.body?.path || req.query?.path || ''; if (!p) return res.status(400).json({ error: 'path required' }); if (!isAbsolute(p)) p = join(WORKSPACE_ROOT, p); p = normalize(p); if (p.includes('..')) return res.status(403).json({ error: 'invalid path' }); if (!existsSync(p)) return res.status(404).json({ error: 'not found' }); rmSync(p, { recursive: true, force: true }); res.json({ ok: true }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/workspace/rename', apiLimiter, authMiddleware, (req, res) => {
+  try { let { path: sp, newName } = req.body || {}; if (!sp || !newName) return res.status(400).json({ error: 'path and newName required' }); if (!isAbsolute(sp)) sp = join(WORKSPACE_ROOT, sp); sp = normalize(sp); if (sp.includes('..')) return res.status(403).json({ error: 'invalid path' }); if (!existsSync(sp)) return res.status(404).json({ error: 'not found' }); const dp = normalize(join(dirname(sp), newName)); if (dp.includes('..')) return res.status(403).json({ error: 'invalid newName' }); if (existsSync(dp)) return res.status(409).json({ error: 'already exists' }); renameSync(sp, dp); res.json({ ok: true, path: dp }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/workspace/copy', apiLimiter, authMiddleware, (req, res) => {
+  try { let { sourcePath, targetPath: dp } = req.body || {}; if (!sourcePath || !dp) return res.status(400).json({ error: 'sourcePath and targetPath required' }); if (!isAbsolute(sourcePath)) sourcePath = join(WORKSPACE_ROOT, sourcePath); if (!isAbsolute(dp)) dp = join(WORKSPACE_ROOT, dp); sourcePath = normalize(sourcePath); dp = normalize(dp); if (sourcePath.includes('..') || dp.includes('..')) return res.status(403).json({ error: 'invalid path' }); if (!existsSync(sourcePath)) return res.status(404).json({ error: 'source not found' }); if (existsSync(dp)) return res.status(409).json({ error: 'target already exists' }); cpSync(sourcePath, dp, { recursive: true }); res.json({ ok: true, path: dp }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/workspace/move', apiLimiter, authMiddleware, (req, res) => {
+  try { let { sourcePath, targetPath: dp } = req.body || {}; if (!sourcePath || !dp) return res.status(400).json({ error: 'sourcePath and targetPath required' }); if (!isAbsolute(sourcePath)) sourcePath = join(WORKSPACE_ROOT, sourcePath); if (!isAbsolute(dp)) dp = join(WORKSPACE_ROOT, dp); sourcePath = normalize(sourcePath); dp = normalize(dp); if (sourcePath.includes('..') || dp.includes('..')) return res.status(403).json({ error: 'invalid path' }); if (!existsSync(sourcePath)) return res.status(404).json({ error: 'source not found' }); if (existsSync(dp)) return res.status(409).json({ error: 'target already exists' }); try { renameSync(sourcePath, dp); } catch (e) { if (e.code === 'EXDEV') { cpSync(sourcePath, dp, { recursive: true }); rmSync(sourcePath, { recursive: true, force: true }); } else throw e; } res.json({ ok: true, path: dp }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
-// POST /api/workspace/files — 创建新文件
-app.post('/api/workspace/files', authMiddleware, (req, res) => {
-  try {
-    let { path: targetPath, name, content = '' } = req.body
-    if (!name) return res.status(400).json({ error: 'name required' })
-    if (!isAbsolute(targetPath)) targetPath = join(WORKSPACE_ROOT, targetPath)
-    targetPath = normalize(targetPath)
-    const filePath = join(targetPath, name)
-    if (filePath.includes('..')) {
-      return res.status(403).json({ error: 'invalid path' })
-    }
-    if (existsSync(filePath)) {
-      return res.status(409).json({ error: 'already exists' })
-    }
-    writeFileSync(filePath, content, 'utf8')
-    res.json({ ok: true, path: filePath })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
+// ── Upload ──
+const upload = multer({ storage: multer.diskStorage({ destination: (req, file, cb) => { let cwd = WORKSPACE_ROOT; try { const sn = req.body?.session_name || ''; const wins = execFileSync('tmux', ['list-windows', '-t', TMUX_SESSION, '-F', '#I:#W:#{pane_current_path}:#{window_active}'], { encoding: 'utf8' }).trim().split('\n'); for (const line of wins) { const ap = line.split(':'); if (ap[ap.length-1]?.trim() === '1') { cwd = ap.slice(2, ap.length-1).join(':'); break; } } } catch {} cb(null, cwd); }, filename: (req, file, cb) => cb(null, file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')) }), limits: { fileSize: 50*1024*1024 } });
+app.post('/api/upload', apiLimiter, authMiddleware, (req, res, next) => { upload.single('file')(req, res, (err) => { if (err) return res.status(400).json({ error: err.message }); if (!req.file) return res.status(400).json({ error: 'no file' }); res.json({ ok: true, path: req.file.path, filename: req.file.filename, size: req.file.size }); }); });
 
-// GET /api/workspace/file — 读取文件内容
-app.get('/api/workspace/file', authMiddleware, (req, res) => {
-  try {
-    let p = req.query.path || ''
-    if (!isAbsolute(p)) p = join(WORKSPACE_ROOT, p)
-    p = normalize(p)
-    if (p.includes('..')) {
-      return res.status(403).json({ error: 'invalid path' })
-    }
-    if (!existsSync(p) || !statSync(p).isFile()) {
-      return res.status(404).json({ error: 'not found' })
-    }
-    const content = readFileSync(p, 'utf8')
-    res.json({ path: p, content })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
+// ── F-21 uploads ──
+const fileUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100*1024*1024 } });
+app.post('/api/files/upload', apiLimiter, authMiddleware, (req, res, next) => { fileUpload.single('file')(req, res, (err) => {
+  if (err) return res.status(400).json({ error: err.message }); if (!req.file) return res.status(400).json({ error: 'no file' });
+  const dd = new Date().toISOString().slice(0,10); const ud = join(UPLOADS_DIR, dd); if (!existsSync(ud)) mkdirSync(ud, { recursive: true });
+  const on = req.body.originalName || req.file.originalname; const safe = on.replace(/[<>:"|?*\\/\x00-\x1f]/g, '_'); const fp = join(ud, safe);
+  req.query.overwrite === '1' ? (() => {})() : (() => { if (existsSync(fp)) return res.status(409).json({ error: 'file exists', filename: safe, message: `文件 "${safe}" 已存在` }); })();
+  try { writeFileSync(fp, req.file.buffer); console.log('[Upload]', safe, '→', fp); res.json({ ok: true, filename: safe, url: `/uploads/${dd}/${safe}`, fullPath: fp, size: req.file.size, originalName: on }); } catch (e) { res.status(500).json({ error: e.message }); }
+}); });
+app.use('/uploads', express.static(UPLOADS_DIR));
+app.get('/api/files', apiLimiter, authMiddleware, (req, res) => {
+  try { const result = []; readdirSync(UPLOADS_DIR, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name).sort((a,b) => b.localeCompare(a)).forEach(dd => { const dp = join(UPLOADS_DIR, dd); const files = readdirSync(dp, { withFileTypes: true }).filter(e => e.isFile()).map(e => { const s = statSync(join(dp, e.name)); return { name: e.name, url: `/uploads/${dd}/${e.name}`, fullPath: join(dp, e.name), size: s.size, created: s.mtimeMs }; }).sort((a,b) => b.created - a.created); if (files.length) result.push({ date: dd, files }); }); res.json(result); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.delete('/api/files/:date/:filename', apiLimiter, authMiddleware, (req, res) => {
+  const dd = req.params.date.replace(/[^0-9-]/g, ''); const fn = req.params.filename.replace(/[^a-zA-Z0-9._-]/g, '_'); const fp = join(UPLOADS_DIR, dd, fn); if (!fp.startsWith(UPLOADS_DIR)) return res.status(400).json({ error: 'invalid path' }); try { if (existsSync(fp)) { unlinkSync(fp); res.json({ ok: true }); } else res.status(404).json({ error: 'file not found' }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.delete('/api/files/all', apiLimiter, authMiddleware, (req, res) => { try { let dc = 0; readdirSync(UPLOADS_DIR, { withFileTypes: true }).filter(e => e.isDirectory()).forEach(dd => { const dp = join(UPLOADS_DIR, dd.name); readdirSync(dp, { withFileTypes: true }).filter(e => e.isFile()).forEach(f => { try { unlinkSync(join(dp, f.name)); dc++; } catch {} }); try { rmdirSync(dp); } catch {} }); res.json({ ok: true, deletedCount: dc }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
-// PUT /api/workspace/file — 保存文件内容
-app.put('/api/workspace/file', authMiddleware, (req, res) => {
-  try {
-    let { path: filePath, content = '' } = req.body
-    if (!filePath) return res.status(400).json({ error: 'path required' })
-    if (!isAbsolute(filePath)) filePath = join(WORKSPACE_ROOT, filePath)
-    filePath = normalize(filePath)
-    if (filePath.includes('..')) {
-      return res.status(403).json({ error: 'invalid path' })
-    }
-    writeFileSync(filePath, content, 'utf8')
-    res.json({ ok: true, path: filePath })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-// DELETE /api/workspace/entry — 删除文件或目录
-app.delete('/api/workspace/entry', authMiddleware, (req, res) => {
-  try {
-    let p = req.body?.path || req.query?.path || ''
-    if (!p) return res.status(400).json({ error: 'path required' })
-    if (!isAbsolute(p)) p = join(WORKSPACE_ROOT, p)
-    p = normalize(p)
-    if (p.includes('..')) {
-      return res.status(403).json({ error: 'invalid path' })
-    }
-    if (!existsSync(p)) {
-      return res.status(404).json({ error: 'not found' })
-    }
-    rmSync(p, { recursive: true, force: true })
-    res.json({ ok: true })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-// POST /api/workspace/rename — 重命名文件或目录
-app.post('/api/workspace/rename', authMiddleware, (req, res) => {
-  try {
-    let { path: srcPath, newName } = req.body || {}
-    if (!srcPath || !newName) return res.status(400).json({ error: 'path and newName required' })
-    if (!isAbsolute(srcPath)) srcPath = join(WORKSPACE_ROOT, srcPath)
-    srcPath = normalize(srcPath)
-    if (srcPath.includes('..')) {
-      return res.status(403).json({ error: 'invalid path' })
-    }
-    if (!existsSync(srcPath)) {
-      return res.status(404).json({ error: 'not found' })
-    }
-    const destPath = normalize(join(dirname(srcPath), newName))
-    if (destPath.includes('..')) {
-      return res.status(403).json({ error: 'invalid newName' })
-    }
-    if (existsSync(destPath)) {
-      return res.status(409).json({ error: 'already exists' })
-    }
-    renameSync(srcPath, destPath)
-    res.json({ ok: true, path: destPath })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-// POST /api/workspace/copy — 复制文件或目录
-app.post('/api/workspace/copy', authMiddleware, (req, res) => {
-  try {
-    let { sourcePath, targetPath } = req.body || {}
-    if (!sourcePath || !targetPath) return res.status(400).json({ error: 'sourcePath and targetPath required' })
-    if (!isAbsolute(sourcePath)) sourcePath = join(WORKSPACE_ROOT, sourcePath)
-    if (!isAbsolute(targetPath)) targetPath = join(WORKSPACE_ROOT, targetPath)
-    sourcePath = normalize(sourcePath)
-    targetPath = normalize(targetPath)
-    if (sourcePath.includes('..') || targetPath.includes('..')) {
-      return res.status(403).json({ error: 'invalid path' })
-    }
-    if (!existsSync(sourcePath)) {
-      return res.status(404).json({ error: 'source not found' })
-    }
-    if (existsSync(targetPath)) {
-      return res.status(409).json({ error: 'target already exists' })
-    }
-    cpSync(sourcePath, targetPath, { recursive: true })
-    res.json({ ok: true, path: targetPath })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-// POST /api/workspace/move — 移动文件或目录
-app.post('/api/workspace/move', authMiddleware, (req, res) => {
-  try {
-    let { sourcePath, targetPath } = req.body || {}
-    if (!sourcePath || !targetPath) return res.status(400).json({ error: 'sourcePath and targetPath required' })
-    if (!isAbsolute(sourcePath)) sourcePath = join(WORKSPACE_ROOT, sourcePath)
-    if (!isAbsolute(targetPath)) targetPath = join(WORKSPACE_ROOT, targetPath)
-    sourcePath = normalize(sourcePath)
-    targetPath = normalize(targetPath)
-    if (sourcePath.includes('..') || targetPath.includes('..')) {
-      return res.status(403).json({ error: 'invalid path' })
-    }
-    if (!existsSync(sourcePath)) {
-      return res.status(404).json({ error: 'source not found' })
-    }
-    if (existsSync(targetPath)) {
-      return res.status(409).json({ error: 'target already exists' })
-    }
-    try {
-      renameSync(sourcePath, targetPath)
-    } catch (err) {
-      if (err.code === 'EXDEV') {
-        cpSync(sourcePath, targetPath, { recursive: true })
-        rmSync(sourcePath, { recursive: true, force: true })
-      } else {
-        throw err
-      }
-    }
-    res.json({ ok: true, path: targetPath })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-// POST /api/upload — 上传文件到指定 session 的 cwd（F-14）
-// body: multipart/form-data, fields: file, session_name (optional)
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => {
-      // 找到目标 session 的 cwd，否则存 WORKSPACE_ROOT
-      let cwd = WORKSPACE_ROOT
-      try {
-        const sessionName = req.body?.session_name || ''
-        const windows = execSync(`tmux list-windows -t ${TMUX_SESSION} -F "#I:#W:#{pane_current_path}"`).toString().trim().split('\n')
-        for (const line of windows) {
-          const parts = line.split(':')
-          const name = parts[1]
-          const path = parts.slice(2).join(':')
-          if (sessionName && name === sessionName) { cwd = path; break }
-          // 如果没指定 session，用 active window
-          if (!sessionName) {
-            const activeLines = execSync(`tmux list-windows -t ${TMUX_SESSION} -F "#I:#W:#{pane_current_path}:#{window_active}"`).toString().trim().split('\n')
-            for (const al of activeLines) {
-              const ap = al.split(':')
-              if (ap[ap.length - 1]?.trim() === '1') { cwd = ap.slice(2, ap.length - 1).join(':'); break }
-            }
-            break
-          }
-        }
-      } catch {}
-      if (!existsSync(cwd)) cwd = WORKSPACE_ROOT
-      cb(null, cwd)
-    },
-    filename: (req, file, cb) => {
-      // 保留原始文件名，避免冲突加时间戳前缀
-      const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')
-      cb(null, safe)
-    },
-  }),
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
-})
-
-app.post('/api/upload', authMiddleware, (req, res, next) => {
-  upload.single('file')(req, res, (err) => {
-    if (err) return res.status(400).json({ error: err.message })
-    if (!req.file) return res.status(400).json({ error: 'no file' })
-    const filePath = req.file.path
-    res.json({ ok: true, path: filePath, filename: req.file.filename, size: req.file.size })
-  })
-})
-
-// ---- F-21: 独立文件上传 API（上传到 data/uploads，不混入项目目录）----
-
-// 按日期生成上传目录
-function getUploadDir() {
-  const dateDir = new Date().toISOString().slice(0, 10)
-  const dir = join(UPLOADS_DIR, dateDir)
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  return dir
-}
-
-const fileUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024 } // 100MB
-})
-
-// POST /api/files/upload — 上传文件到 data/uploads/日期/
-// Query: overwrite=1 强制覆盖已存在的文件
-app.post('/api/files/upload', authMiddleware, (req, res, next) => {
-  fileUpload.single('file')(req, res, (err) => {
-    if (err) return res.status(400).json({ error: err.message })
-    if (!req.file) return res.status(400).json({ error: 'no file' })
-
-    const dateDir = new Date().toISOString().slice(0, 10)
-    const uploadDir = join(UPLOADS_DIR, dateDir)
-    if (!existsSync(uploadDir)) mkdirSync(uploadDir, { recursive: true })
-
-    // 使用前端传递的原始文件名（避免 multer 解析编码问题）
-    const originalName = req.body.originalName || req.file.originalname
-    // 清理文件名：只保留合法字符，中文保留
-    const safe = originalName.replace(/[<>:"|?*\\/\x00-\x1f]/g, '_')
-    const filePath = join(uploadDir, safe)
-    const overwrite = req.query.overwrite === '1'
-
-    // 检查文件是否已存在
-    if (!overwrite && existsSync(filePath)) {
-      return res.status(409).json({
-        error: 'file exists',
-        filename: safe,
-        message: `文件 "${safe}" 已存在`
-      })
-    }
-
-    // 写入文件
-    try {
-      writeFileSync(filePath, req.file.buffer)
-      const url = `/uploads/${dateDir}/${safe}`
-      const responseData = {
-        ok: true,
-        filename: safe,
-        url,
-        fullPath: filePath,
-        size: req.file.size,
-        originalName: originalName
-      }
-      console.log('[Upload]', safe, '→', filePath)
-      res.json(responseData)
-    } catch (writeErr) {
-      res.status(500).json({ error: writeErr.message })
-    }
-  })
-})
-
-// 静态服务：上传的文件直接访问（/uploads/日期/文件名）
-app.use('/uploads', express.static(UPLOADS_DIR))
-
-// GET /api/files — 列出上传的文件（按日期分组）
-app.get('/api/files', authMiddleware, (req, res) => {
-  try {
-    const result = []
-    const dateDirs = readdirSync(UPLOADS_DIR, { withFileTypes: true })
-      .filter(e => e.isDirectory())
-      .map(e => e.name)
-      .sort((a, b) => b.localeCompare(a)) // 降序，最新的在前
-
-    for (const dateDir of dateDirs) {
-      const dirPath = join(UPLOADS_DIR, dateDir)
-      const files = readdirSync(dirPath, { withFileTypes: true })
-        .filter(e => e.isFile())
-        .map(e => {
-          const stat = statSync(join(dirPath, e.name))
-          return {
-            name: e.name,
-            url: `/uploads/${dateDir}/${e.name}`,
-            fullPath: join(dirPath, e.name),
-            size: stat.size,
-            created: stat.mtimeMs,
-          }
-        })
-        .sort((a, b) => b.created - a.created)
-      if (files.length > 0) {
-        result.push({ date: dateDir, files })
-      }
-    }
-    res.json(result)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-// DELETE /api/files/:date/:filename — 删除上传的文件
-app.delete('/api/files/:date/:filename', authMiddleware, (req, res) => {
-  const dateDir = req.params.date.replace(/[^0-9-]/g, '')
-  const filename = req.params.filename.replace(/[^a-zA-Z0-9._-]/g, '_')
-  const filePath = join(UPLOADS_DIR, dateDir, filename)
-  // 安全检查：确保文件在 uploads 目录内
-  if (!filePath.startsWith(UPLOADS_DIR)) {
-    return res.status(400).json({ error: 'invalid path' })
-  }
-  try {
-    if (existsSync(filePath)) {
-      unlinkSync(filePath)
-      res.json({ ok: true })
-    } else {
-      res.status(404).json({ error: 'file not found' })
-    }
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-// DELETE /api/files/all — 删除所有上传的文件
-app.delete('/api/files/all', authMiddleware, (req, res) => {
-  try {
-    const dateDirs = readdirSync(UPLOADS_DIR, { withFileTypes: true })
-      .filter(e => e.isDirectory())
-    let deletedCount = 0
-    for (const dateDir of dateDirs) {
-      const dirPath = join(UPLOADS_DIR, dateDir.name)
-      const files = readdirSync(dirPath, { withFileTypes: true })
-        .filter(e => e.isFile())
-      for (const file of files) {
-        const filePath = join(dirPath, file.name)
-        try {
-          unlinkSync(filePath)
-          deletedCount++
-        } catch {}
-      }
-      // 尝试删除空目录
-      try {
-        rmdirSync(dirPath)
-      } catch {}
-    }
-    res.json({ ok: true, deletedCount })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-// POST /api/sessions/:id/rename — 重命名窗口
-app.post('/api/sessions/:id/rename', authMiddleware, (req, res) => {
-  const index = req.params.id
-  const session = req.query.session || TMUX_SESSION
-  const { name } = req.body || {}
-  if (!name) return res.status(400).json({ error: 'name required' })
-  const safeName = name.replace(/[^a-zA-Z0-9._-]/g, '-').substring(0, 50)
-  exec(`tmux rename-window -t ${session}:${index} "${safeName}"`, (err) => {
-    if (err) return res.status(500).json({ error: err.message })
-    res.json({ ok: true, name: safeName })
-  })
-})
-
-// GET /api/sessions/:id/output — 获取窗口最后输出（F-15 状态卡片）
-app.get('/api/sessions/:id/output', authMiddleware, (req, res) => {
-  const windowIndex = parseInt(req.params.id, 10);
-  const session = req.query.session || TMUX_SESSION;
-  const entry = ptyMap.get(ptyKey(session, windowIndex));
+// ── Session / Window (safe execFile) ──
+app.post('/api/sessions/:id/rename', apiLimiter, authMiddleware, (req, res) => {
+  const idx = req.params.id; const session = req.query.session || TMUX_SESSION; const { name } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'name required' }); const safeName = name.replace(/[^a-zA-Z0-9._-]/g, '-').substring(0, 50);
+  execFile('tmux', ['rename-window', '-t', `${session}:${idx}`, safeName], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ ok: true, name: safeName }); });
+});
+app.get('/api/sessions/:id/output', apiLimiter, authMiddleware, (req, res) => {
+  const wi = parseInt(req.params.id, 10); const session = req.query.session || TMUX_SESSION;
+  const key = ptyKey(session, wi); const entry = ptyMap.get(key);
   if (!entry) return res.json({ connected: false, output: '', clients: 0 });
-  res.json({
-    connected: true,
-    output: entry.lastOutput.slice(-2000), // 最后 2KB
-    clients: entry.clients.size,
-    idleMs: Date.now() - entry.lastActivity,
+  res.json({ connected: true, output: entry.lastOutput.slice(-2000), clients: entry.clients.size, idleMs: Date.now() - entry.lastActivity });
+});
+app.get('/api/sessions/:id/scrollback', apiLimiter, authMiddleware, (req, res) => {
+  const wi = parseInt(req.params.id, 10); const session = req.query.session || TMUX_SESSION;
+  const lines = Math.min(parseInt(req.query.lines || '3000', 10), 10000);
+  execFile('tmux', ['capture-pane', '-p', '-S', `-${lines}`, '-t', `${session}:${wi}`], (err, stdout) => { if (err) return res.status(500).json({ error: err.message }); res.json({ content: stdout.split('\n').map(l => l.trimEnd()).join('\n') }); });
+});
+app.get('/api/config', apiLimiter, authMiddleware, (req, res) => { res.json({ tmuxSession: TMUX_SESSION, workspaceRoot: WORKSPACE_ROOT }); });
+app.get('/api/tmux-sessions', apiLimiter, authMiddleware, (req, res) => {
+  execFile('tmux', ['list-sessions', '-F', '#{session_name}|#{session_windows}|#{session_attached}'], (err, stdout) => {
+    if (err) return res.json([{ name: TMUX_SESSION, windows: 0, attached: false }]);
+    const sessions = stdout.trim().split('\n').filter(Boolean).map(line => { const [n,w,a] = line.split('|'); return { name: n, windows: Number(w), attached: Number(a) > 0 }; });
+    res.json(sessions);
   });
 });
 
-// GET /api/sessions/:id/scrollback — fetch tmux scrollback history (works in alternate screen too)
-app.get('/api/sessions/:id/scrollback', authMiddleware, (req, res) => {
-  const windowIndex = parseInt(req.params.id, 10)
-  const session = req.query.session || TMUX_SESSION
-  const lines = Math.min(parseInt(req.query.lines || '3000', 10), 10000)
-  exec(`tmux capture-pane -p -S -${lines} -t ${session}:${windowIndex} 2>/dev/null`, (err, stdout) => {
-    if (err) return res.status(500).json({ error: err.message })
-    // trim trailing spaces tmux pads to pane width
-    const content = stdout.split('\n').map(l => l.trimEnd()).join('\n')
-    res.json({ content })
-  })
-})
+// ── Projects (safe execFile/execFileSync) ──
+app.get('/api/projects', apiLimiter, authMiddleware, (req, res) => {
+  execFile('tmux', ['list-sessions', '-F', '#{session_name}|#{session_windows}|#{session_attached}'], (err, stdout) => {
+    if (err) return res.json([]);
+    const projects = stdout.trim().split('\n').filter(Boolean).map(line => {
+      const [name, windows] = line.split('|'); let path = '';
+      try { const e = execFileSync('tmux', ['show-environment', '-t', name, 'NEXUS_CWD'], { encoding: 'utf8' }).trim(); const m = e.match(/^NEXUS_CWD=(.+)$/); if (m) path = m[1]; } catch {}
+      if (!path && windows !== '0') { try { const p = execFileSync('tmux', ['list-windows', '-t', name, '-F', '#{pane_current_path}'], { encoding: 'utf8' }).trim(); if (p) path = p.split('\n')[0]; } catch {} }
+      return { name, path: path || WORKSPACE_ROOT, active: name === TMUX_SESSION, channelCount: Number(windows) || 0 };
+    }); projects.reverse(); res.json(projects);
+  });
+});
+app.get('/api/session-cwd', apiLimiter, authMiddleware, (req, res) => {
+  const session = req.query.session || TMUX_SESSION; let cwd = WORKSPACE_ROOT;
+  try { const e = execFileSync('tmux', ['show-environment', '-t', session, 'NEXUS_CWD'], { encoding: 'utf8' }).trim(); const m = e.match(/^NEXUS_CWD=(.+)$/); if (m) cwd = m[1]; } catch {}
+  if (cwd === WORKSPACE_ROOT) { try { const p = execFileSync('tmux', ['display-message', '-t', session, '-p', '#{pane_current_path}'], { encoding: 'utf8' }).trim(); if (p) cwd = p; } catch {} }
+  res.json({ cwd, relative: cwd.startsWith(WORKSPACE_ROOT) ? cwd.slice(WORKSPACE_ROOT.length).replace(/^\/+/, '') : '' });
+});
+app.get('/api/projects/:name/channels', apiLimiter, authMiddleware, (req, res) => {
+  const sn = req.params.name;
+  execFile('tmux', ['list-windows', '-t', sn, '-F', '#{window_index}|#{window_name}|#{window_active}|#{pane_current_path}'], (err, stdout) => {
+    if (err) return res.status(500).json({ error: err.message });
+    const channels = stdout.trim().split('\n').filter(Boolean).map(line => { const p = line.split('|'); return { index: Number(p[0]), name: p[1], active: p[2]?.trim() === '1', cwd: p.slice(3).join(':') || '' }; });
+    channels.reverse(); res.json({ project: sn, channels });
+  });
+});
+app.post('/api/projects', apiLimiter, authMiddleware, (req, res) => {
+  const { path, shell_type = 'claude', profile } = req.body || {}; if (!path) return res.status(400).json({ error: 'path required' });
+  const cwd = path.startsWith('/') ? path : `${WORKSPACE_ROOT}/${path}`;
+  let pn = cwd.replace(/^\/+|\/+$/g, '').replace(/\//g, '-'); if (!pn) pn = 'home';
+  const safeName = pn.replace(/[^a-zA-Z0-9._~-]/g, '-').substring(0, 50) || 'project';
+  let finalName = safeName;
+  try { const ex = execFileSync('tmux', ['list-sessions', '-F', '#{session_name}'], { encoding: 'utf8' }).trim().split('\n'); let c = 1; while (ex.includes(finalName)) finalName = `${safeName}-${c++}`; } catch {}
+  const pv = proxyVars(); const px = Object.entries(pv).map(([k,v]) => `export ${k}='${v}'`).join('; '); const pp = px ? `${px}; ` : '';
+  let shellCmd; if (shell_type === 'bash') shellCmd = `${pp}exec zsh -i`; else if (shell_type === 'opencode') shellCmd = `${pp}bash ${shEscape(join(__dirname, 'nexus-run-crush.sh'))} ${shEscape(cwd)}`; else if (profile) shellCmd = `${pp}bash ${shEscape(join(__dirname, 'nexus-run-claude.sh'))} ${shEscape(profile)} ${shEscape(cwd)}`; else shellCmd = `${pp}claude --dangerously-skip-permissions; exec zsh -i`;
+  const dn = cwd.replace(/^\/+|\/+$/g, '').split('/').pop() || '~'; const iwn = profile ? `${dn}-${profile}` : dn;
+  try { execFileSync('tmux', ['new-session', '-d', '-s', finalName, '-n', iwn, '-c', cwd, shellCmd], { stdio: 'ignore' }); setTmuxEnv(finalName, 'NEXUS_CWD', cwd); for (const [k,v] of Object.entries(pv)) setTmuxEnv(finalName, k, v); } catch (err) { return res.status(500).json({ error: 'failed to create project: ' + err.message }); }
+  res.json({ name: finalName, path: cwd, shell_type, profile: profile || null });
+});
+app.post('/api/projects/:name/channels', apiLimiter, authMiddleware, (req, res) => {
+  const sn = req.params.name; const { shell_type = 'claude', profile, path: bp } = req.body || {};
+  let cwd = WORKSPACE_ROOT; if (bp) cwd = bp; else { try { const e = execFileSync('tmux', ['show-environment', '-t', sn, 'NEXUS_CWD'], { encoding: 'utf8' }).trim(); const m = e.match(/^NEXUS_CWD=(.+)$/); if (m) cwd = m[1]; } catch {} }
+  const bn = profile || 'channel'; let cn = bn; try { const ex = execFileSync('tmux', ['list-windows', '-t', sn, '-F', '#{window_name}'], { encoding: 'utf8' }).trim().split('\n'); let c = 1; while (ex.includes(cn)) cn = `${bn}-${c++}`; } catch {}
+  const pv = proxyVars(); const px = Object.entries(pv).map(([k,v]) => `export ${k}='${v}'`).join('; '); const pp = px ? `${px}; ` : '';
+  let shellCmd; if (shell_type === 'bash') shellCmd = `${pp}exec zsh -i`; else if (shell_type === 'opencode') shellCmd = `${pp}bash ${shEscape(join(__dirname, 'nexus-run-crush.sh'))} ${shEscape(cwd)}`; else if (profile) shellCmd = `${pp}bash ${shEscape(join(__dirname, 'nexus-run-claude.sh'))} ${shEscape(profile)} ${shEscape(cwd)}`; else shellCmd = `${pp}claude --dangerously-skip-permissions; exec zsh -i`;
+  ensureTmuxSession(sn);
+  execFile('tmux', ['new-window', '-t', sn, '-c', cwd, '-n', cn, shellCmd], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ name: cn, cwd, shell_type, profile: profile || null, project: sn }); });
+});
+app.post('/api/projects/:name/activate', apiLimiter, authMiddleware, (req, res) => {
+  const sn = req.params.name; if (!tmuxHasSession(sn)) return res.status(404).json({ error: 'project not found' });
+  let lc = null; try { const e = execFileSync('tmux', ['show-environment', '-t', sn, 'NEXUS_LAST_CHANNEL'], { encoding: 'utf8' }).trim(); const m = e.match(/^NEXUS_LAST_CHANNEL=(\d+)$/); if (m) lc = parseInt(m[1], 10); } catch {}
+  if (lc !== null) { try { const w = execFileSync('tmux', ['list-windows', '-t', sn, '-F', '#I'], { encoding: 'utf8' }).trim().split('\n'); if (!w.includes(String(lc))) lc = null; } catch { lc = null; } }
+  res.json({ active: true, project: sn, lastChannel: lc });
+});
+app.post('/api/projects/:name/rename', apiLimiter, authMiddleware, (req, res) => {
+  const oldName = req.params.name; const { name: newName } = req.body || {}; if (!newName || !newName.trim()) return res.status(400).json({ error: 'new name required' });
+  const sn = newName.trim().replace(/[^a-zA-Z0-9_\-]/g, ''); if (!sn) return res.status(400).json({ error: 'invalid name format' });
+  if (!tmuxHasSession(oldName)) return res.status(404).json({ error: 'project not found' });
+  if (tmuxHasSession(sn)) return res.status(409).json({ error: 'project name already exists' });
+  execFile('tmux', ['rename-session', '-t', oldName, sn], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ ok: true, oldName, newName: sn }); });
+});
+app.delete('/api/projects/:name', apiLimiter, authMiddleware, (req, res) => {
+  const sn = req.params.name; if (!tmuxHasSession(sn)) return res.status(404).json({ error: 'project not found' });
+  execFile('tmux', ['kill-session', '-t', sn], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ ok: true }); });
+});
 
-// GET /api/config — 服务端配置信息（供前端初始化用）
-app.get('/api/config', authMiddleware, (req, res) => {
-  res.json({ tmuxSession: TMUX_SESSION, workspaceRoot: WORKSPACE_ROOT })
-})
+// ── Sessions ──
+app.get('/api/sessions', apiLimiter, authMiddleware, (req, res) => {
+  const session = req.query.session || TMUX_SESSION;
+  execFile('tmux', ['list-windows', '-t', session, '-F', '#{window_index}|#{window_name}|#{window_active}'], (err, stdout) => {
+    if (err) return res.status(500).json({ error: err.message });
+    const windows = stdout.trim().split('\n').filter(Boolean).map(line => { const [i,n,a] = line.split('|'); return { index: Number(i), name: n, active: a?.trim() === '1' }; });
+    res.json({ session, windows });
+  });
+});
+app.delete('/api/sessions/:id', apiLimiter, authMiddleware, (req, res) => {
+  const idx = req.params.id; const session = req.query.session || TMUX_SESSION;
+  const wc = execFileSync('tmux', ['list-windows', '-t', session, '-F', '#{window_index}'], { encoding: 'utf8' }).trim().split('\n').filter(Boolean).length;
+  if (wc <= 1) execFile('tmux', ['new-window', '-t', session, '-n', 'shell', 'zsh'], () => { execFile('tmux', ['kill-window', '-t', `${session}:${idx}`], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ ok: true }); }); });
+  else execFile('tmux', ['kill-window', '-t', `${session}:${idx}`], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ ok: true }); });
+});
+app.post('/api/sessions/:id/attach', apiLimiter, authMiddleware, (req, res) => {
+  const idx = req.params.id; const session = req.query.session || TMUX_SESSION;
+  execFile('tmux', ['select-window', '-t', `${session}:${idx}`], (err) => {
+    if (err) return res.status(500).json({ error: err.message }); setTmuxEnv(session, 'NEXUS_LAST_CHANNEL', idx); res.json({ ok: true });
+  });
+});
 
-// GET /api/tmux-sessions — 列出所有 tmux session（F-18）
-app.get('/api/tmux-sessions', authMiddleware, (req, res) => {
-  exec('tmux list-sessions -F "#{session_name}|#{session_windows}|#{session_attached}"', (err, stdout) => {
-    if (err) return res.json([{ name: TMUX_SESSION, windows: 0, attached: false }])
-    const sessions = stdout.trim().split('\n').filter(Boolean).map(line => {
-      const [name, windows, attached] = line.split('|')
-      return { name, windows: Number(windows), attached: Number(attached) > 0 }
-    })
-    res.json(sessions)
-  })
-})
-
-// ========== F-20: Project-Channel API ==========
-// Project = tmux session, Channel = tmux window (within a session)
-
-// GET /api/projects — 列出所有 Projects（tmux sessions）
-app.get('/api/projects', authMiddleware, (req, res) => {
-  exec('tmux list-sessions -F "#{session_name}|#{session_windows}|#{session_attached}"', (err, stdout) => {
-    if (err) return res.json([])
-    const lines = stdout.trim().split('\n').filter(Boolean)
-    const projects = lines.map(line => {
-      const [name, windows, attached] = line.split('|')
-      // 尝试读取 NEXUS_CWD
-      let path = ''
-      try {
-        const envOutput = execSync(`tmux show-environment -t ${name} NEXUS_CWD 2>/dev/null`).toString().trim()
-        const match = envOutput.match(/^NEXUS_CWD=(.+)$/)
-        if (match) path = match[1]
-      } catch {}
-      // 没有 NEXUS_CWD，尝试取第一个 window 的 pane_current_path
-      if (!path && windows !== '0') {
-        try {
-          const cwdOutput = execSync(`tmux list-windows -t ${name} -F '#{pane_current_path}' 2>/dev/null | head -1`).toString().trim()
-          if (cwdOutput) path = cwdOutput
-        } catch {}
-      }
-      return {
-        name,
-        path: path || WORKSPACE_ROOT,
-        active: name === TMUX_SESSION,
-        channelCount: Number(windows) || 0
-      }
-    })
-    projects.reverse()
-    res.json(projects)
-  })
-})
-
-// GET /api/session-cwd — 获取指定 session 的 NEXUS_CWD
-app.get('/api/session-cwd', authMiddleware, (req, res) => {
-  const session = req.query.session || TMUX_SESSION
-  let cwd = WORKSPACE_ROOT
-
-  // 1. 尝试读取 NEXUS_CWD（外部启动的 session 可能没有，会抛异常）
-  try {
-    const envOutput = execSync(`tmux show-environment -t ${session} NEXUS_CWD 2>/dev/null`).toString().trim()
-    const match = envOutput.match(/^NEXUS_CWD=(.+)$/)
-    if (match) cwd = match[1]
-  } catch { /* NEXUS_CWD 未设置 */ }
-
-  // 2. 若 NEXUS_CWD 未设置，回退到 pane_current_path
-  if (cwd === WORKSPACE_ROOT) {
-    try {
-      const panePath = execSync(`tmux display-message -t ${session} -p '#{pane_current_path}' 2>/dev/null`).toString().trim()
-      if (panePath) cwd = panePath
-    } catch { /* fallback to WORKSPACE_ROOT */ }
-  }
-
-  const relative = cwd.startsWith(WORKSPACE_ROOT) ? cwd.slice(WORKSPACE_ROOT.length).replace(/^\/+/, '') : ''
-  res.json({ cwd, relative })
-})
-
-// GET /api/projects/:name/channels — 列出指定 Project 的 Channels（windows）
-app.get('/api/projects/:name/channels', authMiddleware, (req, res) => {
-  const sessionName = req.params.name
-  exec(
-    `tmux list-windows -t ${sessionName} -F "#{window_index}|#{window_name}|#{window_active}|#{pane_current_path}"`,
-    (err, stdout) => {
-      if (err) return res.status(500).json({ error: err.message })
-      const lines = stdout.trim().split('\n').filter(Boolean)
-      const channels = lines.map(line => {
-        const parts = line.split('|')
-        const index = Number(parts[0])
-        const name = parts[1]
-        const active = parts[2]?.trim() === '1'
-        const cwd = parts.slice(3).join(':') || ''
-        return { index, name, active, cwd }
-      })
-      // 新创建的频道排在上面
-      channels.reverse()
-      res.json({ project: sessionName, channels })
-    }
-  )
-})
-
-// POST /api/projects — 新建 Project（创建 tmux session）
-// body: { path, shell_type?, profile? }
-// project 名称基于路径自动生成
-app.post('/api/projects', authMiddleware, (req, res) => {
-  const { path, shell_type = 'claude', profile } = req.body || {}
-  if (!path) return res.status(400).json({ error: 'path required' })
-
-  const cwd = path.startsWith('/') ? path : `${WORKSPACE_ROOT}/${path}`
-
-  // project 名称基于路径：把 / 替换成 -，并去除首尾 -
-  let projectName = cwd.replace(/^\/+|\/+$/g, '').replace(/\//g, '-')
-  if (!projectName) projectName = 'home'
-  // 确保名称安全且唯一
-  const safeName = projectName.replace(/[^a-zA-Z0-9._~-]/g, '-').substring(0, 50) || 'project'
-
-  // 检查是否已存在同名 session，如果存在则添加序号
-  let finalName = safeName
-  try {
-    const existing = execSync('tmux list-sessions -F "#{session_name}" 2>/dev/null').toString().trim().split('\n')
-    let counter = 1
-    while (existing.includes(finalName)) {
-      finalName = `${safeName}-${counter++}`
-    }
-  } catch {}
-
-  // 构建 shell 命令
-  const proxyVars = {
-    ...(process.env.HTTP_PROXY  ? { HTTP_PROXY:  process.env.HTTP_PROXY  } : {}),
-    ...(process.env.HTTPS_PROXY ? { HTTPS_PROXY: process.env.HTTPS_PROXY } : {}),
-    ...(process.env.ALL_PROXY   ? { ALL_PROXY:   process.env.ALL_PROXY   } : {}),
-    ...(process.env.http_proxy  ? { http_proxy:  process.env.http_proxy  } : {}),
-    ...(process.env.https_proxy ? { https_proxy: process.env.https_proxy } : {}),
-    ...(CLAUDE_PROXY ? { ALL_PROXY: CLAUDE_PROXY, HTTPS_PROXY: CLAUDE_PROXY, HTTP_PROXY: CLAUDE_PROXY, NEXUS_PROXY: CLAUDE_PROXY } : {}),
-  }
-  const proxyExports = Object.entries(proxyVars).map(([k, v]) => `export ${k}='${v}'`).join('; ')
-  const proxyPrefix = proxyExports ? `${proxyExports}; ` : ''
-
-  let shellCmd
-  if (shell_type === 'bash') {
-    shellCmd = `${proxyPrefix}exec zsh -i`
-  } else {
-    if (profile) {
-      const runScript = join(__dirname, 'nexus-run-claude.sh')
-      shellCmd = `${proxyPrefix}bash "${runScript}" ${profile} ${cwd}`
-    } else {
-      shellCmd = `${proxyPrefix}claude --dangerously-skip-permissions; exec zsh -i`
-    }
-  }
-
-  // 初始窗口名使用目录名[-profile名]（取路径最后一部分）
-  const dirName = cwd.replace(/^\/+|\/+$/g, '').split('/').pop() || '~'
-  const initialWindowName = profile ? `${dirName}-${profile}` : dirName
-
-  // 创建 tmux session（如果不存在）
-  try {
-    execSync(`tmux new-session -d -s ${finalName} -n "${initialWindowName}" -c "${cwd}" "${shellCmd}"`)
-    // 设置 NEXUS_CWD
-    execSync(`tmux set-environment -t ${finalName} NEXUS_CWD "${cwd}"`)
-    // 设置代理变量
-    for (const [key, value] of Object.entries(proxyVars)) {
-      try { execSync(`tmux set-environment -t ${finalName} ${key} "${value}" 2>/dev/null`) } catch {}
-    }
-  } catch (err) {
-    return res.status(500).json({ error: 'failed to create project: ' + err.message })
-  }
-
-  res.json({ name: finalName, path: cwd, shell_type, profile: profile || null })
-})
-
-// POST /api/projects/:name/channels — 在指定 Project 中新建 Channel（window）
-app.post('/api/projects/:name/channels', authMiddleware, (req, res) => {
-  const sessionName = req.params.name
-  const { shell_type = 'claude', profile, path: bodyPath } = req.body || {}
-
-  // 优先使用前端传入的 path，其次读取 NEXUS_CWD，最后 fallback 到 WORKSPACE_ROOT
-  let cwd = WORKSPACE_ROOT
-  if (bodyPath) {
-    cwd = bodyPath
-  } else {
-    try {
-      const envOutput = execSync(`tmux show-environment -t ${sessionName} NEXUS_CWD 2>/dev/null`).toString().trim()
-      const match = envOutput.match(/^NEXUS_CWD=(.+)$/)
-      if (match) cwd = match[1]
-    } catch {}
-  }
-
-  // Channel 命名：profile 名[-序号]
-  const baseName = profile || 'channel'
-  let channelName = baseName
-  try {
-    const existing = execSync(`tmux list-windows -t ${sessionName} -F "#{window_name}"`).toString().trim().split('\n')
-    let counter = 1
-    while (existing.includes(channelName)) {
-      channelName = `${baseName}-${counter++}`
-    }
-  } catch {}
-
-  // 构建 shell 命令
-  const proxyVars = {
-    ...(process.env.HTTP_PROXY  ? { HTTP_PROXY:  process.env.HTTP_PROXY  } : {}),
-    ...(process.env.HTTPS_PROXY ? { HTTPS_PROXY: process.env.HTTPS_PROXY } : {}),
-    ...(process.env.ALL_PROXY   ? { ALL_PROXY:   process.env.ALL_PROXY   } : {}),
-    ...(process.env.http_proxy  ? { http_proxy:  process.env.http_proxy  } : {}),
-    ...(process.env.https_proxy ? { https_proxy: process.env.https_proxy } : {}),
-    ...(CLAUDE_PROXY ? { ALL_PROXY: CLAUDE_PROXY, HTTPS_PROXY: CLAUDE_PROXY, HTTP_PROXY: CLAUDE_PROXY, NEXUS_PROXY: CLAUDE_PROXY } : {}),
-  }
-  const proxyExports = Object.entries(proxyVars).map(([k, v]) => `export ${k}='${v}'`).join('; ')
-  const proxyPrefix = proxyExports ? `${proxyExports}; ` : ''
-
-  let shellCmd
-  if (shell_type === 'bash') {
-    shellCmd = `${proxyPrefix}exec zsh -i`
-  } else {
-    if (profile) {
-      const runScript = join(__dirname, 'nexus-run-claude.sh')
-      shellCmd = `${proxyPrefix}bash "${runScript}" ${profile} ${cwd}`
-    } else {
-      shellCmd = `${proxyPrefix}claude --dangerously-skip-permissions; exec zsh -i`
-    }
-  }
-
-  // 确保 session 存在
-  try {
-    execSync(`tmux has-session -t ${sessionName} 2>/dev/null || tmux new-session -d -s ${sessionName} -n shell "zsh"`)
-  } catch {}
-
-  // 创建新 window
-  const cmd = `tmux new-window -t ${sessionName} -c "${cwd}" -n "${channelName}" "${shellCmd}"`
-  exec(cmd, (err) => {
-    if (err) return res.status(500).json({ error: err.message })
-    res.json({ name: channelName, cwd, shell_type, profile: profile || null, project: sessionName })
-  })
-})
-
-// POST /api/projects/:name/activate — 切换到指定 Project（设置为目标 session）
-app.post('/api/projects/:name/activate', authMiddleware, (req, res) => {
-  const sessionName = req.params.name
-  // 验证 session 存在
-  try {
-    execSync(`tmux has-session -t ${sessionName}`)
-  } catch {
-    return res.status(404).json({ error: 'project not found' })
-  }
-  // 读取该 session 最后激活的 channel
-  let lastChannel = null
-  try {
-    const envOutput = execSync(`tmux show-environment -t ${sessionName} NEXUS_LAST_CHANNEL 2>/dev/null`).toString().trim()
-    const match = envOutput.match(/^NEXUS_LAST_CHANNEL=(\d+)$/)
-    if (match) lastChannel = parseInt(match[1], 10)
-  } catch {}
-  // 验证 channel 是否存在，不存在则返回 null（前端会用第一个）
-  if (lastChannel !== null) {
-    try {
-      const windows = execSync(`tmux list-windows -t ${sessionName} -F "#I"`).toString().trim().split('\n')
-      if (!windows.includes(String(lastChannel))) {
-        lastChannel = null
-      }
-    } catch {
-      lastChannel = null
-    }
-  }
-  // 返回 session 信息，前端据此切换 WebSocket 连接
-  res.json({ active: true, project: sessionName, lastChannel })
-})
-
-// POST /api/projects/:name/rename — 重命名 Project（重命名 tmux session）
-app.post('/api/projects/:name/rename', authMiddleware, (req, res) => {
-  const oldName = req.params.name
-  const { name: newName } = req.body || {}
-  if (!newName || !newName.trim()) {
-    return res.status(400).json({ error: 'new name required' })
-  }
-  const sanitizedNewName = newName.trim().replace(/[^a-zA-Z0-9_\-]/g, '')
-  if (!sanitizedNewName) {
-    return res.status(400).json({ error: 'invalid name format' })
-  }
-  // 验证旧 session 存在
-  try {
-    execSync(`tmux has-session -t ${oldName}`)
-  } catch {
-    return res.status(404).json({ error: 'project not found' })
-  }
-  // 检查新名称是否已存在
-  try {
-    execSync(`tmux has-session -t ${sanitizedNewName}`)
-    return res.status(409).json({ error: 'project name already exists' })
-  } catch {
-    // 不存在，可以重命名
-  }
-  // 执行重命名
-  exec(`tmux rename-session -t ${oldName} ${sanitizedNewName}`, (err) => {
-    if (err) return res.status(500).json({ error: err.message })
-    res.json({ ok: true, oldName, newName: sanitizedNewName })
-  })
-})
-
-// DELETE /api/projects/:name — 关闭 Project（kill tmux session）
-app.delete('/api/projects/:name', authMiddleware, (req, res) => {
-  const sessionName = req.params.name
-  // 验证 session 存在
-  try {
-    execSync(`tmux has-session -t ${sessionName}`)
-  } catch {
-    return res.status(404).json({ error: 'project not found' })
-  }
-  // kill session
-  exec(`tmux kill-session -t ${sessionName}`, (err) => {
-    if (err) return res.status(500).json({ error: err.message })
-    res.json({ ok: true })
-  })
-})
-
-// ================================================
-
-// GET /api/sessions — 列出 tmux 会话的所有窗口
-app.get('/api/sessions', authMiddleware, (req, res) => {
-  const session = req.query.session || TMUX_SESSION
-  exec(
-    `tmux list-windows -t ${session} -F "#{window_index}|#{window_name}|#{window_active}"`,
-    (err, stdout) => {
-      if (err) return res.status(500).json({ error: err.message })
-      const windows = stdout.trim().split('\n').filter(Boolean).map(line => {
-        const [index, name, active] = line.split('|')
-        return { index: Number(index), name, active: active?.trim() === '1' }
-      })
-      res.json({ session, windows })
-    }
-  )
-})
-
-// DELETE /api/sessions/:id — 关闭 tmux 窗口
-app.delete('/api/sessions/:id', authMiddleware, (req, res) => {
-  const index = req.params.id
-  const session = req.query.session || TMUX_SESSION
-  // Check window count first; if this is the last window, create a fallback
-  // window before killing so the tmux session is not destroyed.
-  exec(`tmux list-windows -t ${session} -F "#{window_index}" 2>/dev/null | wc -l`, (countErr, countOut) => {
-    const windowCount = parseInt(countOut.trim()) || 0
-    if (windowCount <= 1) {
-      // Last window: create a new shell first to keep the session alive
-      exec(`tmux new-window -t ${session} -n shell "zsh"`, () => {
-        exec(`tmux kill-window -t ${session}:${index}`, (err) => {
-          if (err) return res.status(500).json({ error: err.message })
-          res.json({ ok: true })
-        })
-      })
-    } else {
-      exec(`tmux kill-window -t ${session}:${index}`, (err) => {
-        if (err) return res.status(500).json({ error: err.message })
-        res.json({ ok: true })
-      })
-    }
-  })
-})
-
-// POST /api/sessions/:id/attach — 切换到指定 tmux 窗口
-app.post('/api/sessions/:id/attach', authMiddleware, (req, res) => {
-  const index = req.params.id
-  const session = req.query.session || TMUX_SESSION
-  exec(`tmux select-window -t ${session}:${index}`, (err) => {
-    if (err) return res.status(500).json({ error: err.message })
-    // 记录最后激活的 channel 到环境变量
-    try {
-      execSync(`tmux set-environment -t ${session} NEXUS_LAST_CHANNEL ${index}`)
-    } catch {}
-    res.json({ ok: true })
-  })
-})
-
-// ---- Tasks API (F-13: claude -p 非交互派发) ----
-
-function loadTasks() {
-  try {
-    if (existsSync(TASKS_FILE)) {
-      return JSON.parse(readFileSync(TASKS_FILE, 'utf8'))
-    }
-  } catch {}
-  return []
-}
-
-const MAX_TASKS = 200
-
-function saveTasks(tasks) {
-  // 保留最新的 MAX_TASKS 条，防止文件无限增长
-  const trimmed = tasks.length > MAX_TASKS ? tasks.slice(-MAX_TASKS) : tasks
-  writeFileSync(TASKS_FILE, JSON.stringify(trimmed, null, 2))
-}
-
-function updateTask(id, updates) {
-  const tasks = loadTasks()
-  const idx = tasks.findIndex(t => t.id === id)
-  if (idx !== -1) {
-    Object.assign(tasks[idx], updates)
-    saveTasks(tasks)
-  }
-}
-
-/**
- * F-17: 统一任务执行入口 — spawn claude -p, 管理任务记录, 回调给各渠道
- * @param {string} prompt
- * @param {string} cwd
- * @param {{ sessionName?: string, source?: string, tmuxSession?: string, profile?: string, onChunk?: (chunk:string,isErr:boolean)=>void, onDone?: (result:object)=>void }} opts
- * @returns {string} taskId
- */
+// ── Tasks ──
+function loadTasks() { try { if (existsSync(TASKS_FILE)) return JSON.parse(readFileSync(TASKS_FILE, 'utf8')); } catch {} return []; }
+const MAX_TASKS = 200;
+function saveTasks(tasks) { const t = tasks.length > MAX_TASKS ? tasks.slice(-MAX_TASKS) : tasks; const tmp = TASKS_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify(t, null, 2)); renameSync(tmp, TASKS_FILE); }
+function updateTask(id, u) { const t = loadTasks(); const i = t.findIndex(x => x.id === id); if (i !== -1) Object.assign(t[i], u); saveTasks(t); }
 function runTask(prompt, cwd, opts = {}) {
-  const { sessionName, source = 'web', tmuxSession, profile, onChunk, onDone } = opts
-  const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-  const createdAt = new Date().toISOString()
-
-  const taskRecord = {
-    id: taskId,
-    session_name: sessionName || '',
-    prompt: prompt.slice(0, 1000),
-    status: 'running',
-    output: '',
-    error: '',
-    createdAt,
-    source,
-    ...(tmuxSession && tmuxSession !== TMUX_SESSION ? { tmux_session: tmuxSession } : {}),
-  }
-  const allTasks = loadTasks()
-  allTasks.push(taskRecord)
-  saveTasks(allTasks)
-
-  const proxyEnv = CLAUDE_PROXY ? { ALL_PROXY: CLAUDE_PROXY, HTTPS_PROXY: CLAUDE_PROXY, HTTP_PROXY: CLAUDE_PROXY } : {}
-  const claudeArgs = ['-p', prompt, '--dangerously-skip-permissions']
-  if (profile) claudeArgs.push('--profile', profile)
-  const child = spawn('claude', claudeArgs, {
-    cwd,
-    env: { ...process.env, ...proxyEnv },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-
-  let output = ''
-  let errorOutput = ''
-
-  child.stdout.on('data', (data) => {
-    const chunk = data.toString()
-    output += chunk
-    onChunk?.(chunk, false)
-  })
-  child.stderr.on('data', (data) => {
-    const chunk = data.toString()
-    errorOutput += chunk
-    onChunk?.(chunk, true)
-  })
-
-  child.on('close', (code) => {
-    const status = code === 0 ? 'success' : 'error'
-    updateTask(taskId, {
-      status,
-      output: output.slice(-10000),
-      error: errorOutput.slice(-1000),
-      completedAt: new Date().toISOString(),
-      exitCode: code,
-    })
-    onDone?.({ taskId, status, output, errorOutput, exitCode: code })
-  })
-
-  return { taskId, kill: () => { if (!child.killed) child.kill() } }
+  const { sessionName, source = 'web', tmuxSession, profile, onChunk, onDone } = opts;
+  const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2,8)}`; const createdAt = new Date().toISOString();
+  const rec = { id: taskId, session_name: sessionName || '', prompt: prompt.slice(0,1000), status: 'running', output: '', error: '', createdAt, source, ...(tmuxSession && tmuxSession !== TMUX_SESSION ? { tmux_session: tmuxSession } : {}) };
+  saveTasks([...loadTasks(), rec]);
+  const pe = CLAUDE_PROXY ? { ALL_PROXY: CLAUDE_PROXY, HTTPS_PROXY: CLAUDE_PROXY, HTTP_PROXY: CLAUDE_PROXY } : {};
+  const args = ['-p', prompt, '--dangerously-skip-permissions']; if (profile) args.push('--profile', profile);
+  const child = spawn('claude', args, { cwd, env: { ...process.env, ...pe }, stdio: ['ignore','pipe','pipe'] });
+  let output = '', errorOutput = '';
+  child.stdout.on('data', d => { const c = d.toString(); output += c; onChunk?.(c, false); });
+  child.stderr.on('data', d => { const c = d.toString(); errorOutput += c; onChunk?.(c, true); });
+  child.on('close', code => { const st = code === 0 ? 'success' : 'error'; updateTask(taskId, { status: st, output: output.slice(-10000), error: errorOutput.slice(-1000), completedAt: new Date().toISOString(), exitCode: code }); onDone?.({ taskId, status: st, output, errorOutput, exitCode: code }); });
+  return { taskId, kill: () => { if (!child.killed) child.kill(); } };
 }
-
-// GET /api/tasks — 获取任务历史
-app.get('/api/tasks', authMiddleware, (req, res) => {
-  const tasks = loadTasks()
-  res.json(tasks.slice(-50).reverse()) // 最近50条，倒序
-})
-
-// DELETE /api/tasks/:id — 删除单条任务记录
-app.delete('/api/tasks/:id', authMiddleware, (req, res) => {
-  const tasks = loadTasks()
-  const filtered = tasks.filter(t => t.id !== req.params.id)
-  saveTasks(filtered)
-  res.json({ ok: true })
-})
-
-// POST /api/tasks — 创建新任务，SSE 流式返回
-app.post('/api/tasks', authMiddleware, (req, res) => {
-  const { session_name, prompt, profile, tmux_session } = req.body || {}
-  if (!prompt) return res.status(400).json({ error: 'prompt required' })
-
-  // 找到 session 对应的 cwd
-  let cwd = WORKSPACE_ROOT
-  const targetSession = tmux_session || TMUX_SESSION
-  try {
-    const windows = execSync(`tmux list-windows -t ${targetSession} -F "#I:#W:#{pane_current_path}"`).toString().trim().split('\n')
-    for (const line of windows) {
-      const parts = line.split(':')
-      const name = parts[1]
-      const path = parts.slice(2).join(':')
-      if (name === session_name && path) { cwd = path; break }
-    }
-  } catch {}
-
-  // 设置 SSE headers
-  res.setHeader('Content-Type', 'text/event-stream')
-  res.setHeader('Cache-Control', 'no-cache')
-  res.setHeader('Connection', 'keep-alive')
-
-  const createdAt = new Date().toISOString()
-  const { taskId, kill } = runTask(prompt, cwd, {
-    sessionName: session_name,
-    source: 'web',
-    tmuxSession: targetSession,
-    profile,
-    onChunk: (chunk, isErr) => {
-      const ev = isErr ? 'error' : 'output'
-      res.write(`event: ${ev}\ndata: ${JSON.stringify({ chunk })}\n\n`)
-    },
-    onDone: ({ taskId: tid, status, exitCode }) => {
-      res.write(`event: done\ndata: ${JSON.stringify({ taskId: tid, status, exitCode })}\n\n`)
-      res.end()
-    },
-  })
-
-  res.write(`event: start\ndata: ${JSON.stringify({ taskId, session_name, prompt, createdAt })}\n\n`)
-  req.on('close', kill)
-})
-
-
-// ---- Telegram Bot Webhook (F-16) ----
-
-function telegramRequest(method, payload) {
-  if (!TELEGRAM_BOT_TOKEN) return Promise.resolve(null)
-  return new Promise((resolve) => {
-    const body = JSON.stringify(payload)
-    const options = {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-    }
-    const req = https.request(
-      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`,
-      options,
-      (res) => {
-        let data = ''
-        res.on('data', d => data += d)
-        res.on('end', () => {
-          try { resolve(JSON.parse(data)) } catch { resolve(null) }
-        })
-      }
-    )
-    req.on('error', (e) => { console.error(`Telegram ${method} error:`, e.message); resolve(null) })
-    req.write(body)
-    req.end()
-  })
-}
-
-// Returns the sent message_id (or null)
-async function telegramSend(chatId, text) {
-  const result = await telegramRequest('sendMessage', { chat_id: chatId, text, parse_mode: 'Markdown' })
-  return result?.result?.message_id ?? null
-}
-
-// Edit an existing message in-place (silently ignores errors)
-function telegramEdit(chatId, messageId, text) {
-  if (!messageId) return
-  telegramRequest('editMessageText', { chat_id: chatId, message_id: messageId, text, parse_mode: 'Markdown' })
-}
-
-// 下载 Telegram 文件到指定目录
-function downloadTelegramFile(fileId, destDir, filename) {
-  return new Promise((resolve, reject) => {
-    // 1. 获取 file_path
-    const infoUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`
-    https.get(infoUrl, (res) => {
-      let data = ''
-      res.on('data', d => data += d)
-      res.on('end', () => {
-        try {
-          const info = JSON.parse(data)
-          if (!info.ok) return reject(new Error('getFile failed: ' + info.description))
-          const filePath = info.result.file_path
-          const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${filePath}`
-
-          // 2. 下载文件
-          https.get(fileUrl, (fres) => {
-            const chunks = []
-            fres.on('data', c => chunks.push(c))
-            fres.on('end', () => {
-              const buf = Buffer.concat(chunks)
-              const destPath = join(destDir, filename)
-              writeFileSync(destPath, buf)
-              resolve({ path: destPath, size: buf.length })
-            })
-            fres.on('error', reject)
-          }).on('error', reject)
-        } catch (e) { reject(e) }
-      })
-    }).on('error', reject)
-  })
-}
-
-// POST /api/webhooks/telegram — Telegram Bot webhook
-app.post('/api/webhooks/telegram', (req, res) => {
-  // 验证 secret（如果配置了）
-  if (TELEGRAM_WEBHOOK_SECRET) {
-    const secret = req.headers['x-telegram-bot-api-secret-token']
-    if (secret !== TELEGRAM_WEBHOOK_SECRET) {
-      return res.status(403).json({ error: 'forbidden' })
-    }
-  }
-
-  if (!TELEGRAM_BOT_TOKEN) return res.status(503).json({ error: 'Telegram not configured' })
-
-  const update = req.body
-  res.json({ ok: true }) // 立即返回，避免 Telegram 重试
-
-  const message = update.message || update.edited_message
-  if (!message) return
-
-  const chatId = message.chat.id
-
-  // /start 欢迎消息
-  if (message.text?.trim() === '/start') {
-    telegramSend(chatId, '👋 *Nexus Bot* 已就绪\n\n发送任意文字，我会用 `claude -p` 在你的服务器上执行并回复结果。\n\n发送图片或文件，我会保存到当前 session 目录。\n\n`/sessions` — 查看 tmux 窗口列表\n`/switch <编号>` — 切换目标窗口')
-    return
-  }
-
-  // /sessions 列出当前窗口
-  if (message.text?.trim() === '/sessions') {
-    exec(`tmux list-windows -t ${TMUX_SESSION} -F "#{window_index}|#{window_name}|#{window_active}"`, (err, stdout) => {
-      if (err) {
-        telegramSend(chatId, '❌ 无法获取会话列表: ' + err.message)
-        return
-      }
-      const lines = stdout.trim().split('\n').filter(Boolean).map(line => {
-        const [idx, name, active] = line.split('|')
-        return `${active?.trim() === '1' ? '▶' : '  '} \`${idx}: ${name}\``
-      })
-      telegramSend(chatId, '*当前 tmux 窗口:*\n' + lines.join('\n') + '\n\n用 `/switch <编号>` 切换')
-    })
-    return
-  }
-
-  // /switch <index|name> — 切换 active tmux 窗口
-  if (message.text?.trim().startsWith('/switch ')) {
-    const raw = message.text.trim().slice('/switch '.length).trim()
-    const target = raw.replace(/[^a-zA-Z0-9_\-]/g, '') // 只允许安全字符
-    if (!target) {
-      telegramSend(chatId, '❌ 无效的窗口名称，只允许字母/数字/下划线/连字符')
-      return
-    }
-    exec(`tmux select-window -t ${TMUX_SESSION}:${target}`, (err) => {
-      if (err) {
-        telegramSend(chatId, `❌ 无法切换到窗口 \`${target}\`: ${err.message}`)
-      } else {
-        telegramSend(chatId, `✅ 已切换到窗口 \`${target}\`\n\n后续任务将在此窗口执行。`)
-      }
-    })
-    return
-  }
-
-  // 执行 claude -p，Telegram 渠道：增量进度推送
-  async function runClaudePrompt(prompt, cwd, sessionName) {
-    const msgId = await telegramSend(chatId, `⏳ *执行中*（session: \`${sessionName || 'default'}\`）\n\n_等待输出..._`)
-
-    let currentOutput = ''
-    let currentError = ''
-    let currentTaskId = null
-
-    const progressInterval = setInterval(() => {
-      const preview = (currentOutput || currentError).trim()
-      if (preview) {
-        if (msgId) {
-          const truncated = preview.length > 3000 ? '…' + preview.slice(-3000) : preview
-          telegramEdit(chatId, msgId, `⏳ *执行中*（session: \`${sessionName || 'default'}\`）\n\`\`\`\n${truncated}\n\`\`\``)
-        }
-        // 更新任务记录，让 Web TaskPanel 可见中间输出
-        if (currentTaskId) updateTask(currentTaskId, { output: currentOutput.slice(-10000), error: currentError.slice(-1000) })
-      }
-    }, 5000)
-
-    const { taskId } = runTask(prompt, cwd, {
-      sessionName: sessionName || 'telegram',
-      source: 'telegram',
-      onChunk: (chunk, isErr) => {
-        if (isErr) currentError += chunk; else currentOutput += chunk
-      },
-      onDone: ({ exitCode }) => {
-        clearInterval(progressInterval)
-        const result = currentOutput.trim() || currentError.trim() || '(无输出)'
-        const truncated = result.length > 3800 ? result.slice(0, 3800) + '\n\n…(输出已截断)' : result
-        const status = exitCode === 0 ? '✅' : '❌'
-        if (msgId) {
-          telegramEdit(chatId, msgId, `${status} *执行完成*（session: \`${sessionName || 'default'}\`）\n\`\`\`\n${truncated}\n\`\`\``)
-        } else {
-          telegramSend(chatId, `${status} *执行完成*\n\`\`\`\n${truncated}\n\`\`\``)
-        }
-      },
-    })
-    currentTaskId = taskId
-  }
-
-  // 处理文件/图片上传
-  if (message.photo || message.document) {
-    (async () => {
-      try {
-        // 确定目标目录
-        let cwd = WORKSPACE_ROOT
-        try {
-          const activeLines = execSync(`tmux list-windows -t ${TMUX_SESSION} -F "#I:#W:#{pane_current_path}:#{window_active}"`).toString().trim().split('\n')
-          for (const line of activeLines) {
-            const parts = line.split(':')
-            if (parts[parts.length - 1]?.trim() === '1') {
-              cwd = parts.slice(2, parts.length - 1).join(':')
-              break
-            }
-          }
-        } catch {}
-
-        let fileId, filename
-        if (message.photo) {
-          const photo = message.photo[message.photo.length - 1]
-          fileId = photo.file_id
-          filename = `tg_photo_${Date.now()}.jpg`
-        } else {
-          fileId = message.document.file_id
-          filename = message.document.file_name || `tg_file_${Date.now()}`
-        }
-
-        telegramSend(chatId, `⬇️ 正在下载文件到 \`${cwd}\`...`)
-        const result = await downloadTelegramFile(fileId, cwd, filename)
-        telegramSend(chatId, `✅ 文件已保存\n\`\`\`\n${result.path}\n\`\`\`\n大小: ${(result.size / 1024).toFixed(1)} KB`)
-
-        // 如果有 caption，把 caption 作为 prompt 执行
-        if (message.caption?.trim()) {
-          const caption = message.caption.trim()
-          runClaudePrompt(caption, cwd, 'telegram').catch(e => console.error('runClaudePrompt error:', e))
-        }
-      } catch (e) {
-        telegramSend(chatId, '❌ 文件处理失败: ' + (e.message || String(e)))
-      }
-    })()
-    return
-  }
-
-  // 普通 prompt
-  const text = message.text?.trim()
-  if (!text) return
-  let cwd = WORKSPACE_ROOT
-  let sessionName = TELEGRAM_DEFAULT_SESSION
-
-  try {
-    const windows = execSync(`tmux list-windows -t ${TMUX_SESSION} -F "#I:#W:#{pane_current_path}"`).toString().trim().split('\n')
-    // 优先用默认 session，否则用 active window
-    for (const line of windows) {
-      const parts = line.split(':')
-      const idx = parts[0]
-      const name = parts[1]
-      const path = parts.slice(2).join(':')
-      if (TELEGRAM_DEFAULT_SESSION && name === TELEGRAM_DEFAULT_SESSION) {
-        cwd = path
-        sessionName = name
-        break
-      }
-    }
-    // 如果没找到默认 session，用 active window
-    if (!sessionName) {
-      const activeLines = execSync(`tmux list-windows -t ${TMUX_SESSION} -F "#I:#W:#{pane_current_path}:#{window_active}"`).toString().trim().split('\n')
-      for (const line of activeLines) {
-        const parts = line.split(':')
-        const active = parts[parts.length - 1]
-        if (active?.trim() === '1') {
-          sessionName = parts[1]
-          cwd = parts.slice(2, parts.length - 1).join(':')
-          break
-        }
-      }
-    }
-  } catch { /* ignore */ }
-
-  runClaudePrompt(text, cwd, sessionName).catch(e => console.error('runClaudePrompt error:', e))
-})
-
-// GET /api/telegram/setup — 一键配置 Telegram webhook URL
-app.get('/api/telegram/setup', authMiddleware, (req, res) => {
-  if (!TELEGRAM_BOT_TOKEN) return res.status(503).json({ error: 'TELEGRAM_BOT_TOKEN not set' })
-  const webhookUrl = `${req.protocol}://${req.get('host')}/api/webhooks/telegram`
-  const secretParam = TELEGRAM_WEBHOOK_SECRET ? `&secret_token=${TELEGRAM_WEBHOOK_SECRET}` : ''
-  const setupUrl = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${encodeURIComponent(webhookUrl)}${secretParam}`
-
-  // 调用 Telegram API 设置 webhook
-  https.get(setupUrl, (r) => {
-    let data = ''
-    r.on('data', d => data += d)
-    r.on('end', () => {
-      try {
-        res.json({ webhookUrl, telegramResponse: JSON.parse(data) })
-      } catch {
-        res.json({ webhookUrl, raw: data })
-      }
-    })
-  }).on('error', (e) => res.status(500).json({ error: e.message }))
-})
-
-// SPA fallback — 所有非 API 路由返回 index.html
-app.get('*', (req, res) => {
-  const indexPath = join(__dirname, 'frontend', 'dist', 'index.html');
-  res.sendFile(indexPath, (err) => {
-    if (err) res.status(404).send('Not found — run: cd frontend && npm run build');
+app.get('/api/tasks', apiLimiter, authMiddleware, (req, res) => { const t = loadTasks(); res.json(t.slice(-50).reverse()); });
+app.delete('/api/tasks/:id', apiLimiter, authMiddleware, (req, res) => { saveTasks(loadTasks().filter(t => t.id !== req.params.id)); res.json({ ok: true }); });
+app.post('/api/tasks', apiLimiter, authMiddleware, (req, res) => {
+  const { session_name, prompt, profile, tmux_session } = req.body || {}; if (!prompt) return res.status(400).json({ error: 'prompt required' });
+  let cwd = WORKSPACE_ROOT; const ts = tmux_session || TMUX_SESSION;
+  try { const w = execFileSync('tmux', ['list-windows', '-t', ts, '-F', '#I:#W:#{pane_current_path}'], { encoding: 'utf8' }).trim().split('\n'); for (const line of w) { const p = line.split(':'); if (p[1] === session_name && p.slice(2).join(':')) { cwd = p.slice(2).join(':'); break; } } } catch {}
+  res.setHeader('Content-Type', 'text/event-stream'); res.setHeader('Cache-Control', 'no-cache'); res.setHeader('Connection', 'keep-alive');
+  const { taskId, kill } = runTask(prompt, cwd, { sessionName: session_name, source: 'web', tmuxSession: ts, profile,
+    onChunk: (c, e) => res.write(`event: ${e?'error':'output'}\ndata: ${JSON.stringify({chunk:c})}\n\n`),
+    onDone: ({ taskId: tid, status, exitCode }) => { res.write(`event: done\ndata: ${JSON.stringify({taskId:tid,status,exitCode})}\n\n`); res.end(); },
   });
+  res.write(`event: start\ndata: ${JSON.stringify({taskId,session_name,prompt,createdAt:new Date().toISOString()})}\n\n`); req.on('close', kill);
 });
 
-// PTY 多实例管理（F-11/F-18：每个 session:window 独立 PTY）
-const ptyMap = new Map(); // "session:windowIndex" -> { pty, clients: Set<ws>, lastOutput, lastActivity }
-
-function ptyKey(session, windowIndex) {
-  return `${session}:${windowIndex}`;
+// ── Telegram ──
+function telegramReq(method, payload) {
+  if (!TELEGRAM_BOT_TOKEN) return Promise.resolve(null);
+  return new Promise(resolve => {
+    const body = JSON.stringify(payload); const opt = { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } };
+    const rq = https.request(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`, opt, res => { let d = ''; res.on('data', c => d += c); res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } }); });
+    rq.on('error', e => { console.error(`Telegram ${method}:`, e.message); resolve(null); }); rq.write(body); rq.end();
+  });
 }
-
-function ensureWindowPty(session, windowIndex) {
-  const key = ptyKey(session, windowIndex);
-  if (ptyMap.has(key)) return { key, entry: ptyMap.get(key) };
-
-  // 确保 tmux session 存在
-  try {
-    execSync(`tmux has-session -t ${session} 2>/dev/null || tmux new-session -d -s ${session} -n shell "zsh"`);
-  } catch {}
-
-  // 检查窗口是否存在，不存在则 fallback 到第一个可用窗口
-  let targetWindow = windowIndex;
-  try {
-    const windows = execSync(`tmux list-windows -t ${session} -F "#I"`).toString().trim().split('\n');
-    if (!windows.includes(String(windowIndex))) {
-      if (windows.length > 0) {
-        targetWindow = parseInt(windows[0], 10);
-      } else {
-        execSync(`tmux new-window -t ${session} -n shell "zsh"`);
-        targetWindow = 0;
-      }
-    }
-  } catch {
-    targetWindow = 0;
+async function telegramSend(chatId, text) { const r = await telegramReq('sendMessage', { chat_id: chatId, text, parse_mode: 'Markdown' }); return r?.result?.message_id ?? null; }
+function telegramEdit(chatId, msgId, text) { if (msgId) telegramReq('editMessageText', { chat_id: chatId, message_id: msgId, text, parse_mode: 'Markdown' }); }
+function downloadTGFile(fileId, destDir, filename) {
+  return new Promise((resolve, reject) => {
+    https.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`, res => {
+      let d = ''; res.on('data', c => d += c); res.on('end', () => {
+        try { const info = JSON.parse(d); if (!info.ok) return reject(new Error(info.description)); const fileUrl = `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${info.result.file_path}`;
+          https.get(fileUrl, fres => { const chunks = []; fres.on('data', c => chunks.push(c)); fres.on('end', () => { writeFileSync(join(destDir, filename), Buffer.concat(chunks)); resolve({ path: join(destDir, filename), size: chunks.reduce((a,c) => a+c.length, 0) }); }); fres.on('error', reject); }).on('error', reject);
+        } catch (e) { reject(e); }
+      });
+    }).on('error', reject);
+  });
+}
+app.post('/api/webhooks/telegram', (req, res) => {
+  if (TELEGRAM_WEBHOOK_SECRET) { const s = req.headers['x-telegram-bot-api-secret-token']; if (s !== TELEGRAM_WEBHOOK_SECRET) return res.status(403).json({ error: 'forbidden' }); }
+  if (!TELEGRAM_BOT_TOKEN) return res.status(503).json({ error: 'Telegram not configured' });
+  const update = req.body; res.json({ ok: true }); const message = update.message || update.edited_message; if (!message) return; const chatId = message.chat.id;
+  if (message.text?.trim() === '/start') { telegramSend(chatId, '👋 *Nexus Bot* 已就绪\n\n发送文字用 `claude -p` 执行。\n\n`/sessions` — 窗口列表\n`/switch <编号>` — 切换窗口'); return; }
+  if (message.text?.trim() === '/sessions') { execFile('tmux', ['list-windows', '-t', TMUX_SESSION, '-F', '#{window_index}|#{window_name}|#{window_active}'], (err, stdout) => {
+    if (err) return telegramSend(chatId, '❌ 无法获取会话列表: ' + err.message);
+    const lines = stdout.trim().split('\n').filter(Boolean).map(line => { const [i,n,a] = line.split('|'); return `${a?.trim()==='1'?'▶':'  '} \`${i}: ${n}\``; });
+    telegramSend(chatId, '*当前 tmux 窗口:*\n' + lines.join('\n')); }); return;
   }
+  if (message.text?.trim().startsWith('/switch ')) { const t = message.text.trim().slice(8).replace(/[^a-zA-Z0-9_\-]/g, '');
+    if (!t) return telegramSend(chatId, '❌ 无效名称');
+    execFile('tmux', ['select-window', '-t', `${TMUX_SESSION}:${t}`], err => telegramSend(chatId, err ? `❌ ${err.message}` : `✅ 已切换到 \`${t}\``)); return;
+  }
+  async function runClaude(prompt, c, sn) {
+    const msgId = await telegramSend(chatId, `⏳ *执行中*（\`${sn||'default'}\`）\n\n_等待输出..._`);
+    let cur='', curErr='', curId=null; const iv=setInterval(()=>{if(cur||curErr&&msgId)telegramEdit(chatId,msgId,`⏳ *执行中*\n\`\`\`\n${((cur||curErr).length>3000?'…'+(cur||curErr).slice(-3000):(cur||curErr))}\n\`\`\``);if(curId)updateTask(curId,{output:cur.slice(-10000),error:curErr.slice(-1000)});},5000);
+    const {taskId}=runTask(prompt,c,{sessionName:sn||'telegram',source:'telegram',onChunk:(c,e)=>{if(e)curErr+=c;else cur+=c;},onDone:()=>{clearInterval(iv);const r=(cur.trim()||curErr.trim()||'(无输出)');const tr=r.length>3800?r.slice(0,3800)+'\n\n…(截断)':r;if(msgId)telegramEdit(chatId,msgId,`✅ *完成*\n\`\`\`\n${tr}\n\`\`\``);else telegramSend(chatId,`✅ *完成*\n\`\`\`\n${tr}\n\`\`\``);}}); curId=taskId;
+  }
+  if (message.photo || message.document) { (async ()=>{ try { let c=WORKSPACE_ROOT; try{const w=execFileSync('tmux',['list-windows','-t',TMUX_SESSION,'-F','#I:#W:#{pane_current_path}:#{window_active}'],{encoding:'utf8'}).trim().split('\n');for(const l of w){const p=l.split(':');if(p[p.length-1]?.trim()==='1'){c=p.slice(2,p.length-1).join(':');break;}}}catch{}let fid,fn;if(message.photo){fid=message.photo[message.photo.length-1].file_id;fn=`tg_photo_${Date.now()}.jpg`;}else{fid=message.document.file_id;fn=message.document.file_name||`tg_file_${Date.now()}`;}telegramSend(chatId,`⬇️ 下载到 \`${c}\`...`);const r=await downloadTGFile(fid,c,fn);telegramSend(chatId,`✅ 已保存\`\`\`\n${r.path}\n\`\`\`\n大小: ${(r.size/1024).toFixed(1)} KB`);if(message.caption?.trim())runClaude(message.caption.trim(),c,'telegram').catch(()=>{});}catch(e){telegramSend(chatId,'❌ 失败: '+e.message);} })(); return; }
+  const text = message.text?.trim(); if (!text) return; let c=WORKSPACE_ROOT, sn=TELEGRAM_DEFAULT_SESSION;
+  try{const w=execFileSync('tmux',['list-windows','-t',TMUX_SESSION,'-F','#I:#W:#{pane_current_path}'],{encoding:'utf8'}).trim().split('\n');for(const l of w){const p=l.split(':');if(TELEGRAM_DEFAULT_SESSION&&p[1]===TELEGRAM_DEFAULT_SESSION){c=p.slice(2).join(':');sn=p[1];break;}}if(!sn){const a=execFileSync('tmux',['list-windows','-t',TMUX_SESSION,'-F','#I:#W:#{pane_current_path}:#{window_active}'],{encoding:'utf8'}).trim().split('\n');for(const l of a){const p=l.split(':');if(p[p.length-1]?.trim()==='1'){sn=p[1];c=p.slice(2,p.length-1).join(':');break;}}}}catch{}
+  runClaude(text,c,sn).catch(()=>{});
+});
+app.get('/api/telegram/setup', apiLimiter, authMiddleware, (req, res) => {
+  if (!TELEGRAM_BOT_TOKEN) return res.status(503).json({ error: 'TELEGRAM_BOT_TOKEN not set' });
+  const wu = `${req.protocol}://${req.get('host')}/api/webhooks/telegram`; const sp = TELEGRAM_WEBHOOK_SECRET ? `&secret_token=${TELEGRAM_WEBHOOK_SECRET}` : '';
+  https.get(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${encodeURIComponent(wu)}${sp}`, r => { let d=''; r.on('data',c=>d+=c); r.on('end',()=>{try{res.json({webhookUrl:wu,telegramResponse:JSON.parse(d)});}catch{res.json({webhookUrl:wu,raw:d});}}); }).on('error',e=>res.status(500).json({error:e.message}));
+});
 
-  const actualKey = ptyKey(session, targetWindow);
-  if (ptyMap.has(actualKey)) return { key: actualKey, entry: ptyMap.get(actualKey) }; // reuse if fallback exists
+// ── Health check ──
+app.get('/health', (req, res) => { let t = false; try { if (tmuxHasSession(TMUX_SESSION)) t = true; } catch {} res.json({ status: 'ok', uptime: process.uptime(), ptyCount: ptyMap.size, tmux: t, version: '4.4.2' }); });
 
-  const ptyProc = pty.spawn('tmux', ['attach-session', '-t', `${session}:${targetWindow}`], {
-    name: 'xterm-256color',
-    cols: 120,
-    rows: 30,
-    env: { ...process.env, LANG: 'C.UTF-8', TERM: 'xterm-256color' },
-  });
+// ── SPA fallback ──
+app.get('*', (req, res) => { const idx = join(__dirname, 'frontend', 'dist', 'index.html'); res.sendFile(idx, err => { if (err) res.status(404).send('Not found — run: cd frontend && npm run build'); }); });
 
-  const entry = { pty: ptyProc, clients: new Set(), clientSizes: new Map(), lastOutput: '', lastActivity: Date.now() };
-  ptyMap.set(actualKey, entry);
-
-  ptyProc.onData((data) => {
-    const ent = ptyMap.get(actualKey);
-    if (!ent) return;
-    ent.lastOutput = (ent.lastOutput + data).slice(-10000);
-    ent.lastActivity = Date.now();
-    for (const ws of ent.clients) {
-      if (ws.readyState === 1) ws.send(data);
-    }
-  });
-
-  ptyProc.onExit(({ exitCode }) => {
-    console.log(`PTY ${actualKey} exited with code ${exitCode}`);
-    ptyMap.delete(actualKey);
-    // 如果 window 还在，重新创建
-    try {
-      const list = execSync(`tmux list-windows -t ${session} -F "#I"`).toString().trim().split('\n');
-      if (list.includes(String(targetWindow))) {
-        setTimeout(() => ensureWindowPty(session, targetWindow), 100);
-      }
-    } catch {}
-  });
-
-  return { key: actualKey, entry };
+// ── PTY management ──
+function ensureWindowPty(session, windowIndex, defaultSession) {
+  const key = ptyKey(session, windowIndex); if (ptyMap.has(key)) return { key, entry: ptyMap.get(key) };
+  if (!tmuxHasSession(session)) try { execFileSync('tmux', ['new-session', '-d', '-s', session, '-n', 'shell', 'zsh'], { stdio: 'ignore' }); } catch {}
+  let tw = windowIndex; try { const w = execFileSync('tmux', ['list-windows', '-t', session, '-F', '#I'], { encoding: 'utf8' }).trim().split('\n'); if (!w.includes(String(windowIndex))) { tw = w.length > 0 ? parseInt(w[0], 10) : 0; if (w.length === 0) try { execFileSync('tmux', ['new-window', '-t', session, '-n', 'shell', 'zsh'], { stdio: 'ignore' }); } catch {} } } catch { tw = 0; }
+  const ak = ptyKey(session, tw); if (ptyMap.has(ak)) return { key: ak, entry: ptyMap.get(ak) };
+  const ppy = pty.spawn('tmux', ['attach-session', '-t', `${session}:${tw}`], { name: 'xterm-256color', cols: 120, rows: 30, env: { ...process.env, LANG: 'C.UTF-8', TERM: 'xterm-256color' } });
+  const entry = { pty: ppy, clients: new Set(), clientSizes: new Map(), lastOutput: '', lastActivity: Date.now() };
+  ptyMap.set(ak, entry);
+  ppy.onData(data => { const e = ptyMap.get(ak); if (!e) return; e.lastOutput = (e.lastOutput + data).slice(-10000); e.lastActivity = Date.now(); for (const ws of e.clients) if (ws.readyState === 1) ws.send(data); });
+  ppy.onExit(({ exitCode }) => { console.log(`PTY ${ak} exited ${exitCode}`); ptyMap.delete(ak); try { const l = execFileSync('tmux', ['list-windows', '-t', session, '-F', '#I'], { encoding: 'utf8' }).trim().split('\n'); if (l.includes(String(tw))) setTimeout(() => ensureWindowPty(session, tw, defaultSession), 100); } catch {} });
+  return { key: ak, entry };
 }
 
-// WebSocket 服务 — 支持 /ws?token=xxx&window=<index>
-const server = createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws' });
-
+// ── WS server ──
+const server = createServer(app); const wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', (ws, req) => {
-  const url = new URL(req.url, 'http://x');
-  const token = url.searchParams.get('token');
-  const windowParam = url.searchParams.get('window') || '0';
-  const windowIndex = parseInt(windowParam, 10) || 0;
+  const url = new URL(req.url, 'http://x'); const token = url.searchParams.get('token');
+  const windowIndex = parseInt(url.searchParams.get('window') || '0', 10) || 0;
   const session = url.searchParams.get('session') || TMUX_SESSION;
-
-  try {
-    jwt.verify(token, JWT_SECRET);
-  } catch {
-    ws.close(4001, 'unauthorized');
-    return;
-  }
-
-  const { key, entry } = ensureWindowPty(session, windowIndex);
-  entry.clients.add(ws);
-  console.log(`Client connected to ${key} (clients: ${entry.clients.size})`);
-
-  // Send recent output so the screen isn't blank while waiting for the first repaint.
-  if (entry.lastOutput) {
-    ws.send(entry.lastOutput.slice(-2000));
-  }
-
-  ws.on('message', (msg) => {
-    const ent = ptyMap.get(key);
-    if (!ent) return;
-    const str = typeof msg === 'string' ? msg : msg.toString();
-    let isResize = false;
-    try {
-      const data = JSON.parse(str);
-      if (data && data.type === 'resize' && data.cols && data.rows) {
-        isResize = true;
-        const newCols = Number(data.cols);
-        const newRows = Number(data.rows);
-        ent.clientSizes.set(ws, { cols: newCols, rows: newRows });
-        // 直接使用当前客户端的尺寸，而不是所有客户端的最小值
-        // 避免多个客户端/窗口切换时的尺寸混乱
-        ent.pty.resize(Math.max(newCols, 10), Math.max(newRows, 5));
-      }
-    } catch { /* not JSON — fall through to pty.write */ }
-    // Write for all non-resize messages. Previously only the catch branch wrote,
-    // which silently dropped single-digit strings ('1'..'9','0') since
-    // JSON.parse('1') succeeds without throwing.
+  try { jwt.verify(token, JWT_SECRET); } catch { ws.close(4001, 'unauthorized'); return; }
+  const { key, entry } = ensureWindowPty(session, windowIndex); entry.clients.add(ws);
+  console.log(`Client connected to ${key} (${entry.clients.size})`);
+  if (entry.lastOutput) ws.send(entry.lastOutput.slice(-2000));
+  ws.on('message', msg => {
+    const ent = ptyMap.get(key); if (!ent) return; const str = typeof msg === 'string' ? msg : msg.toString(); let isResize = false;
+    try { const data = JSON.parse(str); if (data && data.type === 'resize' && data.cols && data.rows) { isResize = true; ent.clientSizes.set(ws, { cols: Math.max(Number(data.cols),10), rows: Math.max(Number(data.rows),5) }); ent.pty.resize(Math.max(Number(data.cols),10), Math.max(Number(data.rows),5)); } } catch {}
     if (!isResize) ent.pty.write(str);
   });
-
-  ws.on('close', () => {
-    const ent = ptyMap.get(key);
-    if (ent) {
-      ent.clients.delete(ws);
-      ent.clientSizes.delete(ws);
-      console.log(`Client disconnected from ${key} (clients: ${ent.clients.size})`);
-      // Recompute minimum size if other clients remain
-      if (ent.clients.size > 0 && ent.clientSizes.size > 0) {
-        let minCols = Infinity, minRows = Infinity;
-        for (const [, size] of ent.clientSizes) {
-          if (size.cols < minCols) minCols = size.cols;
-          if (size.rows < minRows) minRows = size.rows;
-        }
-        if (minCols !== Infinity) ent.pty.resize(Math.max(minCols, 10), Math.max(minRows, 5));
-      }
-      // 如果 5 分钟后没有客户端，清理 PTY 节省资源
-      setTimeout(() => {
-        const e = ptyMap.get(key);
-        if (e && e.clients.size === 0 && Date.now() - e.lastActivity > 300000) {
-          e.pty.kill();
-          ptyMap.delete(key);
-          console.log(`PTY ${key} cleaned up (idle)`);
-        }
-      }, 300000);
-    }
-  });
-
-  ws.on('error', (err) => {
-    console.error('WebSocket error:', err.message);
-    const ent = ptyMap.get(key);
-    if (ent) { ent.clients.delete(ws); ent.clientSizes.delete(ws); }
-  });
+  ws.on('close', () => { const ent = ptyMap.get(key); if (ent) { ent.clients.delete(ws); ent.clientSizes.delete(ws); console.log(`Client disconnected from ${key} (${ent.clients.size})`);
+    if (ent.clients.size > 0 && ent.clientSizes.size > 0) { let mc=Infinity,mr=Infinity; for (const s of ent.clientSizes.values()){if(s.cols<mc)mc=s.cols;if(s.rows<mr)mr=s.rows;} if(mc!==Infinity)ent.pty.resize(Math.max(mc,10),Math.max(mr,5)); }
+    ent.cleanupTimer = setTimeout(() => { const e = ptyMap.get(key); if (e && e.clients.size === 0 && Date.now() - e.lastActivity > 300000) { e.pty.kill(); ptyMap.delete(key); console.log(`PTY ${key} cleaned up`); } }, 300000);
+  }});
+  ws.on('error', err => { console.error('WS error:', err.message); const ent = ptyMap.get(key); if (ent) { ent.clients.delete(ws); ent.clientSizes.delete(ws); } });
 });
 
-// 启动时清理残留的 running 状态（服务重启导致的孤儿任务）
-try {
-  const staleTasks = loadTasks()
-  let changed = false
-  for (const t of staleTasks) {
-    if (t.status === 'running') {
-      t.status = 'error'
-      t.error = '(服务重启，任务中断)'
-      t.completedAt = new Date().toISOString()
-      changed = true
-    }
-  }
-  if (changed) saveTasks(staleTasks)
-} catch {}
+// ── Startup cleanup & listen ──
+try { const st = loadTasks(); let changed = false; for (const t of st) { if (t.status === 'running') { t.status = 'error'; t.error = '(服务重启，任务中断)'; t.completedAt = new Date().toISOString(); changed = true; } } if (changed) saveTasks(st); } catch {}
+
+// Graceful shutdown
+function shutdown(sig) {
+  console.log(`${sig} — shutting down...`);
+  try { const st=loadTasks(); let c=false; for(const t of st) if(t.status==='running'){t.status='error';t.error='(关机关闭)';t.completedAt=new Date().toISOString();c=true;} if(c)saveTasks(st); } catch {}
+  wss.clients.forEach(ws => { try { ws.close(1001, 'Server shutting down'); } catch {} });
+  for (const [,e] of ptyMap) { try { e.pty.kill(); } catch {} }
+  server.close(() => process.exit(0)); setTimeout(() => process.exit(1), 10000);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 server.listen(Number(PORT), '0.0.0.0', () => {
-  console.log(`Nexus listening on :${PORT}`);
+  console.log(`Nexus v4.4.2 listening on :${PORT}`);
   console.log(`tmux session: ${TMUX_SESSION}`);
   console.log(`workspace: ${WORKSPACE_ROOT}`);
-  // 启动时确保默认 tmux session 存在，窗口名使用 WORKSPACE_ROOT 的目录名
   try {
-    const defaultWindowName = WORKSPACE_ROOT.replace(/^\/+|\/+$/, '').split('/').pop() || '~'
-    execSync(`tmux has-session -t ${TMUX_SESSION} 2>/dev/null || tmux new-session -d -s ${TMUX_SESSION} -n "${defaultWindowName}" -c "${WORKSPACE_ROOT}" "zsh"`);
-    console.log(`tmux session '${TMUX_SESSION}' ready`);
-  } catch (e) { console.warn('tmux session init failed:', e.message); }
+    const dn = WORKSPACE_ROOT.replace(/^\/+|\/+$/g, '').split('/').pop() || '~';
+    if (!tmuxHasSession(TMUX_SESSION)) { execFileSync('tmux', ['new-session', '-d', '-s', TMUX_SESSION, '-n', dn, '-c', WORKSPACE_ROOT, 'zsh'], { stdio: 'ignore' }); console.log(`Created session '${TMUX_SESSION}'`); }
+    else console.log(`Session '${TMUX_SESSION}' ready`);
+  } catch (e) { console.warn('tmux init failed:', e.message); }
 });
