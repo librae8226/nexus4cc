@@ -6,11 +6,15 @@ export default defineConfig({
   build: {
     outDir: '../frontend/dist',
     emptyOutDir: true,
-    rollupOptions: {
+    rolldownOptions: {
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom'],
-          xterm: ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-web-links']
+        manualChunks(id) {
+          if (id.includes('react') || id.includes('react-dom')) {
+            return 'vendor'
+          }
+          if (id.includes('@xterm/xterm') || id.includes('@xterm/addon-fit') || id.includes('@xterm/addon-web-links')) {
+            return 'xterm'
+          }
         }
       }
     }
