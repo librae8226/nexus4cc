@@ -112,7 +112,7 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
   const [error, setError] = useState<string | null>(null)
 
   // Mobile/modal gesture state
-  const clickTimerRef = useRef<number | null>(null)
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingChannelRef = useRef<Channel | null>(null)
   const longPressTimerRef = useRef<number | null>(null)
   const longPressChannelRef = useRef<Channel | null>(null)

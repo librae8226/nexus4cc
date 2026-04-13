@@ -37,6 +37,7 @@
     "shellType": "Shell 类型",
     "shellClaude": "Claude (默认)",
     "shellZsh": "Zsh",
+    "shellOpencode": "Crush (OpenCode)",
     "profileLabel": "配置 Profile (可选)",
     "profileDefault": "默认 (不使用 profile)",
     "profileHelp": "选择 profile 会使用该配置的 API key 和模型设置，数据隔离在项目目录",

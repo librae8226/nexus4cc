@@ -185,8 +185,17 @@ export default function Terminal({ token }: Props) {
 
   // F-18: 多 tmux session 支持
   const [tmuxSessions, setTmuxSessions] = useState<string[]>([])
-  const [activeTmuxSession, setActiveTmuxSession] = useState<string>(() => localStorage.getItem('nexus_session') || '~')
-  const [wsSessionKey, setWsSessionKey] = useState<string>(() => localStorage.getItem('nexus_session') || '~')
+  const [activeTmuxSession, setActiveTmuxSession] = useState<string>(() => {
+    const cached = localStorage.getItem('nexus_session')
+    // 如果缓存的是无效的旧默认值 '~'，忽略它，等待服务端返回
+    if (cached && cached !== '~') return cached
+    return '' // 空字符串表示等待服务端返回
+  })
+  const [wsSessionKey, setWsSessionKey] = useState<string>(() => {
+    const cached = localStorage.getItem('nexus_session')
+    if (cached && cached !== '~') return cached
+    return ''
+  })
   const activeTmuxSessionRef = useRef(activeTmuxSession)
   activeTmuxSessionRef.current = activeTmuxSession
   const sessionManagerRef = useRef<SessionManagerV2Handle>(null)
@@ -226,13 +235,17 @@ export default function Terminal({ token }: Props) {
     fetch('/api/config', { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json())
       .then(d => {
-        if (d.tmuxSession && !localStorage.getItem('nexus_session')) {
-          setActiveTmuxSession(d.tmuxSession)
-          setWsSessionKey(d.tmuxSession)
+        if (d.tmuxSession) {
+          // 如果当前 session 为空或是旧无效值，使用服务端返回的默认 session
+          if (!activeTmuxSession || activeTmuxSession === '~') {
+            setActiveTmuxSession(d.tmuxSession)
+            setWsSessionKey(d.tmuxSession)
+            localStorage.setItem('nexus_session', d.tmuxSession)
+          }
         }
       })
       .catch(() => {})
-  }, [token])
+  }, [token, activeTmuxSession])
 
   // 获取所有 tmux sessions 和 projects
   useEffect(() => {
@@ -585,7 +598,7 @@ export default function Terminal({ token }: Props) {
     }
   }
 
-  async function createSession(relPath: string, shellType: 'claude' | 'bash' = 'claude', profile?: string) {
+  async function createSession(relPath: string, shellType: 'claude' | 'opencode' | 'bash' = 'claude', profile?: string) {
     try {
       // F-20: 使用 /api/projects 创建新的 project（tmux session）
       const r = await fetch('/api/projects', {
@@ -604,7 +617,7 @@ export default function Terminal({ token }: Props) {
   }
 
   // F-19: 创建新窗口（继承当前项目目录）
-  async function createWindow(shellType: 'claude' | 'bash' = 'claude', profile?: string) {
+  async function createWindow(shellType: 'claude' | 'opencode' | 'bash' = 'claude', profile?: string) {
     try {
       const session = activeTmuxSessionRef.current
       // 获取当前 project 的路径
@@ -642,7 +655,7 @@ export default function Terminal({ token }: Props) {
     setShowNewSession(true)
   }
 
-  function handleCreateSession(path: string, shellType: 'claude' | 'bash', profile?: string) {
+  function handleCreateSession(path: string, shellType: 'claude' | 'opencode' | 'bash', profile?: string) {
     setShowNewSession(false)
     createSession(path, shellType, profile)
   }
@@ -652,7 +665,7 @@ export default function Terminal({ token }: Props) {
     setShowNewWindow(true)
   }
 
-  function handleNewWindowConfirm(shellType: 'claude' | 'bash', profile?: string) {
+  function handleNewWindowConfirm(shellType: 'claude' | 'opencode' | 'bash', profile?: string) {
     setShowNewWindow(false)
     createWindow(shellType, profile)
     setTimeout(() => sessionManagerRef.current?.refresh(), 500)

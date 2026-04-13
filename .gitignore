@@ -31,3 +31,8 @@ ecosystem.config.cjs
 # Runtime data (tasks, session configs)
 data/
 logs/
+
+# Local运维 scripts (not for production)
+auto-fix.sh
+nexus-run-crush.sh
+reset-env.sh

@@ -11,12 +11,12 @@ interface Config {
 interface Props {
   token: string
   onClose: () => void
-  onConfirm: (shellType: 'claude' | 'bash', profile?: string) => void
+  onConfirm: (shellType: 'claude' | 'opencode' | 'bash', profile?: string) => void
 }
 
 export default function NewWindowDialog({ token, onClose, onConfirm }: Props) {
   const { t } = useTranslation()
-  const [shellType, setShellType] = useState<'claude' | 'bash'>('claude')
+  const [shellType, setShellType] = useState<'claude' | 'opencode' | 'bash'>('claude')
   const [configs, setConfigs] = useState<Config[]>([])
   const [selectedProfile, setSelectedProfile] = useState<string>(() => localStorage.getItem('nexus_last_profile') || '')
 
@@ -82,6 +82,16 @@ export default function NewWindowDialog({ token, onClose, onConfirm }: Props) {
                   onChange={() => setShellType('bash')}
                 />
                 <span>Zsh</span>
+              </label>
+              <label className="flex items-center gap-2 text-nexus-text text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="shellType"
+                  value="opencode"
+                  checked={shellType === 'opencode'}
+                  onChange={() => setShellType('opencode')}
+                />
+                <span>{t('workspace.shellOpencode')}</span>
               </label>
             </div>
           </div>
