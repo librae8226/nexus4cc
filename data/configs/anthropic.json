@@ -1,0 +1,11 @@
+{
+  "label": "Anthropic Claude",
+  "BASE_URL": "",
+  "AUTH_TOKEN": "",
+  "API_KEY": "",
+  "DEFAULT_MODEL": "claude-sonnet-4-6",
+  "THINK_MODEL": "claude-opus-4-6",
+  "LONG_CONTEXT_MODEL": "claude-opus-4-6",
+  "DEFAULT_HAIKU_MODEL": "claude-haiku-4-5-20251001",
+  "API_TIMEOUT_MS": "3000000"
+}

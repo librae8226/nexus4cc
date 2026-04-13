@@ -40,6 +40,37 @@ if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 if (!existsSync(CONFIGS_DIR)) mkdirSync(CONFIGS_DIR, { recursive: true });
 if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
 
+// 自动确保 anthropic.json 存在（无需用户手动创建）
+// 优先级：已有文件不覆盖；API_KEY 从环境变量 ANTHROPIC_API_KEY 检测
+{
+  const anthropicProfile = join(CONFIGS_DIR, 'anthropic.json');
+  if (!existsSync(anthropicProfile)) {
+    // 检测本地 CC 是否已 login（~/.claude.json 有 oauthAccount）
+    let isLoggedIn = false;
+    try {
+      const claudeJson = JSON.parse(readFileSync(join(process.env.HOME || '~', '.claude.json'), 'utf8'));
+      isLoggedIn = !!(claudeJson.oauthAccount?.accountUuid);
+    } catch { /* 未登录或文件不存在 */ }
+
+    const apiKey = process.env.ANTHROPIC_API_KEY || '';
+
+    if (isLoggedIn || apiKey) {
+      writeFileSync(anthropicProfile, JSON.stringify({
+        label: 'Anthropic Claude',
+        BASE_URL: '',
+        AUTH_TOKEN: '',
+        API_KEY: apiKey,
+        DEFAULT_MODEL: 'claude-sonnet-4-6',
+        THINK_MODEL: 'claude-opus-4-6',
+        LONG_CONTEXT_MODEL: 'claude-opus-4-6',
+        DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5-20251001',
+        API_TIMEOUT_MS: '3000000',
+      }, null, 2), 'utf8');
+      console.log(`[Nexus] Auto-created anthropic profile (${isLoggedIn ? 'oauth login' : 'API key from env'})`);
+    }
+  }
+}
+
 const app = express();
 app.use(express.json());
 
