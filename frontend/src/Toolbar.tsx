@@ -558,7 +558,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
                 className={iconBtnPCClass}
                 onPointerDown={(e) => { e.preventDefault(); onOpenWorkspace() }}
                 title={t('toolbar.workspace')}
-              ><Icon name="directoryList" size={18} /></button>
+              ><Icon name="folder" size={18} /></button>
             )}
             <button
               className={iconBtnPCClass}
@@ -572,7 +572,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
                 className={iconBtnPCClass}
                 onPointerDown={(e) => { e.preventDefault(); onOpenFiles() }}
                 title={t('toolbar.fileList')}
-              ><Icon name="download" size={18} /></button>
+              ><Icon name="image" size={18} /></button>
             )}
             {onOpenSettings && (
               <button
@@ -619,7 +619,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
           {/* 右侧按钮组 */}
           {onOpenWorkspace && (
             <button className={iconBtnPCClass} onPointerDown={(e) => { e.preventDefault(); onOpenWorkspace() }} title={t('toolbar.workspace')}>
-              <Icon name="directoryList" size={18} />
+              <Icon name="folder" size={18} />
             </button>
           )}
           <button
@@ -704,7 +704,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
             onPointerDown={(e) => { e.preventDefault(); onOpenWorkspace() }}
             title={t('toolbar.workspace')}
           >
-            <Icon name="directoryList" size={18} />
+            <Icon name="folder" size={18} />
           </button>
         )}
         <button
@@ -767,7 +767,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
                 </button>
                 {onOpenFiles && (
                   <button className={quickMenuItemClass} onPointerDown={(e) => { e.preventDefault(); onOpenFiles(); setShowQuickMenu(false) }}>
-                    <Icon name="download" size={16} />
+                    <Icon name="image" size={16} />
                     <span>{t('toolbar.fileList')}</span>
                   </button>
                 )}

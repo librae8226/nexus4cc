@@ -10,7 +10,7 @@ export type IconName =
   | 'chevronUp' | 'chevronLeft' | 'chevronRight' | 'grip' | 'trash' | 'plus' | 'copy'
   | 'arrowDown' | 'arrowLeft' | 'arrowRight' | 'message'
   | 'play' | 'stop' | 'refresh' | 'history' | 'pin' | 'folder'
-  | 'folderPlus' | 'folderOpen' | 'image' | 'alert' | 'eye' | 'download' | 'file' | 'edit' | 'save' | 'sort' | 'directoryList' | 'windowPlus'
+  | 'folderPlus' | 'folderOpen' | 'image' | 'alert' | 'eye' | 'download' | 'file' | 'edit' | 'save' | 'sort'
 
 interface Props {
   name: IconName
@@ -209,25 +209,6 @@ const ICONS: Record<IconName, React.ReactNode> = {
       <line x1="3" y1="6" x2="21" y2="6" />
       <line x1="6" y1="12" x2="18" y2="12" />
       <line x1="9" y1="18" x2="15" y2="18" />
-    </g>
-  ),
-  directoryList: (
-    <g strokeWidth={2.25}>
-      <line x1="4.5" y1="5.5" x2="10.5" y2="5.5" />
-      <circle cx="5.5" cy="9" r="1.5" fill="currentColor" stroke="none" />
-      <circle cx="5.5" cy="14" r="1.5" fill="currentColor" stroke="none" />
-      <circle cx="5.5" cy="19" r="1.5" fill="currentColor" stroke="none" />
-      <line x1="9.5" y1="9" x2="20" y2="9" />
-      <line x1="9.5" y1="14" x2="20" y2="14" />
-      <line x1="9.5" y1="19" x2="20" y2="19" />
-    </g>
-  ),
-  windowPlus: (
-    <g strokeWidth={2.25}>
-      <rect x="2.5" y="8" width="15.5" height="11" rx="1.6" />
-      <line x1="2.5" y1="11" x2="18" y2="11" />
-      <line x1="18.5" y1="3.5" x2="18.5" y2="8.5" />
-      <line x1="16" y1="6" x2="21" y2="6" />
     </g>
   ),
 }

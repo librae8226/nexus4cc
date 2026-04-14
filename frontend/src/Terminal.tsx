@@ -1649,16 +1649,16 @@ export default function Terminal({ token }: Props) {
                       className="w-12 h-10 bg-transparent border-none text-nexus-text-2 flex items-center justify-center cursor-pointer"
                       title="新建窗口"
                     >
-                      <Icon name="windowPlus" size={20} />
+                      <Icon name="plus" size={18} />
                     </button>
 
 
                     <button
                       onClick={(e) => { e.stopPropagation(); setShowFiles(true); }}
                       className="w-12 h-10 bg-transparent border-none text-nexus-text-2 flex items-center justify-center cursor-pointer"
-                      title={t('toolbar.fileList')}
+                      title="文件列表"
                     >
-                      <Icon name="download" size={18} />
+                      <Icon name="folder" size={18} />
                     </button>
 
                     <button
@@ -1666,7 +1666,7 @@ export default function Terminal({ token }: Props) {
                       className="w-12 h-10 bg-transparent border-none text-nexus-text-2 flex items-center justify-center cursor-pointer"
                       title="浏览工作目录"
                     >
-                      <Icon name="directoryList" size={20} />
+                      <Icon name="folderOpen" size={18} />
                     </button>
 
                     <button

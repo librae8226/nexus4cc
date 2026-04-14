@@ -529,7 +529,7 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
           </div>
 
           <button className="flex items-center justify-center gap-1.5 mx-3 my-1.5 px-2.5 py-1.5 bg-transparent border border-dashed border-nexus-border rounded text-nexus-text-2 text-sm cursor-pointer" onPointerDown={onNewChannel}>
-            <Icon name="windowPlus" size={14} />
+            <Icon name="plus" size={14} />
             <span>{t('sessionMgr.newChannel')}</span>
           </button>
 
@@ -669,7 +669,7 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
             })}
           </div>
           <button className="flex items-center justify-center gap-1.5 mx-3 py-1 px-2.5 bg-transparent border border-dashed border-nexus-border rounded text-nexus-text-2 text-sm cursor-pointer shrink-0" onPointerDown={onNewChannel}>
-            <Icon name="windowPlus" size={14} />
+            <Icon name="plus" size={14} />
             <span>{t('sessionMgr.newChannel')}</span>
           </button>
         </div>
