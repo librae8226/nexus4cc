@@ -551,7 +551,9 @@ wss.on('connection', (ws, req) => {
   const windowIndex = parseInt(url.searchParams.get('window') || '0', 10) || 0;
   const session = url.searchParams.get('session') || TMUX_SESSION;
   try { jwt.verify(token, JWT_SECRET); } catch { ws.close(4001, 'unauthorized'); return; }
-  const { key, entry } = ensureWindowPty(session, windowIndex); entry.clients.add(ws);
+  const result = ensureWindowPty(session, windowIndex);
+  if (!result.entry) { ws.close(4004, result.error || 'session_not_found'); return; }
+  const { key, entry } = result; entry.clients.add(ws);
   console.log(`Client connected to ${key} (${entry.clients.size})`);
   if (entry.lastOutput) ws.send(entry.lastOutput.slice(-2000));
   ws.on('message', msg => {
