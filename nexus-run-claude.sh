@@ -48,7 +48,8 @@ fi
 if [ -n "$API_KEY" ]; then
     export ANTHROPIC_API_KEY="$API_KEY"
 fi
-if [ -n "$DEFAULT_MODEL" ]; then
+# 第三方 API（有 BASE_URL）才映射模型别名；Anthropic 官方留给 /model 自行控制
+if [ -n "$BASE_URL" ] && [ -n "$DEFAULT_MODEL" ]; then
     export ANTHROPIC_MODEL="$DEFAULT_MODEL"
     export ANTHROPIC_SMALL_FAST_MODEL="$DEFAULT_MODEL"
     export ANTHROPIC_DEFAULT_SONNET_MODEL="$DEFAULT_MODEL"

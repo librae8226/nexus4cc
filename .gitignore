@@ -2,6 +2,10 @@
 # Claude Code persistence
 .claude-data/
 
+# Superpowers workspace
+.superpowers/
+docs/superpowers/
+
 # Sensitive scripts for reference only
 .scripts/
 
@@ -25,5 +29,9 @@ screenshots/
 ecosystem.config.cjs
 
 # Runtime data (tasks, session configs)
-data/
+# Ignore everything under data/, except the default anthropic profile (no secrets)
+data/*
+!data/configs/
+data/configs/*
+!data/configs/anthropic.json
 logs/

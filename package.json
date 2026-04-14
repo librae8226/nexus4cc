@@ -1,17 +1,18 @@
 {
   "name": "nexus",
-  "version": "4.3.8",
+  "version": "4.4.8",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "setup": "node scripts/setup.js"
   },
   "dependencies": {
-    "bcrypt": "^5.1.1",
+    "bcrypt": "^6.0.0",
     "express": "^4.18.2",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.1.1",
-    "node-pty": "^1.1.0",
+    "node-pty": "^1.2.0-beta.12",
     "playwright": "^1.58.2",
     "ws": "^8.18.0"
   },

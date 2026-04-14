@@ -68,26 +68,25 @@ export const ALL_KEYS: KeyDef[] = [
 // Reorganized factory defaults by priority and category grouping
 export const FACTORY_PINNED = [
   // Control
-  'esc',
+  'esc', 
   // Navigation
-  'up', 'down', 'left', 'right',
-  // Editing — enter left of backspace
-  'enter', 'backspace', 'tab',
-  // Navigation — ^A replaces ^L, ^E replaces ^R
-  'ctrl-a', 'ctrl-e',
-  // Input — ^C right of ^V
-  'backslash', 'ctrl-v', 'ctrl-c',
+   'ctrl-a', 'left', 'up', 'down', 'right', 'ctrl-e',
+  'backspace', 
+  // Input — \ / adjacent
+  'backslash', 'slash',
+  // Clipboard
+  'ctrl-c', 'ctrl-v',  'enter', 'tab',
 ]
 
 export const FACTORY_EXPANDED = [
   // Navigation group
-  'alt-b', 'alt-f',
+  'alt-b', 'alt-f',  
   // Editing group
-  'ctrl-d', 'ctrl-u', 'ctrl-k', 'ctrl-y', 'ctrl-z', 'ctrl-j',
+  'ctrl-d', 'ctrl-u', 'ctrl-j', 'ctrl-k', 'ctrl-l', 'ctrl-y', 'ctrl-z', 
   // Control group
-  'ctrl-l', 'ctrl-r', 'ctrl-b', 'ctrl-o', 'ctrl-t', 'ctrl-f', 'ctrl-g',
+  'ctrl-r', 'ctrl-b', 'ctrl-o', 'ctrl-t', 'ctrl-f', 'ctrl-g',
   // Input group
-  'shift-tab', 'slash', 'bang', 'at',
+  'shift-tab', 'bang', 'at',
   // UI Actions
   'scroll-btm', 'copy-term', 'fit',
 ]

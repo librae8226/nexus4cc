@@ -22,6 +22,7 @@ interface Props {
   onOpenFiles?: () => void
   onOpenWorkspace?: () => void
   onFitTerminal?: () => void
+  onShowCopySheet?: (text: string) => void
   /** When true: renders as a compact sidebar section (no theme/settings, flex-wrap key grid) */
   embedded?: boolean
   /** Controlled collapsed state (optional). If provided, component acts as controlled. */
@@ -70,7 +71,7 @@ interface DragState {
 
 const ITEM_HEIGHT = 48 // px，每行编辑项高度
 
-export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _termRef, themeMode, onToggleTheme, onOpenSettings, onUploadFile, onOpenFiles, onOpenWorkspace, onFitTerminal, embedded, collapsed: controlledCollapsed, onCollapsedChange }: Props) {
+export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _termRef, themeMode, onToggleTheme, onOpenSettings, onUploadFile, onOpenFiles, onOpenWorkspace, onFitTerminal, onShowCopySheet, embedded, collapsed: controlledCollapsed, onCollapsedChange }: Props) {
   const { t } = useTranslation()
   const [config, setConfig]           = useState<ToolbarConfig>(loadConfig)
   const isControlled = controlledCollapsed !== undefined
@@ -228,7 +229,9 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
           if (line) lines.push(line.translateToString(true))
         }
         const text = lines.join('\n')
-        await navigator.clipboard.writeText(text)
+        if (onShowCopySheet) {
+          onShowCopySheet(text)
+        }
       } catch {
         // ignore
       }
@@ -428,8 +431,9 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
   // ---- 统一粘贴 / 上传面板 ----
   const pasteBoxEl = showPasteBox && createPortal(
     <>
-      <div className="fixed inset-0 z-[700]" onPointerDown={() => setShowPasteBox(false)} />
-      <div className="fixed bottom-0 left-0 right-0 z-[701] bg-nexus-bg border-t border-nexus-border rounded-t-xl p-3.5 pb-6 shadow-[0_-4px_24px_rgba(0,0,0,0.35)]">
+      <div className="fixed inset-0 z-[700]" onClick={() => setShowPasteBox(false)} />
+      <div className="fixed bottom-0 left-0 right-0 z-[701] bg-nexus-bg border-t border-nexus-border rounded-t-xl p-3.5 pb-6 shadow-[0_-4px_24px_rgba(0,0,0,0.35)]"
+        onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-3">
           <span className="text-nexus-text text-sm font-semibold">{t('toolbar.pasteUpload')}</span>
           <button onPointerDown={(e) => { e.preventDefault(); setShowPasteBox(false) }}
@@ -460,6 +464,15 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
             }, 0)
           }}
         />
+        <button
+          className="w-full mt-2 py-2.5 rounded-lg bg-nexus-accent text-white text-sm font-medium cursor-pointer border-none"
+          onClick={() => {
+            const text = pasteBoxRef.current?.value ?? ''
+            if (text) { sendToWs(text); setShowPasteBox(false) }
+          }}
+        >
+          Send
+        </button>
         <label className="flex items-center justify-center gap-2 mt-2.5 p-2.5 rounded-lg cursor-pointer bg-nexus-bg-2 border border-nexus-border text-nexus-text-2 text-[13px]">
           <Icon name="paperclip" size={16} />{t('toolbar.selectFile')}
           <input ref={pasteFileRef} type="file" accept="*/*" className="hidden"

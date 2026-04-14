@@ -37,8 +37,10 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
   // 路径状态：null 表示正在初始化
   const [currentPath, setCurrentPath] = useState<string | null>(null)
   const [entries, setEntries] = useState<FileEntry[]>([])
+  const [sizesReady, setSizesReady] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const abortRef = useRef<AbortController | null>(null)
 
   const headers = { Authorization: `Bearer ${token}` }
 
@@ -127,20 +129,39 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
 
   // 加载目录内容
   const loadEntries = useCallback(async (path: string) => {
+    // 取消上一个未完成的请求
+    if (abortRef.current) abortRef.current.abort()
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+
     setLoading(true)
     setError('')
+    setSizesReady(false)
     setSelectedName(null) // 切换目录时清除选中
     try {
-      const r = await fetch(`/api/workspace/files?path=${encodeURIComponent(path)}`, { headers })
+      const r = await fetch(`/api/workspace/files?path=${encodeURIComponent(path)}`, {
+        headers,
+        signal: ctrl.signal,
+      })
       if (!r.ok) throw new Error(await r.text())
       const data = await r.json()
       // data.path 是服务端返回的规范化绝对路径
       setCurrentPath(data.path)
-      setEntries(data.entries || [])
+      // Phase 1：先用 mtime 渲染列表（size 列占位）
+      setEntries((data.entries || []).map((e: FileEntry) => ({ ...e, size: undefined })))
+      setLoading(false)
+      // Phase 2：空闲帧批量填入 size
+      const allEntries: FileEntry[] = data.entries || []
+      const scheduleIdle = window.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 1))
+      scheduleIdle(() => {
+        if (ctrl.signal.aborted) return
+        setEntries(allEntries)
+        setSizesReady(true)
+      })
     } catch (e: any) {
+      if ((e as any).name === 'AbortError') return
       setError(e.message || 'Failed to load')
       setEntries([])
-    } finally {
       setLoading(false)
     }
   }, [token])
@@ -323,17 +344,23 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
   // 打开文件（查看）
   function openFile(name: string) {
     const url = getFileUrl(name)
-    if (url) window.open(url, '_blank')
+    if (!url) return
+    const a = document.createElement('a')
+    a.href = url
+    a.target = '_blank'
+    a.rel = 'noopener noreferrer'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
   }
 
   // 下载文件
   function downloadFile(name: string) {
     const url = getFileUrl(name)
     if (!url) return
-
+    const dlUrl = url + '&dl=1'
     const a = document.createElement('a')
-    a.href = url
-    a.download = name
+    a.href = dlUrl
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -498,9 +525,9 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
   // 检查是否有上级目录（简单判断：不是根目录且以 workspaceRoot 开头）
   const hasParent = currentPath !== '/' && currentPath !== ''
 
-  // 排序状态：默认按文件名升序
-  const [sortKey, setSortKey] = useState<'name' | 'modified' | 'size'>('name')
-  const [sortAsc, setSortAsc] = useState(true)
+  // 排序状态：默认按修改时间倒序
+  const [sortKey, setSortKey] = useState<'name' | 'modified' | 'size'>('modified')
+  const [sortAsc, setSortAsc] = useState(false)
   const [showSortMenu, setShowSortMenu] = useState(false)
 
   function handleSort(key: 'name' | 'modified' | 'size') {
@@ -699,9 +726,9 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
                     {entry.name}
                   </div>
                 </div>
-                {entry.type === 'file' && entry.size !== undefined && (
+                {entry.type === 'file' && (
                   <span className="text-nexus-muted text-xs shrink-0">
-                    {formatSize(entry.size)}
+                    {sizesReady && entry.size !== undefined ? formatSize(entry.size) : '—'}
                   </span>
                 )}
                 <span className="text-nexus-muted text-xs shrink-0">
@@ -1187,20 +1214,30 @@ function MarkdownPreview({ content, fontSize = 14 }: { content: string; fontSize
   return (
     <div
       className="markdown-body max-w-none text-nexus-text
+        [&_h1]:text-[2em] [&_h1]:font-bold [&_h1]:mt-4 [&_h1]:mb-2 [&_h1]:pb-1 [&_h1]:border-b [&_h1]:border-nexus-border
+        [&_h2]:text-[1.5em] [&_h2]:font-bold [&_h2]:mt-4 [&_h2]:mb-2 [&_h2]:pb-1 [&_h2]:border-b [&_h2]:border-nexus-border
+        [&_h3]:text-[1.25em] [&_h3]:font-semibold [&_h3]:mt-3 [&_h3]:mb-1
+        [&_h4]:text-[1.1em] [&_h4]:font-semibold [&_h4]:mt-3 [&_h4]:mb-1
+        [&_h5]:text-[1em] [&_h5]:font-semibold [&_h5]:mt-2 [&_h5]:mb-1
+        [&_h6]:text-[0.9em] [&_h6]:font-semibold [&_h6]:mt-2 [&_h6]:mb-1 [&_h6]:text-nexus-text/70
+        [&_p]:my-2 [&_p]:leading-relaxed
+        [&_ul]:my-2 [&_ul]:pl-5 [&_ul]:list-disc
+        [&_ol]:my-2 [&_ol]:pl-5 [&_ol]:list-decimal
+        [&_li]:my-1
+        [&_blockquote]:my-3 [&_blockquote]:pl-3 [&_blockquote]:border-l-4 [&_blockquote]:border-nexus-accent/50 [&_blockquote]:text-nexus-text/70
+        [&_code]:font-mono [&_code]:text-[0.875em] [&_code]:bg-nexus-bg-2 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded
+        [&_pre]:my-3 [&_pre]:p-3 [&_pre]:bg-nexus-bg-2 [&_pre]:rounded [&_pre]:overflow-x-auto
+        [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:rounded-none
+        [&_hr]:my-4 [&_hr]:border-nexus-border
+        [&_a]:text-nexus-accent [&_a]:underline
+        [&_img]:max-w-full [&_img]:rounded
+        [&_strong]:font-semibold
         [&_table]:w-full [&_table]:border-collapse [&_table]:my-3
         [&_th]:border [&_th]:border-nexus-border [&_th]:bg-nexus-bg-2 [&_th]:p-2 [&_th]:text-left [&_th]:text-nexus-text
         [&_td]:border [&_td]:border-nexus-border [&_td]:p-2 [&_td]:text-nexus-text
         [&_tr:nth-child(even)]:bg-nexus-bg-2/50
         [&_input[type='checkbox']]:mr-2 [&_input[type='checkbox']]:accent-nexus-accent"
-      style={{
-        fontSize: `${fontSize}px`,
-        lineHeight: '1.6',
-        // 标题相对正文的缩放比例
-        '--h1-size': `${Math.round(fontSize * 2)}px`,
-        '--h2-size': `${Math.round(fontSize * 1.5)}px`,
-        '--h3-size': `${Math.round(fontSize * 1.25)}px`,
-        '--code-size': `${Math.round(fontSize * 0.85)}px`,
-      } as React.CSSProperties}
+      style={{ fontSize: `${fontSize}px`, lineHeight: '1.6' }}
       dangerouslySetInnerHTML={{ __html: cleanHtml }}
     />
   )

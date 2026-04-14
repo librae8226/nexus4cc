@@ -234,7 +234,7 @@
     "deleteConfirm": "Delete file \"{{filename}}\"?",
     "deleteAllConfirm": "Delete all {{count}} uploaded files? This cannot be undone.",
     "manualCopy": "Please copy manually:\n{{text}}",
-    "footerNote": "Files are stored in data/uploads/ and are not tracked by git",
+    "footerNote": "Files are stored in the current project's data/uploads/ and are not tracked by git",
     "sortBy": "Sort",
     "sort": {
       "name": "Name",

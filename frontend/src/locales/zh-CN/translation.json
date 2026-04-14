@@ -234,7 +234,7 @@
     "deleteConfirm": "删除文件 \"{{filename}}\"?",
     "deleteAllConfirm": "确定要删除所有上传的文件吗?\\n共 {{count}} 个文件，此操作不可恢复。",
     "manualCopy": "请手动复制:\\n{{text}}",
-    "footerNote": "文件保存在服务器 data/uploads/ 目录，不进入 git 追踪",
+    "footerNote": "文件保存到当前项目 data/uploads/ 目录，不进入 git 追踪",
     "sortBy": "排序",
     "sort": {
       "name": "文件名",

@@ -11,6 +11,88 @@ import GhostShield from './GhostShield'
 import { Icon } from './icons'
 import { getWindowStatus, STATUS_DOT_COLOR, STATUS_DOT_TITLE } from './windowStatus'
 
+// ANSI 256-color palette (0-15 standard, 16-231 6x6x6 cube, 232-255 grayscale)
+const ANSI256: string[] = (() => {
+  const c = [
+    '#000000','#cc0000','#4e9a06','#c4a000','#3465a4','#75507b','#06989a','#d3d7cf',
+    '#555753','#ef2929','#8ae234','#fce94f','#729fcf','#ad7fa8','#34e2e2','#eeeeec',
+  ]
+  const h = (v: number) => v.toString(16).padStart(2, '0')
+  for (let r = 0; r < 6; r++) for (let g = 0; g < 6; g++) for (let b = 0; b < 6; b++) {
+    const rv = r ? r * 40 + 55 : 0, gv = g ? g * 40 + 55 : 0, bv = b ? b * 40 + 55 : 0
+    c.push(`#${h(rv)}${h(gv)}${h(bv)}`)
+  }
+  for (let i = 0; i < 24; i++) { const v = h(8 + i * 10); c.push(`#${v}${v}${v}`) }
+  return c
+})()
+
+function ansiToHtml(raw: string): string {
+  const style = { fg: '', bg: '', bold: false, italic: false, dim: false }
+  const out: string[] = []
+  let buf = ''
+
+  const flush = () => {
+    if (!buf) return
+    const esc = buf.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const css: string[] = []
+    if (style.fg) css.push(`color:${style.fg}`)
+    if (style.bg) css.push(`background-color:${style.bg}`)
+    if (style.bold) css.push('font-weight:700')
+    if (style.italic) css.push('font-style:italic')
+    if (style.dim) css.push('opacity:0.6')
+    out.push(css.length ? `<span style="${css.join(';')}">${esc}</span>` : esc)
+    buf = ''
+  }
+
+  const applyParams = (params: string) => {
+    const codes = params.split(';').map(s => parseInt(s, 10) || 0)
+    let j = 0
+    while (j < codes.length) {
+      const c = codes[j]
+      if (c === 0) { style.fg = ''; style.bg = ''; style.bold = false; style.italic = false; style.dim = false }
+      else if (c === 1) style.bold = true
+      else if (c === 2) style.dim = true
+      else if (c === 3) style.italic = true
+      else if (c === 22) { style.bold = false; style.dim = false }
+      else if (c === 23) style.italic = false
+      else if (c >= 30 && c <= 37) style.fg = ANSI256[c - 30]
+      else if (c === 39) style.fg = ''
+      else if (c >= 40 && c <= 47) style.bg = ANSI256[c - 40]
+      else if (c === 49) style.bg = ''
+      else if (c >= 90 && c <= 97) style.fg = ANSI256[c - 90 + 8]
+      else if (c >= 100 && c <= 107) style.bg = ANSI256[c - 100 + 8]
+      else if (c === 38 && codes[j + 1] === 5 && j + 2 < codes.length) { style.fg = ANSI256[codes[j + 2]] ?? ''; j += 2 }
+      else if (c === 38 && codes[j + 1] === 2 && j + 4 < codes.length) { style.fg = `rgb(${codes[j+2]},${codes[j+3]},${codes[j+4]})`; j += 4 }
+      else if (c === 48 && codes[j + 1] === 5 && j + 2 < codes.length) { style.bg = ANSI256[codes[j + 2]] ?? ''; j += 2 }
+      else if (c === 48 && codes[j + 1] === 2 && j + 4 < codes.length) { style.bg = `rgb(${codes[j+2]},${codes[j+3]},${codes[j+4]})`; j += 4 }
+      j++
+    }
+  }
+
+  let i = 0
+  const s = raw.replace(/\r/g, '')
+  while (i < s.length) {
+    if (s[i] !== '\x1b') { buf += s[i++]; continue }
+    // find CSI terminator
+    if (s[i + 1] === '[') {
+      let end = i + 2
+      while (end < s.length && !/[A-Za-z]/.test(s[end])) end++
+      const term = s[end]
+      const params = s.slice(i + 2, end)
+      i = end + 1
+      if (term === 'm') { flush(); applyParams(params) }
+      // other CSI sequences: skip silently
+    } else {
+      // non-CSI escape: skip to next letter
+      i += 2
+      while (i < s.length && !/[A-Za-z]/.test(s[i])) i++
+      i++
+    }
+  }
+  flush()
+  return out.join('')
+}
+
 const SessionManager = lazy(() => import('./SessionManager'))
 const SessionManagerV2 = lazy(() => import('./SessionManagerV2'))
 const WorkspaceSelector = lazy(() => import('./WorkspaceSelector'))
@@ -142,6 +224,7 @@ export default function Terminal({ token }: Props) {
   const hasConnectedRef = useRef(false)
   const [showFiles, setShowFiles] = useState(false)
   const [showWorkspace, setShowWorkspace] = useState(false)
+  const [copySheetText, setCopySheetText] = useState<string | null>(null)
   const [showScrollback, setShowScrollback] = useState(false)
   const [scrollbackContent, setScrollbackContent] = useState('')
   const [scrollbackLoading, setScrollbackLoading] = useState(false)
@@ -149,6 +232,8 @@ export default function Terminal({ token }: Props) {
   const swipeUpAccumRef = useRef(0)
   const scrollbackOverlayRef = useRef<HTMLDivElement>(null)
   const triggerScrollbackRef = useRef<() => void>(() => {})
+  const scrollbackPrefetchRef = useRef<Promise<{ content: string }> | null>(null)
+  const scrollbackCacheRef = useRef<string | null>(null)
   const pausePollingRef = useRef(false)
   const activeWindowIndexRef = useRef(0)
   const windowsInitializedRef = useRef(false)
@@ -200,26 +285,6 @@ export default function Terminal({ token }: Props) {
   }
   const [projects, setProjects] = useState<ProjectInfo[]>([])
 
-  // F-XX: Profile 检查与引导
-  const [hasProfiles, setHasProfiles] = useState<boolean | null>(null)
-  const [showProfileGuide, setShowProfileGuide] = useState(false)
-
-  // 检查是否有 profile
-  useEffect(() => {
-    if (hasProfiles !== null) return // 已经检查过了
-    fetch('/api/configs', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(configs => {
-        const hasAny = Array.isArray(configs) && configs.length > 0
-        setHasProfiles(hasAny)
-        if (!hasAny) {
-          setShowProfileGuide(true)
-        }
-      })
-      .catch(() => {
-        setHasProfiles(true)
-      })
-  }, [token, hasProfiles])
 
   // 加载服务端默认 session
   useEffect(() => {
@@ -690,7 +755,8 @@ export default function Terminal({ token }: Props) {
     formData.append('file', file)
     formData.append('originalName', file.name)
     try {
-      const url = overwrite ? '/api/files/upload?overwrite=1' : '/api/files/upload'
+      const sessionParam = `session=${encodeURIComponent(activeTmuxSessionRef.current)}`
+      const url = overwrite ? `/api/files/upload?overwrite=1&${sessionParam}` : `/api/files/upload?${sessionParam}`
       const res = await fetch(url, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -815,14 +881,50 @@ export default function Terminal({ token }: Props) {
       // IME 组合输入期间不拦截
       if (e.isComposing) return
 
-      // 仅在PC宽屏模式且没有打开弹层时处理
+      // 仅在PC宽屏模式处理
       if (window.innerWidth < 768) return
-      const anyOverlayOpen = showSessionDrawer || showSettings || showGeneralSettings || showNewSession || showNewWindow || showScrollback || showSessionManagerV2 || showFiles
-      if (anyOverlayOpen) return
+
+      // 焦点在终端容器外的 input/textarea/contenteditable 时不拦截
+      // 用 activeElement 而非 overlay 状态变量，避免 stale closure 问题
+      const activeEl = document.activeElement
+      const isXtermInput = containerRef.current?.contains(activeEl)
+      if (!isXtermInput && activeEl && (
+        activeEl.tagName === 'INPUT' ||
+        activeEl.tagName === 'TEXTAREA' ||
+        (activeEl as HTMLElement).isContentEditable
+      )) return
 
       // 可打印字符（无修饰键）：不拦截，让 xterm 原生处理 → onData 回调发送
       // 这样浏览器 IME 才能正常工作（compositionstart → compositionend → onData）
       if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        return
+      }
+
+      // === 剪贴板快捷键：Ctrl+C/V (PC) / Cmd+C/V (Mac) ===
+      const clipboardMod = e.ctrlKey || e.metaKey
+      const clipboardKey = e.key.toLowerCase()
+      const noOtherMod = !e.shiftKey && !e.altKey
+
+      // 复制：有选中文字时复制到剪贴板
+      if (clipboardMod && clipboardKey === 'c' && noOtherMod) {
+        if (term.hasSelection()) {
+          e.preventDefault()
+          navigator.clipboard.writeText(term.getSelection()).catch(() => {})
+          return
+        }
+        // Mac Cmd+C 无选中：不拦截（Mac 终端里 Cmd+C 永远是复制，不发送 SIGINT）
+        if (e.metaKey) return
+        // PC Ctrl+C 无选中：继续往下 → 发送 SIGINT (ETX)
+      }
+
+      // 粘贴：从剪贴板读取并发送到终端
+      if (clipboardMod && clipboardKey === 'v' && noOtherMod) {
+        e.preventDefault()
+        navigator.clipboard.readText().then(text => {
+          if (text && wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(text)
+          }
+        }).catch(() => {})
         return
       }
 
@@ -833,7 +935,6 @@ export default function Terminal({ token }: Props) {
         { ctrl: true, key: 't', desc: '新标签页' },
         { ctrl: true, key: 'n', desc: '新窗口' },
         { ctrl: true, key: 'w', desc: '关闭标签' },
-        { ctrl: true, key: 'v', desc: '粘贴' },
         { ctrl: true, shift: true, key: 't', desc: '恢复标签' },
         { ctrl: true, shift: true, key: 'n', desc: '隐身窗口' },
         { ctrl: true, key: 'tab', desc: '切换标签' },
@@ -953,8 +1054,8 @@ export default function Terminal({ token }: Props) {
     }
 
     function onTouchMove(e: TouchEvent) {
-      e.preventDefault()
       if (isPinching && e.touches.length === 2) {
+        e.preventDefault()
         const dist = getTouchDist(e)
         const scale = dist / pinchStartDist
         const newSize = Math.round(Math.max(8, Math.min(32, pinchStartFontSize * scale)))
@@ -973,13 +1074,28 @@ export default function Terminal({ token }: Props) {
           const dy = Math.abs(e.touches[0].clientY - touchStartY)
           if (dx > 8 || dy > 8) swipeAxis = dx > dy ? 'horizontal' : 'vertical'
         }
-        if (swipeAxis === 'horizontal') return
+        if (swipeAxis === 'horizontal') { e.preventDefault(); return }
         if (swipeAxis === 'vertical' && !showScrollbackRef.current) {
+          e.preventDefault()
           const y = e.touches[0].clientY
           const deltaY = touchLastY - y  // positive = finger UP = want older content
           touchLastY = y
           if (deltaY < 0) {  // finger DOWN = swipe down = view history
             swipeUpAccumRef.current += -deltaY
+            if (swipeUpAccumRef.current > 10 && !scrollbackPrefetchRef.current && scrollbackCacheRef.current === null) {
+              // Pre-fetch while gesture is still building up
+              const wi = activeWindowIndexRef.current
+              const s = activeTmuxSessionRef.current
+              scrollbackPrefetchRef.current = fetch(`/api/sessions/${wi}/scrollback?session=${encodeURIComponent(s)}&lines=3000`, {
+                headers: { Authorization: `Bearer ${token}` },
+              }).then(r => r.ok ? r.json() : Promise.reject(r.status))
+                .then((data: { content: string }) => {
+                  scrollbackCacheRef.current = data.content.trimEnd()
+                  scrollbackPrefetchRef.current = null
+                  return data
+                })
+                .catch(() => { scrollbackPrefetchRef.current = null; return { content: '' } })
+            }
             if (swipeUpAccumRef.current > 40) {
               triggerScrollbackRef.current()
             }
@@ -1014,6 +1130,9 @@ export default function Terminal({ token }: Props) {
         return
       }
       if (Math.abs(dy) < TAP_THRESHOLD && Math.abs(dx) < TAP_THRESHOLD) {
+        // Prevent the subsequent click event so xterm's internal handler
+        // doesn't steal focus from our managed input.
+        e.preventDefault()
         const xtermTa = termRef.current?.textarea
         // 工具栏展开时收起工具栏；若键盘也可见则一并收起
         if (toolbarCollapsedRef.current === false) {
@@ -1032,17 +1151,26 @@ export default function Terminal({ token }: Props) {
           if (xtermTa) { xtermTa.inputMode = 'none'; xtermTa.blur() }
         } else {
           keyboardVisibleRef.current = true
-          // Focus xterm's own textarea — term.onData handles all input natively
-          // (letters, numbers, IME/CJK) without the quirks of our hidden input.
-          if (xtermTa) { xtermTa.inputMode = 'text'; xtermTa.focus() }
-          if (inputRef.current) inputRef.current.inputMode = 'text'
+          const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+          if (isIOS) {
+            // iOS Safari won't reliably show the keyboard for xterm's internal
+            // textarea (tiny element + restrictive attributes). Use our standard
+            // <input> instead — iOS handles it correctly.
+            if (xtermTa) xtermTa.inputMode = 'none'
+            if (inputRef.current) { inputRef.current.inputMode = 'text'; inputRef.current.focus() }
+          } else {
+            // Android / other: focus xterm's own textarea — term.onData handles
+            // all input natively (letters, numbers, IME/CJK).
+            if (xtermTa) { xtermTa.inputMode = 'text'; xtermTa.focus() }
+            if (inputRef.current) inputRef.current.inputMode = 'text'
+          }
         }
       }
     }
 
     container.addEventListener('touchstart', onTouchStart, { passive: true })
     container.addEventListener('touchmove', onTouchMove, { passive: false })
-    container.addEventListener('touchend', onTouchEnd, { passive: true })
+    container.addEventListener('touchend', onTouchEnd, { passive: false })
 
     // F-21: 拖拽上传文件
     function onDragOver(e: DragEvent) {
@@ -1340,6 +1468,8 @@ export default function Terminal({ token }: Props) {
     showScrollbackRef.current = false
     setShowScrollback(false)
     setScrollbackContent('')
+    scrollbackCacheRef.current = null
+    scrollbackPrefetchRef.current = null
   }
 
   function handleOverlayScroll(e: React.UIEvent<HTMLDivElement>) {
@@ -1355,14 +1485,24 @@ export default function Terminal({ token }: Props) {
     showScrollbackRef.current = true
     swipeUpAccumRef.current = 0
     setShowScrollback(true)
-    setScrollbackLoading(true)
 
+    // Use pre-fetched cache if available (no loading flash)
+    if (scrollbackCacheRef.current !== null) {
+      setScrollbackContent(scrollbackCacheRef.current)
+      setScrollbackLoading(false)
+      return
+    }
+
+    setScrollbackLoading(true)
     const wi = activeWindowIndexRef.current
     const s = activeTmuxSessionRef.current
-    fetch(`/api/sessions/${wi}/scrollback?session=${encodeURIComponent(s)}&lines=3000`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    const promise = scrollbackPrefetchRef.current ??
+      fetch(`/api/sessions/${wi}/scrollback?session=${encodeURIComponent(s)}&lines=3000`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then(r => r.ok ? r.json() : Promise.reject(r.status))
+
+    scrollbackPrefetchRef.current = null
+    promise
       .then(({ content }: { content: string }) => {
         setScrollbackContent(content.trimEnd())
         setScrollbackLoading(false)
@@ -1396,80 +1536,13 @@ export default function Terminal({ token }: Props) {
     onOpenWorkspace: () => setShowWorkspace(true),
     onUpload: handleFileUpload,
     onUploadFile: uploadFile,
+    onShowCopySheet: (text: string) => setCopySheetText(text),
     collapsed: toolbarCollapsed,
     onCollapsedChange: setToolbarCollapsed,
   }
 
   return (
     <div className="flex flex-col w-full relative" style={{ height: vvHeight ?? '100dvh' }}>
-      {/* Profile 引导界面 */}
-      {showProfileGuide && (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-nexus-bg/95 backdrop-blur-sm p-4">
-          <div className="bg-nexus-bg-2 rounded-xl p-8 max-w-md w-full shadow-[0_8px_32px_rgba(0,0,0,0.4)] border border-nexus-border">
-            <div className="text-center mb-6">
-              <div className="w-16 h-16 bg-nexus-accent/10 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Icon name="settings" size={32} className="text-nexus-accent" />
-              </div>
-              <h2 className="text-nexus-text text-xl font-bold mb-2">需要创建 Claude Profile</h2>
-              <p className="text-nexus-text-2 text-sm">
-                检测到还没有配置 Claude API Profile。在使用 Nexus 之前，需要先创建一个配置文件。
-              </p>
-            </div>
-
-            <div className="bg-nexus-bg rounded-lg p-4 mb-6 border border-nexus-border">
-              <p className="text-nexus-text text-sm font-medium mb-2">在服务器上执行以下命令：</p>
-              <code className="block bg-nexus-bg-2 rounded p-3 text-nexus-muted text-xs font-mono overflow-x-auto whitespace-pre">
-{`mkdir -p data/configs
-cat > data/configs/anthropic.json << 'EOF'
-{
-  "label": "Anthropic Claude",
-  "BASE_URL": "",
-  "AUTH_TOKEN": "",
-  "API_KEY": "",
-  "DEFAULT_MODEL": "claude-sonnet-4-6",
-  "THINK_MODEL": "claude-opus-4-6",
-  "LONG_CONTEXT_MODEL": "claude-opus-4-6",
-  "DEFAULT_HAIKU_MODEL": "claude-haiku-4-5-20251001",
-  "API_TIMEOUT_MS": "3000000"
-}
-EOF`}
-              </code>
-            </div>
-
-            <div className="flex flex-col gap-3">
-              <button
-                onClick={() => {
-                  fetch('/api/configs', { headers: { Authorization: `Bearer ${token}` } })
-                    .then(r => r.json())
-                    .then(configs => {
-                      const hasAny = Array.isArray(configs) && configs.length > 0
-                      if (hasAny) {
-                        setHasProfiles(true)
-                        setShowProfileGuide(false)
-                      } else {
-                        alert('仍未检测到 Profile，请先执行上方命令创建')
-                      }
-                    })
-                }}
-                className="w-full bg-nexus-accent border-none rounded-lg text-white text-base font-semibold py-3 cursor-pointer hover:bg-nexus-accent/90 transition-colors"
-              >
-                我已创建，重新检测
-              </button>
-              <button
-                onClick={() => setShowProfileGuide(false)}
-                className="w-full bg-transparent border border-nexus-border rounded-lg text-nexus-text-2 text-base py-3 cursor-pointer hover:bg-nexus-bg transition-colors"
-              >
-                稍后设置
-              </button>
-            </div>
-
-            <p className="text-nexus-muted text-xs text-center mt-4">
-              详细说明请参考 <a href="https://github.com/librae8226/nexus4cc/blob/master/docs/QUICKSTART.md" target="_blank" rel="noopener noreferrer" className="text-nexus-accent hover:underline">QUICKSTART.md</a>
-            </p>
-          </div>
-        </div>
-      )}
-
       <input
         ref={inputRef}
         className="fixed top-0 left-0 w-px h-px opacity-[0.01] text-base pointer-events-none -z-10"
@@ -1657,7 +1730,7 @@ EOF`}
               )}
             </div>
             <div className="flex-1 flex flex-col min-w-0 relative">
-              <div ref={containerRef} className="flex-1 overflow-hidden relative" onClick={() => termRef.current?.textarea?.focus()} />
+              <div ref={containerRef} className="flex-1 overflow-hidden relative" />
               {isConnecting && (
                 <div className="absolute inset-0 bg-nexus-bg flex flex-col items-center justify-center gap-3 z-10">
                   <div className="w-8 h-8 border-[3px] border-nexus-border border-t-nexus-accent rounded-full animate-spin" />
@@ -1797,6 +1870,7 @@ EOF`}
         <Suspense fallback={null}>
           <FilePanel
             token={token}
+            session={activeTmuxSession}
             onClose={() => setShowFiles(false)}
           />
         </Suspense>
@@ -1809,6 +1883,38 @@ EOF`}
             currentSession={activeTmuxSession}
           />
         </Suspense>
+      )}
+      {copySheetText !== null && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-end justify-center bg-black/40"
+          onClick={() => setCopySheetText(null)}
+        >
+          <div
+            className="w-full max-w-lg bg-nexus-bg border-t border-nexus-border rounded-t-xl p-4 max-h-[60vh] flex flex-col gap-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-nexus-text font-medium text-sm">Terminal Content</span>
+              <button
+                className="text-xs px-3 py-1 rounded bg-nexus-accent text-white"
+                onClick={() => setCopySheetText(null)}
+              >
+                Close
+              </button>
+            </div>
+            <textarea
+              readOnly
+              value={copySheetText}
+              className="w-full flex-1 min-h-[200px] bg-nexus-surface text-nexus-text text-xs font-mono p-3 rounded border border-nexus-border resize-none"
+              style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+              onFocus={(e) => {
+                e.currentTarget.select()
+                e.currentTarget.setSelectionRange(0, e.currentTarget.value.length)
+              }}
+            />
+            <p className="text-nexus-text-2 text-xs text-center">Long press to select and copy</p>
+          </div>
+        </div>
       )}
       {showSettings && (
         <Suspense fallback={null}>
@@ -1953,9 +2059,11 @@ EOF`}
               {scrollbackLoading ? (
                 <div className="text-center p-8" style={{ color: termMuted, fontFamily: termFontFamily, fontSize: termFontSize }}>加载中...</div>
               ) : (
-                <pre className="m-0 p-0 whitespace-pre-wrap break-all leading-tight" style={{ fontFamily: termFontFamily, fontSize: termFontSize, color: termFg }}>
-                  {scrollbackContent}
-                </pre>
+                <pre
+                  className="m-0 p-0 whitespace-pre-wrap break-all leading-tight"
+                  style={{ fontFamily: termFontFamily, fontSize: termFontSize, color: termFg }}
+                  dangerouslySetInnerHTML={{ __html: ansiToHtml(scrollbackContent) }}
+                />
               )}
             </div>
           </div>

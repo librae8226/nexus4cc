@@ -46,13 +46,16 @@
 .xterm {
   height: 100% !important;
   width: 100% !important;
+  overflow: hidden !important;
 }
 .xterm-viewport {
   z-index: 0 !important;
   height: 100% !important;
   width: 100% !important;
+  overflow-x: hidden !important;
 }
 .xterm-screen {
   height: 100% !important;
   width: 100% !important;
+  overflow: hidden !important;
 }

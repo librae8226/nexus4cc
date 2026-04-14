@@ -19,6 +19,7 @@ interface FileGroup {
 
 interface Props {
   token: string
+  session: string
   onClose: () => void
 }
 
@@ -39,7 +40,7 @@ function useFormatDate() {
   }
 }
 
-export default function FilePanel({ token, onClose }: Props) {
+export default function FilePanel({ token, session, onClose }: Props) {
   const { t } = useTranslation()
   const formatDate = useFormatDate()
   const [groups, setGroups] = useState<FileGroup[]>([])
@@ -71,7 +72,7 @@ export default function FilePanel({ token, onClose }: Props) {
 
   const fetchFiles = useCallback(async () => {
     try {
-      const r = await fetch('/api/files', {
+      const r = await fetch(`/api/files?session=${encodeURIComponent(session)}`, {
         headers: { Authorization: `Bearer ${token}` }
       })
       if (r.ok) {
@@ -131,10 +132,10 @@ export default function FilePanel({ token, onClose }: Props) {
     }
   }
 
-  async function deleteFile(date: string, filename: string) {
+  async function deleteFile(fullPath: string, filename: string) {
     if (!confirm(t('files.deleteConfirm', { filename }))) return
     try {
-      const r = await fetch(`/api/files/${date}/${encodeURIComponent(filename)}`, {
+      const r = await fetch(`/api/files/content?path=${encodeURIComponent(fullPath)}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
       })
@@ -149,7 +150,7 @@ export default function FilePanel({ token, onClose }: Props) {
   async function deleteAllFiles() {
     if (!confirm(t('files.deleteAllConfirm', { count: totalFiles }))) return
     try {
-      const r = await fetch('/api/files/all', {
+      const r = await fetch(`/api/files/all?session=${encodeURIComponent(session)}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
       })
@@ -261,7 +262,7 @@ export default function FilePanel({ token, onClose }: Props) {
                     {isCopied ? t('common.copied') : t('common.copy')}
                   </button>
                   <button
-                    onClick={() => deleteFile(file.date, file.name)}
+                    onClick={() => deleteFile(file.fullPath, file.name)}
                     className="bg-transparent border-none text-nexus-error cursor-pointer p-1.5 flex items-center justify-center opacity-60"
                     title={t('common.delete')}
                   >
@@ -309,7 +310,7 @@ export default function FilePanel({ token, onClose }: Props) {
                         {isCopied ? t('common.copied') : t('common.copy')}
                       </button>
                       <button
-                        onClick={() => deleteFile(group.date, file.name)}
+                        onClick={() => deleteFile(file.fullPath, file.name)}
                         className="bg-transparent border-none text-nexus-error cursor-pointer p-1.5 flex items-center justify-center opacity-60"
                         title={t('common.delete')}
                       >

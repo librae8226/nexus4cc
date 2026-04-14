@@ -5,10 +5,11 @@ import * as pty from 'node-pty';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { createServer } from 'node:http';
-import { exec, spawn, execSync } from 'child_process';
+import { exec, spawn, execSync, execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { dirname, join, normalize, isAbsolute } from 'path';
+import { dirname, join, normalize, isAbsolute, basename } from 'path';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, statSync, rmdirSync, renameSync, cpSync, rmSync } from 'fs';
+import { readdir, stat as statAsync } from 'fs/promises';
 import https from 'node:https';
 import multer from 'multer';
 
@@ -34,10 +35,39 @@ const DATA_DIR = join(__dirname, 'data');
 const TOOLBAR_CONFIG_FILE = join(DATA_DIR, 'toolbar-config.json');
 const CONFIGS_DIR = join(DATA_DIR, 'configs');
 const TASKS_FILE = join(DATA_DIR, 'tasks.json');
-const UPLOADS_DIR = join(DATA_DIR, 'uploads');
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 if (!existsSync(CONFIGS_DIR)) mkdirSync(CONFIGS_DIR, { recursive: true });
-if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
+
+// 自动确保 anthropic.json 存在（无需用户手动创建）
+// 优先级：已有文件不覆盖；API_KEY 从环境变量 ANTHROPIC_API_KEY 检测
+{
+  const anthropicProfile = join(CONFIGS_DIR, 'anthropic.json');
+  if (!existsSync(anthropicProfile)) {
+    // 检测本地 CC 是否已 login（~/.claude.json 有 oauthAccount）
+    let isLoggedIn = false;
+    try {
+      const claudeJson = JSON.parse(readFileSync(join(process.env.HOME || '~', '.claude.json'), 'utf8'));
+      isLoggedIn = !!(claudeJson.oauthAccount?.accountUuid);
+    } catch { /* 未登录或文件不存在 */ }
+
+    const apiKey = process.env.ANTHROPIC_API_KEY || '';
+
+    if (isLoggedIn || apiKey) {
+      writeFileSync(anthropicProfile, JSON.stringify({
+        label: 'Anthropic Claude',
+        BASE_URL: '',
+        AUTH_TOKEN: '',
+        API_KEY: apiKey,
+        DEFAULT_MODEL: 'claude-sonnet-4-6',
+        THINK_MODEL: 'claude-opus-4-6',
+        LONG_CONTEXT_MODEL: 'claude-opus-4-6',
+        DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5-20251001',
+        API_TIMEOUT_MS: '3000000',
+      }, null, 2), 'utf8');
+      console.log(`[Nexus] Auto-created anthropic profile (${isLoggedIn ? 'oauth login' : 'API key from env'})`);
+    }
+  }
+}
 
 const app = express();
 app.use(express.json());
@@ -346,24 +376,24 @@ app.get('/api/browse', authMiddleware, (req, res) => {
 })
 
 // GET /api/workspace/files — 浏览文件系统（支持文件和目录，任意路径）
-app.get('/api/workspace/files', authMiddleware, (req, res) => {
+app.get('/api/workspace/files', authMiddleware, async (req, res) => {
   try {
     let p = req.query.path || WORKSPACE_ROOT
     if (p === '~') p = WORKSPACE_ROOT
     if (!isAbsolute(p)) p = join(WORKSPACE_ROOT, p)
     p = normalize(p)
-    const entries = readdirSync(p, { withFileTypes: true })
-      .filter(e => !e.name.startsWith('.')) // 隐藏文件不显示
-      .map(e => {
-        const fullPath = join(p, e.name)
-        const st = statSync(fullPath)
-        return {
-          name: e.name,
-          type: e.isDirectory() ? 'dir' : 'file',
-          size: e.isFile() ? st.size : undefined,
-          mtime: st.mtimeMs,
-        }
-      })
+    const dirents = await readdir(p, { withFileTypes: true })
+    const visible = dirents.filter(e => !e.name.startsWith('.'))
+    const entries = await Promise.all(visible.map(async e => {
+      const fullPath = join(p, e.name)
+      const st = await statAsync(fullPath)
+      return {
+        name: e.name,
+        type: e.isDirectory() ? 'dir' : 'file',
+        size: e.isFile() ? st.size : undefined,
+        mtime: st.mtimeMs,
+      }
+    }))
     res.json({ path: p, entries })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -404,6 +434,9 @@ app.use('/workspace', (req, res, next) => {
     }
     if (!existsSync(fullPath) || !statSync(fullPath).isFile()) {
       return res.status(404).send('not found')
+    }
+    if (req.query.dl === '1') {
+      res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(basename(fullPath))}`)
     }
     res.sendFile(fullPath)
   } catch (err) {
@@ -642,14 +675,17 @@ app.post('/api/upload', authMiddleware, (req, res, next) => {
   })
 })
 
-// ---- F-21: 独立文件上传 API（上传到 data/uploads，不混入项目目录）----
+// ---- F-21: 文件上传 API（上传到当前 workspace 的 data/uploads/）----
 
-// 按日期生成上传目录
-function getUploadDir() {
-  const dateDir = new Date().toISOString().slice(0, 10)
-  const dir = join(UPLOADS_DIR, dateDir)
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  return dir
+// 读取指定 session 的 uploads 目录（基于 tmux NEXUS_CWD 环境变量）
+function getWorkspaceUploadsDir(session = TMUX_SESSION) {
+  let cwd = WORKSPACE_ROOT
+  try {
+    const out = execSync(`tmux show-environment -t ${session} NEXUS_CWD 2>/dev/null`).toString().trim()
+    const m = out.match(/^NEXUS_CWD=(.+)$/)
+    if (m) cwd = m[1]
+  } catch {}
+  return join(cwd, 'data', 'uploads')
 }
 
 const fileUpload = multer({
@@ -657,7 +693,7 @@ const fileUpload = multer({
   limits: { fileSize: 100 * 1024 * 1024 } // 100MB
 })
 
-// POST /api/files/upload — 上传文件到 data/uploads/日期/
+// POST /api/files/upload — 上传文件到当前 workspace/data/uploads/日期/
 // Query: overwrite=1 强制覆盖已存在的文件
 app.post('/api/files/upload', authMiddleware, (req, res, next) => {
   fileUpload.single('file')(req, res, (err) => {
@@ -665,7 +701,8 @@ app.post('/api/files/upload', authMiddleware, (req, res, next) => {
     if (!req.file) return res.status(400).json({ error: 'no file' })
 
     const dateDir = new Date().toISOString().slice(0, 10)
-    const uploadDir = join(UPLOADS_DIR, dateDir)
+    const uploadsDir = getWorkspaceUploadsDir(req.query.session || TMUX_SESSION)
+    const uploadDir = join(uploadsDir, dateDir)
     if (!existsSync(uploadDir)) mkdirSync(uploadDir, { recursive: true })
 
     // 使用前端传递的原始文件名（避免 multer 解析编码问题）
@@ -687,7 +724,7 @@ app.post('/api/files/upload', authMiddleware, (req, res, next) => {
     // 写入文件
     try {
       writeFileSync(filePath, req.file.buffer)
-      const url = `/uploads/${dateDir}/${safe}`
+      const url = `/api/files/content?path=${encodeURIComponent(filePath)}`
       const responseData = {
         ok: true,
         filename: safe,
@@ -704,28 +741,39 @@ app.post('/api/files/upload', authMiddleware, (req, res, next) => {
   })
 })
 
-// 静态服务：上传的文件直接访问（/uploads/日期/文件名）
-app.use('/uploads', express.static(UPLOADS_DIR))
+// GET /api/files/content?path=... — 访问/下载已上传的文件（路径自描述，无状态）
+app.get('/api/files/content', authMiddleware, (req, res) => {
+  const filePath = req.query.path
+  if (!filePath || typeof filePath !== 'string') return res.status(400).json({ error: 'path required' })
+  const normalized = normalize(filePath)
+  if (!normalized.startsWith(WORKSPACE_ROOT)) return res.status(403).json({ error: 'access denied' })
+  if (!existsSync(normalized)) return res.status(404).json({ error: 'file not found' })
+  res.sendFile(normalized)
+})
 
-// GET /api/files — 列出上传的文件（按日期分组）
+// GET /api/files — 列出当前 workspace 上传的文件（按日期分组）
 app.get('/api/files', authMiddleware, (req, res) => {
   try {
+    const uploadsDir = getWorkspaceUploadsDir(req.query.session || TMUX_SESSION)
     const result = []
-    const dateDirs = readdirSync(UPLOADS_DIR, { withFileTypes: true })
+    if (!existsSync(uploadsDir)) return res.json(result)
+
+    const dateDirs = readdirSync(uploadsDir, { withFileTypes: true })
       .filter(e => e.isDirectory())
       .map(e => e.name)
       .sort((a, b) => b.localeCompare(a)) // 降序，最新的在前
 
     for (const dateDir of dateDirs) {
-      const dirPath = join(UPLOADS_DIR, dateDir)
+      const dirPath = join(uploadsDir, dateDir)
       const files = readdirSync(dirPath, { withFileTypes: true })
         .filter(e => e.isFile())
         .map(e => {
-          const stat = statSync(join(dirPath, e.name))
+          const fullPath = join(dirPath, e.name)
+          const stat = statSync(fullPath)
           return {
             name: e.name,
-            url: `/uploads/${dateDir}/${e.name}`,
-            fullPath: join(dirPath, e.name),
+            url: `/api/files/content?path=${encodeURIComponent(fullPath)}`,
+            fullPath,
             size: stat.size,
             created: stat.mtimeMs,
           }
@@ -741,35 +789,16 @@ app.get('/api/files', authMiddleware, (req, res) => {
   }
 })
 
-// DELETE /api/files/:date/:filename — 删除上传的文件
-app.delete('/api/files/:date/:filename', authMiddleware, (req, res) => {
-  const dateDir = req.params.date.replace(/[^0-9-]/g, '')
-  const filename = req.params.filename.replace(/[^a-zA-Z0-9._-]/g, '_')
-  const filePath = join(UPLOADS_DIR, dateDir, filename)
-  // 安全检查：确保文件在 uploads 目录内
-  if (!filePath.startsWith(UPLOADS_DIR)) {
-    return res.status(400).json({ error: 'invalid path' })
-  }
-  try {
-    if (existsSync(filePath)) {
-      unlinkSync(filePath)
-      res.json({ ok: true })
-    } else {
-      res.status(404).json({ error: 'file not found' })
-    }
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-// DELETE /api/files/all — 删除所有上传的文件
+// DELETE /api/files/all — 删除当前 workspace 所有上传的文件
 app.delete('/api/files/all', authMiddleware, (req, res) => {
   try {
-    const dateDirs = readdirSync(UPLOADS_DIR, { withFileTypes: true })
+    const uploadsDir = getWorkspaceUploadsDir(req.query.session || TMUX_SESSION)
+    if (!existsSync(uploadsDir)) return res.json({ ok: true, deletedCount: 0 })
+    const dateDirs = readdirSync(uploadsDir, { withFileTypes: true })
       .filter(e => e.isDirectory())
     let deletedCount = 0
     for (const dateDir of dateDirs) {
-      const dirPath = join(UPLOADS_DIR, dateDir.name)
+      const dirPath = join(uploadsDir, dateDir.name)
       const files = readdirSync(dirPath, { withFileTypes: true })
         .filter(e => e.isFile())
       for (const file of files) {
@@ -785,6 +814,24 @@ app.delete('/api/files/all', authMiddleware, (req, res) => {
       } catch {}
     }
     res.json({ ok: true, deletedCount })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// DELETE /api/files/content?path=... — 删除指定文件（路径自描述）
+app.delete('/api/files/content', authMiddleware, (req, res) => {
+  const filePath = req.query.path
+  if (!filePath || typeof filePath !== 'string') return res.status(400).json({ error: 'path required' })
+  const normalized = normalize(filePath)
+  if (!normalized.startsWith(WORKSPACE_ROOT)) return res.status(403).json({ error: 'access denied' })
+  try {
+    if (existsSync(normalized)) {
+      unlinkSync(normalized)
+      res.json({ ok: true })
+    } else {
+      res.status(404).json({ error: 'file not found' })
+    }
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -822,7 +869,7 @@ app.get('/api/sessions/:id/scrollback', authMiddleware, (req, res) => {
   const windowIndex = parseInt(req.params.id, 10)
   const session = req.query.session || TMUX_SESSION
   const lines = Math.min(parseInt(req.query.lines || '3000', 10), 10000)
-  exec(`tmux capture-pane -p -S -${lines} -t ${session}:${windowIndex} 2>/dev/null`, (err, stdout) => {
+  exec(`tmux capture-pane -e -p -S -${lines} -t ${session}:${windowIndex} 2>/dev/null`, (err, stdout) => {
     if (err) return res.status(500).json({ error: err.message })
     // trim trailing spaces tmux pads to pane width
     const content = stdout.split('\n').map(l => l.trimEnd()).join('\n')
@@ -1641,23 +1688,34 @@ function ptyKey(session, windowIndex) {
 }
 
 function ensureWindowPty(session, windowIndex) {
-  const key = ptyKey(session, windowIndex);
-  if (ptyMap.has(key)) return { key, entry: ptyMap.get(key) };
-
-  // 确保 tmux session 存在
+  // Validate session exists as a real tmux session (execFileSync avoids shell expansion)
+  let safeSession = session;
   try {
-    execSync(`tmux has-session -t ${session} 2>/dev/null || tmux new-session -d -s ${session} -n shell "zsh"`);
-  } catch {}
+    execFileSync('tmux', ['has-session', '-t', session], { stdio: 'pipe' });
+  } catch {
+    // Requested session doesn't exist — fall back to default TMUX_SESSION
+    safeSession = TMUX_SESSION;
+    try {
+      execFileSync('tmux', ['has-session', '-t', TMUX_SESSION], { stdio: 'pipe' });
+    } catch {
+      // Default session also missing — create it
+      try { execFileSync('tmux', ['new-session', '-d', '-s', TMUX_SESSION, '-n', 'shell', 'zsh'], { stdio: 'pipe' }); } catch {}
+    }
+  }
+
+  const key = ptyKey(safeSession, windowIndex);
+  if (ptyMap.has(key)) return { key, entry: ptyMap.get(key) };
 
   // 检查窗口是否存在，不存在则 fallback 到第一个可用窗口
   let targetWindow = windowIndex;
   try {
-    const windows = execSync(`tmux list-windows -t ${session} -F "#I"`).toString().trim().split('\n');
+    const out = execFileSync('tmux', ['list-windows', '-t', safeSession, '-F', '#I'], { encoding: 'utf8', stdio: 'pipe' });
+    const windows = out.trim().split('\n');
     if (!windows.includes(String(windowIndex))) {
       if (windows.length > 0) {
         targetWindow = parseInt(windows[0], 10);
       } else {
-        execSync(`tmux new-window -t ${session} -n shell "zsh"`);
+        execFileSync('tmux', ['new-window', '-t', safeSession, '-n', 'shell', 'zsh'], { stdio: 'pipe' });
         targetWindow = 0;
       }
     }
@@ -1665,15 +1723,21 @@ function ensureWindowPty(session, windowIndex) {
     targetWindow = 0;
   }
 
-  const actualKey = ptyKey(session, targetWindow);
+  const actualKey = ptyKey(safeSession, targetWindow);
   if (ptyMap.has(actualKey)) return { key: actualKey, entry: ptyMap.get(actualKey) }; // reuse if fallback exists
 
-  const ptyProc = pty.spawn('tmux', ['attach-session', '-t', `${session}:${targetWindow}`], {
-    name: 'xterm-256color',
-    cols: 120,
-    rows: 30,
-    env: { ...process.env, LANG: 'C.UTF-8', TERM: 'xterm-256color' },
-  });
+  let ptyProc;
+  try {
+    ptyProc = pty.spawn('tmux', ['attach-session', '-t', `${safeSession}:${targetWindow}`], {
+      name: 'xterm-256color',
+      cols: 120,
+      rows: 30,
+      env: { ...process.env, LANG: 'C.UTF-8', TERM: 'xterm-256color' },
+    });
+  } catch (err) {
+    console.error(`pty.spawn failed for ${safeSession}:${targetWindow}:`, err.message);
+    return { key: actualKey, entry: { pty: null, clients: new Set(), clientSizes: new Map(), lastOutput: '', lastActivity: Date.now() } };
+  }
 
   const entry = { pty: ptyProc, clients: new Set(), clientSizes: new Map(), lastOutput: '', lastActivity: Date.now() };
   ptyMap.set(actualKey, entry);
@@ -1693,9 +1757,9 @@ function ensureWindowPty(session, windowIndex) {
     ptyMap.delete(actualKey);
     // 如果 window 还在，重新创建
     try {
-      const list = execSync(`tmux list-windows -t ${session} -F "#I"`).toString().trim().split('\n');
+      const list = execFileSync('tmux', ['list-windows', '-t', safeSession, '-F', '#I'], { encoding: 'utf8', stdio: 'pipe' }).trim().split('\n');
       if (list.includes(String(targetWindow))) {
-        setTimeout(() => ensureWindowPty(session, targetWindow), 100);
+        setTimeout(() => ensureWindowPty(safeSession, targetWindow), 100);
       }
     } catch {}
   });
