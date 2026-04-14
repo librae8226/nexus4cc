@@ -2039,7 +2039,7 @@ export default function Terminal({ token }: Props) {
         const termFontFamily = termRef.current?.options.fontFamily ?? 'Menlo, Monaco, monospace'
         const termMuted = (termTheme as any).brightBlack ?? '#4a5568'
         return (
-          <div className="fixed inset-0 z-[500] flex flex-col" style={{ background: termBg }}>
+          <div className="fixed inset-0 z-[500] flex flex-col" style={{ background: termBg, bottom: isWidePC ? 0 : toolbarHeightRef.current }}>
             <GhostShield />
             <div className="flex items-center justify-between px-3.5 py-2.5 border-b flex-shrink-0" style={{ borderColor: `${termMuted}44` }}>
               <span className="font-semibold text-sm" style={{ color: termFg }}>历史记录</span>

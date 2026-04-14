@@ -885,13 +885,77 @@ app.get('/api/sessions/:id/scrollback', authMiddleware, (req, res) => {
   const windowIndex = parseInt(req.params.id, 10)
   const session = req.query.session || TMUX_SESSION
   const lines = Math.min(parseInt(req.query.lines || '3000', 10), 10000)
-  exec(`tmux capture-pane -e -p -S -${lines} -t ${session}:${windowIndex} 2>/dev/null`, (err, stdout) => {
-    if (err) return res.status(500).json({ error: err.message })
-    // trim trailing spaces tmux pads to pane width
-    const content = stdout.split('\n').map(l => l.trimEnd()).join('\n')
-    res.json({ content })
+  const target = `${session}:${windowIndex}`
+
+  // Get pane height first, then capture content and dedup ghost frames
+  exec(`tmux display -p -t ${target} '#{pane_height}' 2>/dev/null`, (err, phOut) => {
+    const paneHeight = parseInt(phOut?.trim(), 10) || 50
+    exec(`tmux capture-pane -e -p -S -${lines} -t ${target} 2>/dev/null`, { maxBuffer: 5 * 1024 * 1024 }, (err, stdout) => {
+      if (err) return res.status(500).json({ error: err.message })
+      const rawLines = stdout.split('\n').map(l => l.trimEnd())
+      const content = dedupScrollback(rawLines, paneHeight).join('\n')
+      res.json({ content })
+    })
   })
 })
+
+// Remove "ghost frame" duplicates from scrollback caused by full-screen app re-renders.
+// Ghost frames are paneHeight-sized blocks pushed into scrollback when a full-screen app
+// redraws without alternate screen. Detection is purely content-based: hash each line,
+// compute rolling block fingerprints, and remove earlier duplicates. Zero hardcoded patterns.
+function dedupScrollback(lines, paneHeight) {
+  if (lines.length <= paneHeight * 2) return lines
+
+  const stripAnsi = s => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+  const scrollbackEnd = lines.length - paneHeight
+
+  // Hash each line (stripped of ANSI), using djb2
+  const lineHashes = new Int32Array(lines.length)
+  for (let i = 0; i < lines.length; i++) {
+    const s = stripAnsi(lines[i])
+    let h = 5381
+    for (let c = 0; c < s.length; c++) h = ((h << 5) + h + s.charCodeAt(c)) | 0
+    lineHashes[i] = h
+  }
+
+  // Block fingerprint: XOR of weighted line hashes over paneHeight lines
+  function blockFp(start) {
+    let fp = 0
+    for (let i = start; i < start + paneHeight && i < lines.length; i++) {
+      fp = (fp * 31 + lineHashes[i]) | 0
+    }
+    return fp
+  }
+
+  // Build map: fingerprint → last seen position (we keep the latest occurrence)
+  const seen = new Map()
+  const dupes = []
+
+  for (let i = 0; i <= scrollbackEnd - paneHeight; i += paneHeight) {
+    const fp = blockFp(i)
+    if (seen.has(fp)) {
+      // Verify: sample 8 lines to rule out hash collision
+      const prev = seen.get(fp)
+      const step = Math.max(1, paneHeight >> 3)
+      let match = true
+      for (let s = 0; s < paneHeight; s += step) {
+        if (lineHashes[prev + s] !== lineHashes[i + s]) { match = false; break }
+      }
+      if (match) dupes.push(prev)
+    }
+    seen.set(fp, i)
+  }
+
+  if (dupes.length === 0) return lines
+
+  const keep = new Uint8Array(lines.length).fill(1)
+  for (const start of dupes) {
+    const end = Math.min(start + paneHeight, scrollbackEnd)
+    for (let j = start; j < end; j++) keep[j] = 0
+  }
+
+  return lines.filter((_, idx) => keep[idx])
+}
 
 // GET /api/config — 服务端配置信息（供前端初始化用）
 app.get('/api/config', authMiddleware, (req, res) => {

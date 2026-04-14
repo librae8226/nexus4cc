@@ -1,6 +1,6 @@
 {
   "name": "nexus-frontend",
-  "version": "4.4.8",
+  "version": "4.5.0",
   "private": true,
   "scripts": {
     "dev": "vite",
@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-serialize": "^0.14.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
     "dompurify": "^3.3.3",
