@@ -10,6 +10,7 @@ export interface KeyDef {
 export interface ToolbarConfig {
   pinned: string[]
   expanded: string[]
+  custom?: KeyDef[]
 }
 
 // Unified label conventions:

@@ -31,7 +31,37 @@ interface Props {
   onCollapsedChange?: (collapsed: boolean) => void
 }
 
-const KEY_MAP = Object.fromEntries(ALL_KEYS.map(k => [k.id, k]))
+// Convert a user-typed label (e.g. "^X", "M-b", "Esc") to the raw seq bytes.
+// Returns null if unrecognized.
+function labelToSeq(label: string): string | null {
+  const l = label.trim()
+  if (!l) return null
+  // Named specials
+  const specials: Record<string, string> = {
+    'Esc': '\x1b', 'esc': '\x1b', 'ESC': '\x1b',
+    '↵': '\r', 'Enter': '\r', 'enter': '\r', '⏎': '\r',
+    '⌫': '\x7f', 'Backspace': '\x7f', 'BS': '\x7f',
+    '⇥': '\t', 'Tab': '\t', 'tab': '\t',
+    '^⇥': '\x1b[Z', 'S-Tab': '\x1b[Z',
+    '↑': '\x1b[A', '↓': '\x1b[B', '→': '\x1b[C', '←': '\x1b[D',
+    'Del': '\x1b[3~', 'Home': '\x1b[H', 'End': '\x1b[F',
+    'PgUp': '\x1b[5~', 'PgDn': '\x1b[6~',
+  }
+  if (specials[l] !== undefined) return specials[l]
+  // ^X → Ctrl+X byte (0x01..0x1a for A-Z)
+  const ctrlMatch = /^\^([a-zA-Z])$/.exec(l)
+  if (ctrlMatch) {
+    const letter = ctrlMatch[1].toUpperCase()
+    return String.fromCharCode(letter.charCodeAt(0) - 64)
+  }
+  // M-x or Mx → Alt+x → ESC + x
+  const altMatch = /^M-?([a-zA-Z0-9])$/.exec(l)
+  if (altMatch) return '\x1b' + altMatch[1].toLowerCase()
+  // Single plain char
+  if (l.length === 1) return l
+  // Fallback: let JSON decode escape sequences (\x18 etc.)
+  try { return JSON.parse('"' + l.replace(/"/g, '\\"') + '"') } catch { return null }
+}
 
 const CONFIG_KEY = 'nexus_toolbar_v2'
 const USER_DEFAULT_KEY = 'nexus_toolbar_default'
@@ -250,7 +280,8 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
   }
 
   function resetConfig() {
-    updateConfig(loadDefault())
+    const d = loadDefault()
+    updateConfig({ ...d, custom: config.custom })
   }
 
   function saveAsDefault() {
@@ -291,8 +322,46 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
     return arr
   }
 
+  const allKeys = [...ALL_KEYS, ...(config.custom ?? [])]
+  const KEY_MAP = Object.fromEntries(allKeys.map(k => [k.id, k]))
   const usedIds = new Set([...config.pinned, ...config.expanded])
-  const availableKeys = ALL_KEYS.filter(k => !usedIds.has(k.id))
+  const availableKeys = allKeys.filter(k => !usedIds.has(k.id))
+  const customKeys = config.custom ?? []
+
+  // ---- Custom key form state ----
+  const [newLabel, setNewLabel] = useState('')
+  const [newDesc, setNewDesc] = useState('')
+  const [formError, setFormError] = useState('')
+
+  function addCustomKey() {
+    const label = newLabel.trim()
+    if (!label) { setFormError('label required'); return }
+    const seq = labelToSeq(label)
+    if (seq === null) { setFormError('unrecognized label — see hints below'); return }
+    const id = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    const keyDef: KeyDef = {
+      id,
+      label,
+      seq,
+      desc: newDesc.trim() || label,
+      category: 'control',
+    }
+    updateConfig({
+      ...config,
+      custom: [...customKeys, keyDef],
+      expanded: [...config.expanded, id],
+    })
+    setNewLabel(''); setNewDesc(''); setFormError('')
+  }
+
+  function deleteCustomKey(id: string) {
+    updateConfig({
+      ...config,
+      pinned: config.pinned.filter(k => k !== id),
+      expanded: config.expanded.filter(k => k !== id),
+      custom: customKeys.filter(k => k.id !== id),
+    })
+  }
 
   // ---- 渲染按键 ----
   function renderKeys(ids: string[]) {
@@ -388,6 +457,75 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
               })}
             </div>
           ))}
+
+          {/* 自定义按键 */}
+          <div className="mb-1">
+            <div className={isPC ? 'text-nexus-text-2 text-xs px-5 py-2.5 pb-1.5 tracking-wide uppercase' : 'text-nexus-text-2 text-[11px] px-2.5 py-1.5 pb-[3px] tracking-wide uppercase'}>
+              Custom Keys
+            </div>
+            {customKeys.map(key => {
+              const inPinned = config.pinned.includes(key.id)
+              const inExpanded = config.expanded.includes(key.id)
+              return (
+                <div key={key.id} className={isPC ? 'flex items-center px-5 h-12 gap-3 border-b border-nexus-border box-border' : 'flex items-center px-2.5 h-12 gap-2 border-b border-nexus-border box-border'}>
+                  <span className={isPC ? 'text-nexus-text font-mono text-sm min-w-[60px] shrink-0' : 'text-nexus-text font-mono text-[13px] min-w-[48px] shrink-0'}>{key.label}</span>
+                  <span className={isPC ? 'text-nexus-text-2 text-xs flex-1 overflow-hidden text-ellipsis whitespace-nowrap' : 'text-nexus-text-2 text-[11px] flex-1 overflow-hidden text-ellipsis whitespace-nowrap'}>{key.desc}</span>
+                  <div className="flex gap-1 shrink-0">
+                    {!inPinned && !inExpanded && (
+                      <>
+                        <button className={isPC ? addBtnPCClass : addBtnClass} onPointerDown={(e) => { e.preventDefault(); addKey('pinned', key.id) }}>{t('toolbar.pinToFixed')}</button>
+                        <button className={isPC ? addBtnPCClass : addBtnClass} onPointerDown={(e) => { e.preventDefault(); addKey('expanded', key.id) }}>{t('toolbar.pinToExpand')}</button>
+                      </>
+                    )}
+                    {inExpanded && (
+                      <button className={isPC ? addBtnPCClass : addBtnClass} onPointerDown={(e) => { e.preventDefault(); updateConfig({ ...config, expanded: config.expanded.filter(k => k !== key.id), pinned: [...config.pinned, key.id] }) }}>→ {t('toolbar.pinToFixed')}</button>
+                    )}
+                    {inPinned && (
+                      <button className={isPC ? addBtnPCClass : addBtnClass} onPointerDown={(e) => { e.preventDefault(); updateConfig({ ...config, pinned: config.pinned.filter(k => k !== key.id), expanded: [...config.expanded, key.id] }) }}>→ {t('toolbar.pinToExpand')}</button>
+                    )}
+                    <button
+                      className={isPC ? 'bg-transparent border-none text-nexus-error cursor-pointer text-xl px-2 py-1 shrink-0 leading-none flex items-center justify-center' : 'bg-transparent border-none text-nexus-error cursor-pointer text-lg px-0.5 shrink-0 leading-none flex items-center justify-center'}
+                      onPointerDown={(e) => { e.preventDefault(); deleteCustomKey(key.id) }}
+                      title="Delete"
+                    >
+                      <Icon name="x" size={14} />
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+            {/* 新增表单 */}
+            <div className={isPC ? 'flex flex-col gap-2 px-5 py-3 border-b border-nexus-border' : 'flex flex-col gap-1.5 px-2.5 py-2 border-b border-nexus-border'}>
+              <div className="flex gap-2">
+                <input
+                  value={newLabel}
+                  onChange={(e) => setNewLabel(e.target.value)}
+                  placeholder="Key (e.g. ^X)"
+                  className="flex-1 min-w-0 bg-nexus-bg-2 border border-nexus-border rounded px-2 py-1.5 text-nexus-text text-sm outline-none font-mono"
+                />
+                <input
+                  value={newDesc}
+                  onChange={(e) => setNewDesc(e.target.value)}
+                  placeholder="Description (optional)"
+                  className="flex-1 min-w-0 bg-nexus-bg-2 border border-nexus-border rounded px-2 py-1.5 text-nexus-text text-sm outline-none"
+                />
+                <button
+                  onPointerDown={(e) => { e.preventDefault(); addCustomKey() }}
+                  className="px-3 py-1.5 rounded bg-nexus-accent text-white text-sm font-medium cursor-pointer border-none shrink-0"
+                >
+                  Add
+                </button>
+              </div>
+              {formError && <div className="text-nexus-error text-xs">{formError}</div>}
+              <div className="text-nexus-text-2 text-[11px] leading-relaxed">
+                <div>Notation:</div>
+                <div>• <code>^</code> = Ctrl，如 <code>^X</code> = Ctrl+X（tmux prefix）</div>
+                <div>• <code>M-</code> = Alt，如 <code>M-b</code> = Alt+b</div>
+                <div>• 特殊键：<code>Esc</code> <code>↵</code> <code>⌫</code> <code>⇥</code> <code>↑</code> <code>↓</code> <code>←</code> <code>→</code> <code>Del</code> <code>Home</code> <code>End</code> <code>PgUp</code> <code>PgDn</code></div>
+                <div>• 单个可打印字符直接输入即可</div>
+              </div>
+            </div>
+          </div>
 
           {/* 可添加 */}
           {availableKeys.length > 0 && (
