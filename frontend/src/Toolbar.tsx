@@ -627,13 +627,25 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
   )
 
   // 隐藏的文件输入框（移动端和PC端都需要）
+  // iOS Safari 对 className="hidden"（display:none）的 <input type="file"> 调 .click()
+  // 会完全无响应 —— 系统必须判定 input 是"真实可交互元素"才会弹相册/文件选择器。
+  // 改用 left:-9999px 把 input 挪出屏幕外，保留 interactive 语义，iOS 就会弹 picker。
+  const hiddenFileInputStyle: React.CSSProperties = {
+    position: 'fixed',
+    top: 0,
+    left: -9999,
+    width: 44,
+    height: 44,
+    opacity: 0.01,
+    fontSize: 16,
+  }
   const fileInputsEl = (
     <>
       <input
         ref={fileInputRef}
         type="file"
         accept="image/*,video/*"
-        className="hidden"
+        style={hiddenFileInputStyle}
         onChange={(e) => {
           const file = e.target.files?.[0]
           if (file && onUploadFile) { onUploadFile(file) }
@@ -644,7 +656,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
         ref={pasteFileRef}
         type="file"
         accept="*/*"
-        className="hidden"
+        style={hiddenFileInputStyle}
         onChange={(e) => {
           const file = e.target.files?.[0]
           if (file && onUploadFile) { onUploadFile(file) }
@@ -700,7 +712,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
             )}
             <button
               className={iconBtnPCClass}
-              onPointerDown={(e) => { e.preventDefault(); fileInputRef.current?.click() }}
+              onClick={() => { fileInputRef.current?.click() }}
               title={t('toolbar.pasteUpload')}
             ><Icon name="paperclip" size={18} /></button>
           </div>
@@ -782,11 +794,11 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
               <GhostShield />
               <div className="fixed inset-0 z-[300]" onPointerDown={() => setShowUploadMenu(false)} />
               <div className="fixed bg-nexus-menu-bg border border-nexus-border rounded-lg py-1 min-w-[120px] z-[400] shadow-[0_4px_16px_rgba(0,0,0,0.3)]" style={{ bottom: uploadMenuPos.bottom, right: uploadMenuPos.right }}>
-                <button className={quickMenuItemClass} onPointerDown={(e) => { e.preventDefault(); fileInputRef.current?.click(); setShowUploadMenu(false) }}>
+                <button className={quickMenuItemClass} onClick={() => { setShowUploadMenu(false); fileInputRef.current?.click() }}>
                   <Icon name="image" size={16} />
                   <span>{t('toolbar.photos')}</span>
                 </button>
-                <button className={quickMenuItemClass} onPointerDown={(e) => { e.preventDefault(); pasteFileRef.current?.click(); setShowUploadMenu(false) }}>
+                <button className={quickMenuItemClass} onClick={() => { setShowUploadMenu(false); pasteFileRef.current?.click() }}>
                   <Icon name="folder" size={16} />
                   <span>{t('toolbar.files')}</span>
                 </button>
@@ -864,11 +876,11 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
             <GhostShield />
             <div className="fixed inset-0 z-[300]" onPointerDown={() => setShowUploadMenu(false)} />
             <div className="fixed bg-nexus-menu-bg border border-nexus-border rounded-lg py-1 min-w-[120px] z-[400] shadow-[0_-4px_16px_rgba(0,0,0,0.3)]" style={{ bottom: uploadMenuPos.bottom, right: uploadMenuPos.right }}>
-              <button className={quickMenuItemClass} onPointerDown={(e) => { e.preventDefault(); fileInputRef.current?.click(); setShowUploadMenu(false) }}>
+              <button className={quickMenuItemClass} onClick={() => { setShowUploadMenu(false); fileInputRef.current?.click() }}>
                 <Icon name="image" size={16} />
                 <span>{t('toolbar.photos')}</span>
               </button>
-              <button className={quickMenuItemClass} onPointerDown={(e) => { e.preventDefault(); pasteFileRef.current?.click(); setShowUploadMenu(false) }}>
+              <button className={quickMenuItemClass} onClick={() => { setShowUploadMenu(false); pasteFileRef.current?.click() }}>
                 <Icon name="folder" size={16} />
                 <span>{t('toolbar.files')}</span>
               </button>
