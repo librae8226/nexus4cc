@@ -974,6 +974,48 @@ app.get('/api/tmux-sessions', authMiddleware, (req, res) => {
   })
 })
 
+// POST /api/launch-iterm — 在本机启动 iTerm2 并用 tmux -CC 集成模式接管指定 session
+// 仅在 server 与 iTerm2 同机时有意义（macOS only）。
+app.post('/api/launch-iterm', authMiddleware, (req, res) => {
+  if (process.platform !== 'darwin') {
+    return res.status(400).json({ error: 'launch-iterm requires macOS host' })
+  }
+  const session = req.body?.session
+  if (!session || typeof session !== 'string') {
+    return res.status(400).json({ error: 'session required' })
+  }
+  if (/["'\\`$]/.test(session)) {
+    return res.status(400).json({ error: 'invalid session name' })
+  }
+  try {
+    execSync(`tmux has-session -t '${session}' 2>/dev/null`)
+  } catch {
+    return res.status(404).json({ error: 'session not found' })
+  }
+  const appleScript = `on run argv
+  set sess to item 1 of argv
+  tell application "iTerm2"
+    activate
+    set newWin to (create window with default profile)
+    tell current session of newWin
+      write text "tmux -CC attach -t \\"" & sess & "\\""
+    end tell
+  end tell
+end run`
+  try {
+    const proc = spawn('osascript', ['-', session], {
+      detached: true,
+      stdio: ['pipe', 'ignore', 'ignore'],
+    })
+    proc.stdin.write(appleScript)
+    proc.stdin.end()
+    proc.unref()
+    return res.json({ ok: true, session })
+  } catch (e) {
+    return res.status(500).json({ error: String(e) })
+  }
+})
+
 // ========== F-20: Project-Channel API ==========
 // Project = tmux session, Channel = tmux window (within a session)
 
@@ -1065,6 +1107,16 @@ app.post('/api/projects', authMiddleware, (req, res) => {
   if (!path) return res.status(400).json({ error: 'path required' })
 
   const cwd = path.startsWith('/') ? path : `${WORKSPACE_ROOT}/${path}`
+  if (!existsSync(cwd)) {
+    return res.status(400).json({ error: `工作目录不存在：${cwd}` })
+  }
+  try {
+    if (!statSync(cwd).isDirectory()) {
+      return res.status(400).json({ error: `不是目录：${cwd}` })
+    }
+  } catch (e) {
+    return res.status(400).json({ error: `无法访问：${cwd}（${e.message}）` })
+  }
 
   // project 名称基于路径：把 / 替换成 -，并去除首尾 -
   let projectName = cwd.replace(/^\/+|\/+$/g, '').replace(/\//g, '-')
@@ -1100,9 +1152,11 @@ app.post('/api/projects', authMiddleware, (req, res) => {
   } else {
     if (profile) {
       const runScript = join(__dirname, 'nexus-run-claude.sh')
-      shellCmd = `${proxyPrefix}bash "${runScript}" ${profile} ${cwd}`
+      // claude 失败时给出提示，再 fallback 到交互 shell，避免窗口看起来"没反应"
+      // 注意：提示文本里不能有 `"`；用单引号避免与 execFileSync 的参数边界冲突
+      shellCmd = `${proxyPrefix}bash '${runScript}' ${profile} '${cwd}' || echo; echo '[Nexus] claude 退出或启动失败，fallback 到 ${INTERACTIVE_SHELL}（可直接输入 claude 重试）'; ${INTERACTIVE_SHELL_CMD}`
     } else {
-      shellCmd = `${proxyPrefix}claude --dangerously-skip-permissions; ${INTERACTIVE_SHELL_CMD}`
+      shellCmd = `${proxyPrefix}claude --dangerously-skip-permissions || echo; echo '[Nexus] claude 退出或启动失败，请确认已 claude login 或配置 API key'; ${INTERACTIVE_SHELL_CMD}`
     }
   }
 
@@ -1110,15 +1164,24 @@ app.post('/api/projects', authMiddleware, (req, res) => {
   const dirName = cwd.replace(/^\/+|\/+$/g, '').split('/').pop() || '~'
   const initialWindowName = profile ? `${dirName}-${profile}` : dirName
 
-  // 创建 tmux session（如果不存在）
+  // 创建 tmux session（改用 execFileSync，避免 shellCmd 含引号时 shell 参数解析错位
+  // 导致 tmux 收到截断的命令，window 瞬间退出 → session 消亡 → 后续 set-environment
+  // 报 "no such session"）
+  // 同时把 NEXUS_CWD 和 proxy vars 通过 `-e KEY=VAL` 在 new-session 时一次性注入，
+  // 避免 session 存活不稳时后置 set-environment 失败
+  const newSessionArgs = [
+    'new-session', '-d',
+    '-s', finalName,
+    '-n', initialWindowName,
+    '-c', cwd,
+    '-e', `NEXUS_CWD=${cwd}`,
+  ]
+  for (const [key, value] of Object.entries(proxyVars)) {
+    newSessionArgs.push('-e', `${key}=${value}`)
+  }
+  newSessionArgs.push(shellCmd)
   try {
-    execSync(`tmux new-session -d -s ${finalName} -n "${initialWindowName}" -c "${cwd}" "${shellCmd}"`)
-    // 设置 NEXUS_CWD
-    execSync(`tmux set-environment -t ${finalName} NEXUS_CWD "${cwd}"`)
-    // 设置代理变量
-    for (const [key, value] of Object.entries(proxyVars)) {
-      try { execSync(`tmux set-environment -t ${finalName} ${key} "${value}" 2>/dev/null`) } catch {}
-    }
+    execFileSync('tmux', newSessionArgs, { stdio: 'pipe' })
   } catch (err) {
     return res.status(500).json({ error: 'failed to create project: ' + err.message })
   }
@@ -1141,6 +1204,9 @@ app.post('/api/projects/:name/channels', authMiddleware, (req, res) => {
       const match = envOutput.match(/^NEXUS_CWD=(.+)$/)
       if (match) cwd = match[1]
     } catch {}
+  }
+  if (!existsSync(cwd)) {
+    return res.status(400).json({ error: `工作目录不存在：${cwd}` })
   }
 
   // Channel 命名：profile 名[-序号]
@@ -1172,23 +1238,34 @@ app.post('/api/projects/:name/channels', authMiddleware, (req, res) => {
   } else {
     if (profile) {
       const runScript = join(__dirname, 'nexus-run-claude.sh')
-      shellCmd = `${proxyPrefix}bash "${runScript}" ${profile} ${cwd}`
+      shellCmd = `${proxyPrefix}bash '${runScript}' ${profile} '${cwd}' || echo; echo '[Nexus] claude 退出或启动失败，fallback 到 ${INTERACTIVE_SHELL}（可直接输入 claude 重试）'; ${INTERACTIVE_SHELL_CMD}`
     } else {
-      shellCmd = `${proxyPrefix}claude --dangerously-skip-permissions; ${INTERACTIVE_SHELL_CMD}`
+      shellCmd = `${proxyPrefix}claude --dangerously-skip-permissions || echo; echo '[Nexus] claude 退出或启动失败，请确认已 claude login 或配置 API key'; ${INTERACTIVE_SHELL_CMD}`
     }
   }
 
   // 确保 session 存在
   try {
-    execSync(`tmux has-session -t ${sessionName} 2>/dev/null || tmux new-session -d -s ${sessionName} -n shell "${INTERACTIVE_SHELL}"`)
-  } catch {}
+    execFileSync('tmux', ['has-session', '-t', sessionName], { stdio: 'pipe' })
+  } catch {
+    try {
+      execFileSync('tmux', ['new-session', '-d', '-s', sessionName, '-n', 'shell', INTERACTIVE_SHELL], { stdio: 'pipe' })
+    } catch {}
+  }
 
-  // 创建新 window
-  const cmd = `tmux new-window -t ${sessionName} -c "${cwd}" -n "${channelName}" "${shellCmd}"`
-  exec(cmd, (err) => {
-    if (err) return res.status(500).json({ error: err.message })
+  // 创建新 window —— 改 execFileSync 避免 shellCmd 引号嵌套问题
+  try {
+    execFileSync('tmux', [
+      'new-window',
+      '-t', sessionName,
+      '-c', cwd,
+      '-n', channelName,
+      shellCmd,
+    ], { stdio: 'pipe' })
     res.json({ name: channelName, cwd, shell_type, profile: profile || null, project: sessionName })
-  })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
 })
 
 // POST /api/projects/:name/activate — 切换到指定 Project（设置为目标 session）
