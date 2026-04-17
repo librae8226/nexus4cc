@@ -859,9 +859,10 @@ app.post('/api/sessions/:id/rename', authMiddleware, (req, res) => {
   const session = req.query.session || TMUX_SESSION
   const { name } = req.body || {}
   if (!name) return res.status(400).json({ error: 'name required' })
-  const safeName = name.replace(/[^a-zA-Z0-9._-]/g, '-').substring(0, 50)
-  // 改用 execFileSync + `--` 分隔，避免 safeName 以 `-` 开头时被 tmux 当成 flag
-  // （如 "--------" 会报 `invalid flag --`）
+  // window 名允许 Unicode（中日韩等），仅过滤控制字符和 tmux target separator ':'
+  // 之前的 /[^a-zA-Z0-9._-]/→'-' 会把中文全部变成 '-'，导致"我的频道" → "----"
+  const safeName = String(name).replace(/[\r\n\t\0:]/g, '').trim().slice(0, 50)
+  if (!safeName) return res.status(400).json({ error: 'name required' })
   try {
     execFileSync('tmux', ['rename-window', '-t', `${session}:${index}`, '--', safeName], { stdio: 'pipe' })
     res.json({ ok: true, name: safeName })
@@ -1310,7 +1311,9 @@ app.post('/api/projects/:name/rename', authMiddleware, (req, res) => {
   if (!newName || !newName.trim()) {
     return res.status(400).json({ error: 'new name required' })
   }
-  const sanitizedNewName = newName.trim().replace(/[^a-zA-Z0-9_\-]/g, '')
+  // session 名允许 Unicode，但不能含 tmux 保留字符（`:` `.`）、空白、路径分隔符、控制字符
+  // —— 之前的 /[^a-zA-Z0-9_\-]/→'' 把中文字符直接删掉，中文名会变空导致 invalid name
+  const sanitizedNewName = String(newName).trim().replace(/[\s:.\0\r\n\t\/\\]/g, '').slice(0, 50)
   if (!sanitizedNewName) {
     return res.status(400).json({ error: 'invalid name format' })
   }
