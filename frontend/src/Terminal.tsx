@@ -1556,11 +1556,20 @@ export default function Terminal({ token }: Props) {
         onCompositionEnd={handleCompositionEnd}
         aria-hidden="true"
       />
+      {/* iOS 相册/文件选择器有两条硬规则：
+           1) input 必须是"视觉上真实存在"的元素（不能 display:none / 0 尺寸 /
+              pointer-events:none，否则系统认为它不是 interactive，.click() 静默失败）
+           2) .click() 必须在用户手势同步栈里调用（已满足：onClick 里直接调）
+           方案：opacity 0.01 保持不可见，但尺寸放大、保留 pointer-events。
+           再叠加 left:-9999px 把它挪出屏幕外防止意外点击/视觉闪动，对
+           iOS 来说这仍视为有效元素。 */}
       <input
         ref={fileInputRef}
         type="file"
         accept="image/*,video/*"
-        className="fixed top-0 left-0 w-px h-px opacity-[0.01] text-base pointer-events-none -z-10"
+        multiple={false}
+        className="fixed top-0 opacity-[0.01]"
+        style={{ left: '-9999px', width: '44px', height: '44px', fontSize: '16px' }}
         onChange={(e) => {
           const file = e.target.files?.[0]
           if (file) uploadFile(file)
@@ -1571,7 +1580,8 @@ export default function Terminal({ token }: Props) {
       <input
         ref={pasteFileRef}
         type="file"
-        className="fixed top-0 left-0 w-px h-px opacity-[0.01] text-base pointer-events-none -z-10"
+        className="fixed top-0 opacity-[0.01]"
+        style={{ left: '-9999px', width: '44px', height: '44px', fontSize: '16px' }}
         onChange={(e) => {
           const file = e.target.files?.[0]
           if (file) uploadFile(file)
