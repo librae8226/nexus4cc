@@ -860,10 +860,14 @@ app.post('/api/sessions/:id/rename', authMiddleware, (req, res) => {
   const { name } = req.body || {}
   if (!name) return res.status(400).json({ error: 'name required' })
   const safeName = name.replace(/[^a-zA-Z0-9._-]/g, '-').substring(0, 50)
-  exec(`tmux rename-window -t ${session}:${index} "${safeName}"`, (err) => {
-    if (err) return res.status(500).json({ error: err.message })
+  // 改用 execFileSync + `--` 分隔，避免 safeName 以 `-` 开头时被 tmux 当成 flag
+  // （如 "--------" 会报 `invalid flag --`）
+  try {
+    execFileSync('tmux', ['rename-window', '-t', `${session}:${index}`, '--', safeName], { stdio: 'pipe' })
     res.json({ ok: true, name: safeName })
-  })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
 })
 
 // GET /api/sessions/:id/output — 获取窗口最后输出（F-15 状态卡片）
@@ -1324,10 +1328,12 @@ app.post('/api/projects/:name/rename', authMiddleware, (req, res) => {
     // 不存在，可以重命名
   }
   // 执行重命名
-  exec(`tmux rename-session -t ${oldName} ${sanitizedNewName}`, (err) => {
-    if (err) return res.status(500).json({ error: err.message })
+  try {
+    execFileSync('tmux', ['rename-session', '-t', oldName, '--', sanitizedNewName], { stdio: 'pipe' })
     res.json({ ok: true, oldName, newName: sanitizedNewName })
-  })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
 })
 
 // DELETE /api/projects/:name — 关闭 Project（kill tmux session）
