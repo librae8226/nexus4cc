@@ -6,6 +6,7 @@ set -e
 
 PROFILE="$1"
 PROJECT="$2"
+INTERACTIVE_SHELL="$(command -v zsh || command -v bash || echo /bin/sh)"
 
 if [ -z "$PROFILE" ] || [ -z "$PROJECT" ]; then
     echo "[Nexus] Usage: nexus-run-claude.sh <profile> <project_path>"
@@ -104,14 +105,14 @@ while true; do
     # kimi 不支持 claude -c 的 conversation resume，直接启动（历史通过左侧 Sessions 面板访问）
     claude --dangerously-skip-permissions || true
     echo ""
-    echo "[Nexus] Claude exited.  r=restart  b=bash shell  q=quit window"
+    echo "[Nexus] Claude exited.  r=restart  b=shell  q=quit window"
     read -r REPLY
     case "$REPLY" in
-        b) exec bash -i ;;
+        b) exec "$INTERACTIVE_SHELL" -i ;;
         q) break ;;
     esac
 done
 
 echo "[Nexus] Session ended."
-# 退出后启动 bash 保持窗口打开（防止用户意外关闭窗口）
-exec bash -i
+# 退出后启动交互 shell 保持窗口打开（优先 zsh，回退 bash）
+exec "$INTERACTIVE_SHELL" -i

@@ -35,3 +35,4 @@ data/*
 data/configs/*
 !data/configs/anthropic.json
 logs/
+.omx/
