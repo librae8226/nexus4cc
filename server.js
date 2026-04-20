@@ -693,14 +693,21 @@ app.post('/api/upload', authMiddleware, (req, res, next) => {
 
 // ---- F-21: 文件上传 API（上传到当前 workspace 的 data/uploads/）----
 
-// 读取指定 session 的 uploads 目录（基于 tmux NEXUS_CWD 环境变量）
+// 读取指定 session 的 uploads 目录
+// 优先级：NEXUS_CWD 环境变量 > tmux pane_current_path > WORKSPACE_ROOT
 function getWorkspaceUploadsDir(session = TMUX_SESSION) {
-  let cwd = WORKSPACE_ROOT
+  let cwd
   try {
     const out = execSync(`tmux show-environment -t ${session} NEXUS_CWD 2>/dev/null`).toString().trim()
     const m = out.match(/^NEXUS_CWD=(.+)$/)
     if (m) cwd = m[1]
   } catch {}
+  if (!cwd) {
+    try {
+      cwd = execSync(`tmux display-message -t ${session} -p '#{pane_current_path}' 2>/dev/null`).toString().trim()
+    } catch {}
+  }
+  if (!cwd) cwd = WORKSPACE_ROOT
   return join(cwd, 'data', 'uploads')
 }
 
@@ -762,7 +769,9 @@ app.get('/api/files/content', authMiddleware, (req, res) => {
   const filePath = req.query.path
   if (!filePath || typeof filePath !== 'string') return res.status(400).json({ error: 'path required' })
   const normalized = normalize(filePath)
-  if (!normalized.startsWith(WORKSPACE_ROOT)) return res.status(403).json({ error: 'access denied' })
+  const uploadsDir = getWorkspaceUploadsDir()
+  const allowed = normalized.startsWith(WORKSPACE_ROOT) || normalized.startsWith(uploadsDir)
+  if (!allowed) return res.status(403).json({ error: 'access denied' })
   if (!existsSync(normalized)) return res.status(404).json({ error: 'file not found' })
   res.sendFile(normalized)
 })

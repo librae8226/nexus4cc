@@ -19,6 +19,7 @@ interface Props {
   onOpenSessions?: () => void
   onUpload?: () => void
   onUploadFile?: (file: File) => void
+  onUploadFiles?: (files: FileList) => void
   onOpenFiles?: () => void
   onOpenWorkspace?: () => void
   onFitTerminal?: () => void
@@ -101,7 +102,7 @@ interface DragState {
 
 const ITEM_HEIGHT = 48 // px，每行编辑项高度
 
-export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _termRef, themeMode, onToggleTheme, onOpenSettings, onUploadFile, onOpenFiles, onOpenWorkspace, onFitTerminal, onShowCopySheet, embedded, collapsed: controlledCollapsed, onCollapsedChange }: Props) {
+export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _termRef, themeMode, onToggleTheme, onOpenSettings, onUploadFile, onUploadFiles, onOpenFiles, onOpenWorkspace, onFitTerminal, onShowCopySheet, embedded, collapsed: controlledCollapsed, onCollapsedChange }: Props) {
   const { t } = useTranslation()
   const [config, setConfig]           = useState<ToolbarConfig>(loadConfig)
   const isControlled = controlledCollapsed !== undefined
@@ -645,10 +646,16 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
         ref={fileInputRef}
         type="file"
         accept="image/*,video/*"
+        multiple
         style={hiddenFileInputStyle}
         onChange={(e) => {
-          const file = e.target.files?.[0]
-          if (file && onUploadFile) { onUploadFile(file) }
+          const files = e.target.files
+          if (!files || files.length === 0) { e.target.value = ''; return }
+          if (onUploadFiles) {
+            onUploadFiles(files)
+          } else if (onUploadFile) {
+            for (const file of files) onUploadFile(file)
+          }
           e.target.value = ''
         }}
       />
@@ -656,10 +663,16 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
         ref={pasteFileRef}
         type="file"
         accept="*/*"
+        multiple
         style={hiddenFileInputStyle}
         onChange={(e) => {
-          const file = e.target.files?.[0]
-          if (file && onUploadFile) { onUploadFile(file) }
+          const files = e.target.files
+          if (!files || files.length === 0) { e.target.value = ''; return }
+          if (onUploadFiles) {
+            onUploadFiles(files)
+          } else if (onUploadFile) {
+            for (const file of files) onUploadFile(file)
+          }
           e.target.value = ''
         }}
       />

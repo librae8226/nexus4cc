@@ -242,6 +242,22 @@ export default function Terminal({ token }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pasteFileRef = useRef<HTMLInputElement>(null)
   const uploadFileRef = useRef<(file: File) => Promise<void>>(null!)
+  // Upload queue: multi-file concurrent upload with progress
+  type UploadStatus = 'pending' | 'uploading' | 'done' | 'error' | 'conflict'
+  interface UploadItem {
+    id: string
+    file: File
+    status: UploadStatus
+    progress: number
+    error?: string
+    fullPath?: string
+    filename?: string
+    xhr?: XMLHttpRequest
+  }
+  const MAX_CONCURRENT_UPLOADS = 3
+  const [uploadQueue, setUploadQueue] = useState<UploadItem[]>([])
+  const uploadQueueRef = useRef(uploadQueue)
+  uploadQueueRef.current = uploadQueue
   const [windowOutputs, setWindowOutputs] = useState<Record<number, { output: string; clients: number; idleMs: number; connected: boolean }>>({})
     const scrollPositionsRef = useRef<Record<number, number>>({})
   const windowsRef = useRef<TmuxWindow[]>([])
@@ -750,53 +766,148 @@ export default function Terminal({ token }: Props) {
     fileInputRef.current?.click()
   }
 
-  async function uploadFile(file: File, overwrite = false) {
-    const formData = new FormData()
-    formData.append('file', file)
-    formData.append('originalName', file.name)
-    try {
-      const sessionParam = `session=${encodeURIComponent(activeTmuxSessionRef.current)}`
-      const url = overwrite ? `/api/files/upload?overwrite=1&${sessionParam}` : `/api/files/upload?${sessionParam}`
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
-      })
-      if (res.status === 409) {
-        // 文件已存在，显示确认对话框
-        const data = await res.json()
-        setUploadConflict({ show: true, file, filename: data.filename || file.name })
+  // ---- Multi-file upload queue with XHR progress ----
+  function updateItem(id: string, patch: Partial<UploadItem>) {
+    setUploadQueue(prev => prev.map(u => u.id === id ? { ...u, ...patch } : u))
+  }
+
+  function removeItem(id: string) {
+    setUploadQueue(prev => prev.filter(u => u.id !== id))
+  }
+
+  function processQueue() {
+    setUploadQueue(prev => {
+      const uploading = prev.filter(u => u.status === 'uploading').length
+      if (uploading >= MAX_CONCURRENT_UPLOADS) return prev
+      const pending = prev.filter(u => u.status === 'pending')
+      if (pending.length === 0) return prev
+      const toStart = pending.slice(0, MAX_CONCURRENT_UPLOADS - uploading)
+      for (const item of toStart) {
+        startUpload(item.id)
+      }
+      return prev.map(u => toStart.some(t => t.id === u.id) ? { ...u, status: 'uploading' as UploadStatus } : u)
+    })
+  }
+
+  function startUpload(id: string, overwrite = false) {
+    const item = uploadQueueRef.current.find(u => u.id === id)
+    if (!item) return
+    const xhr = new XMLHttpRequest()
+    updateItem(id, { xhr })
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        updateItem(id, { progress: Math.round((e.loaded / e.total) * 100) })
+      }
+    }
+
+    xhr.onload = () => {
+      if (xhr.status === 409) {
+        try {
+          const data = JSON.parse(xhr.responseText)
+          updateItem(id, { status: 'conflict', filename: data.filename || item.file.name, progress: 0 })
+          setUploadConflict({ show: true, itemId: id, filename: data.filename || item.file.name })
+        } catch {
+          updateItem(id, { status: 'error', error: 'conflict' })
+          processQueue()
+        }
         return
       }
-      if (!res.ok) throw new Error(await res.text())
-      const data = await res.json()
-      const fullPath = data.fullPath || data.url || ''
-      const filename = data.originalName || data.filename || file.name
-      if (!fullPath) console.warn('[Nexus] Upload response missing fullPath:', data)
-      addUploadNotification(filename, fullPath)
-      const term = termRef.current
-      if (term) {
-        term.writeln(`\r\n\x1b[32m[Nexus: 文件已上传]\x1b[0m ${filename}`)
-        if (fullPath) term.writeln(`\x1b[36m路径: ${fullPath}\x1b[0m`)
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText)
+          const fullPath = data.fullPath || data.url || ''
+          const filename = data.filename || data.originalName || item.file.name
+          updateItem(id, { status: 'done', fullPath, filename, progress: 100 })
+          addUploadNotification(filename, fullPath)
+          const term = termRef.current
+          if (term) {
+            term.writeln(`\r\n\x1b[32m[Nexus: 文件已上传]\x1b[0m ${filename}`)
+            if (fullPath) term.writeln(`\x1b[36m路径: ${fullPath}\x1b[0m`)
+          }
+          setTimeout(() => removeItem(id), 3000)
+        } catch {
+          updateItem(id, { status: 'error', error: 'invalid response' })
+        }
+      } else {
+        updateItem(id, { status: 'error', error: xhr.statusText || `HTTP ${xhr.status}` })
+        const term = termRef.current
+        if (term) term.writeln(`\r\n\x1b[31m[Nexus: 上传失败]\x1b[0m ${item.file.name}`)
       }
-    } catch (e: any) {
-      console.error('Upload failed:', e)
+      processQueue()
+    }
+
+    xhr.onerror = () => {
+      updateItem(id, { status: 'error', error: 'network error' })
       const term = termRef.current
-      if (term) {
-        term.writeln(`\r\n\x1b[31m[Nexus: 上传失败]\x1b[0m ${e.message || 'unknown error'}`)
-      }
+      if (term) term.writeln(`\r\n\x1b[31m[Nexus: 上传失败]\x1b[0m ${item.file.name}`)
+      processQueue()
+    }
+
+    xhr.onabort = () => {
+      updateItem(id, { status: 'error', error: 'cancelled' })
+      processQueue()
+    }
+
+    const formData = new FormData()
+    formData.append('file', item.file)
+    formData.append('originalName', item.file.name)
+    const sessionParam = `session=${encodeURIComponent(activeTmuxSessionRef.current)}`
+    const url = overwrite
+      ? `/api/files/upload?overwrite=1&${sessionParam}`
+      : `/api/files/upload?${sessionParam}`
+    xhr.open('POST', url)
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+    xhr.send(formData)
+  }
+
+  function enqueueFiles(files: FileList | null) {
+    if (!files || files.length === 0) return
+    const newItems: UploadItem[] = Array.from(files).map(file => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      file,
+      status: 'pending',
+      progress: 0,
+    }))
+    setUploadQueue(prev => [...prev, ...newItems])
+    // defer processQueue to next tick so state is settled
+    setTimeout(processQueue, 0)
+  }
+
+  function cancelUpload(id: string) {
+    const item = uploadQueueRef.current.find(u => u.id === id)
+    if (item?.xhr) {
+      item.xhr.abort()
+    } else {
+      removeItem(id)
+      processQueue()
     }
   }
 
+  // Legacy single-file API (kept for paste/drag handlers that expect it)
+  async function uploadFile(file: File, overwrite = false) {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+    setUploadQueue(prev => [...prev, { id, file, status: 'pending', progress: 0 }])
+    setTimeout(() => startUpload(id, overwrite), 0)
+  }
+
   function handleOverwriteConfirm() {
-    if (uploadConflict.file) {
-      uploadFile(uploadConflict.file, true)
-      setUploadConflict({ show: false, file: null, filename: '' })
+    const id = uploadConflict.itemId
+    if (id) {
+      updateItem(id, { status: 'uploading', progress: 0 })
+      startUpload(id, true)
+      setUploadConflict({ show: false, itemId: null, filename: '' })
     }
   }
 
   function handleOverwriteCancel() {
-    setUploadConflict({ show: false, file: null, filename: '' })
+    const id = uploadConflict.itemId
+    if (id) {
+      updateItem(id, { status: 'error', error: 'skipped' })
+      removeItem(id)
+      processQueue()
+    }
+    setUploadConflict({ show: false, itemId: null, filename: '' })
     const term = termRef.current
     if (term) {
       term.writeln(`\r\n\x1b[33m[Nexus: 上传已取消]\x1b[0m ${uploadConflict.filename}`)
@@ -1188,7 +1299,7 @@ export default function Terminal({ token }: Props) {
       container.style.boxShadow = ''
       const files = e.dataTransfer?.files
       if (files && files.length > 0) {
-        uploadFileRef.current(files[0])
+        enqueueFiles(files)
       }
     }
     container.addEventListener('dragover', onDragOver)
@@ -1391,7 +1502,7 @@ export default function Terminal({ token }: Props) {
   // Track keyboard visibility and adjust layout height on mobile
   const [vvHeight, setVvHeight] = useState<number | null>(null)
   // 文件上传覆盖确认对话框状态
-  const [uploadConflict, setUploadConflict] = useState<{ show: boolean; file: File | null; filename: string }>({ show: false, file: null, filename: '' })
+  const [uploadConflict, setUploadConflict] = useState<{ show: boolean; itemId: string | null; filename: string }>({ show: false, itemId: null, filename: '' })
   useEffect(() => {
     if (isWidePC) {
       setVvHeight(null)
@@ -1530,6 +1641,7 @@ export default function Terminal({ token }: Props) {
     onOpenWorkspace: () => setShowWorkspace(true),
     onUpload: handleFileUpload,
     onUploadFile: uploadFile,
+    onUploadFiles: enqueueFiles,
     onShowCopySheet: (text: string) => setCopySheetText(text),
     collapsed: toolbarCollapsed,
     onCollapsedChange: setToolbarCollapsed,
@@ -1561,12 +1673,11 @@ export default function Terminal({ token }: Props) {
         ref={fileInputRef}
         type="file"
         accept="image/*,video/*"
-        multiple={false}
+        multiple
         className="fixed top-0 opacity-[0.01]"
         style={{ left: '-9999px', width: '44px', height: '44px', fontSize: '16px' }}
         onChange={(e) => {
-          const file = e.target.files?.[0]
-          if (file) uploadFile(file)
+          enqueueFiles(e.target.files)
           e.target.value = '' // reset
         }}
         aria-hidden="true"
@@ -1574,11 +1685,11 @@ export default function Terminal({ token }: Props) {
       <input
         ref={pasteFileRef}
         type="file"
+        multiple
         className="fixed top-0 opacity-[0.01]"
         style={{ left: '-9999px', width: '44px', height: '44px', fontSize: '16px' }}
         onChange={(e) => {
-          const file = e.target.files?.[0]
-          if (file) uploadFile(file)
+          enqueueFiles(e.target.files)
           e.target.value = '' // reset
         }}
         aria-hidden="true"
@@ -2074,12 +2185,55 @@ export default function Terminal({ token }: Props) {
         )
       })()}
 
-      {/* 上传文件通知条 */}
-      {uploadNotifications.length > 0 && (
+      {/* 上传面板：进度条 + 完成通知 */}
+      {(uploadQueue.some(u => u.status !== 'done') || uploadNotifications.length > 0) && (
         <div
           className="fixed left-1/2 -translate-x-1/2 z-[200] flex flex-col gap-2 max-w-[90vw] w-[480px]"
           style={{ bottom: isWidePC ? 16 : (toolbarHeightRef.current + 16) }}
         >
+          {/* 进度条 */}
+          {uploadQueue.filter(u => u.status !== 'done').map((item) => (
+            <div
+              key={item.id}
+              className="flex flex-col gap-1.5 p-2.5 px-3 rounded-lg shadow-[0_4px_20px_rgba(0,0,0,0.25)]"
+              style={{
+                background: 'color-mix(in srgb, var(--nexus-bg2) 92%, transparent)',
+                backdropFilter: 'blur(12px)',
+                WebkitBackdropFilter: 'blur(12px)',
+                border: '1px solid color-mix(in srgb, var(--nexus-border) 50%, transparent)',
+              }}
+            >
+              <div className="flex items-center gap-2">
+                <span className="flex-1 text-nexus-text text-sm overflow-hidden text-ellipsis whitespace-nowrap" title={item.file.name}>
+                  {item.file.name}
+                </span>
+                <span className="text-nexus-text-2 text-xs whitespace-nowrap">
+                  {item.status === 'pending' && '等待中'}
+                  {item.status === 'uploading' && `${item.progress}%`}
+                  {item.status === 'conflict' && '已存在'}
+                  {item.status === 'error' && (item.error || '失败')}
+                </span>
+                {(item.status === 'pending' || item.status === 'uploading') && (
+                  <button
+                    onClick={() => cancelUpload(item.id)}
+                    className="bg-transparent border-none text-nexus-text-2 cursor-pointer p-0.5 flex items-center justify-center"
+                    title="取消"
+                  >
+                    <Icon name="x" size={14} />
+                  </button>
+                )}
+              </div>
+              {item.status === 'uploading' && (
+                <div className="w-full h-1 rounded-full bg-nexus-bg-2 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-nexus-accent transition-all duration-150"
+                    style={{ width: `${item.progress}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          ))}
+          {/* 完成通知条 */}
           {uploadNotifications.map((notification) => (
             <div
               key={notification.id}
