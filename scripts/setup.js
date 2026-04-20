@@ -17,6 +17,12 @@ function check(cmd) {
   return spawnSync(cmd, { shell: true, stdio: 'pipe' }).status === 0;
 }
 
+function resolveInteractiveShell() {
+  if (check('command -v zsh >/dev/null 2>&1')) return 'zsh';
+  if (check('command -v bash >/dev/null 2>&1')) return 'bash';
+  return 'sh';
+}
+
 function step(msg) {
   console.log(`\n\x1b[36m▶ ${msg}\x1b[0m`);
 }
@@ -114,9 +120,10 @@ ok('Nexus started and saved');
 
 // ── 9. tmux session ──────────────────────────────────────────────────────────
 step('Ensuring tmux session "main" exists');
+const interactiveShell = resolveInteractiveShell();
 if (!check('tmux has-session -t main 2>/dev/null')) {
-  run('tmux new-session -d -s main');
-  ok('tmux session "main" created');
+  run(`tmux new-session -d -s main -n shell "${interactiveShell}"`);
+  ok(`tmux session "main" created with ${interactiveShell}`);
 } else {
   ok('tmux session "main" already exists');
 }
