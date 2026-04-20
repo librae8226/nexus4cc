@@ -404,9 +404,11 @@ export default function Terminal({ token }: Props) {
   }, [copyToClipboard])
 
   const sendToWs = useCallback((data: string) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(data)
-    }
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return
+    // Strip zero-width and IME internal marker characters that leak from
+    // some mobile input methods (WeChat, Sogou) during composition.
+    const cleaned = data.replace(/[\u200B-\u200F\uFEFF\u2060-\u206F]/g, '')
+    if (cleaned) wsRef.current.send(cleaned)
   }, [])
 
   useEffect(() => {
@@ -1145,19 +1147,12 @@ export default function Terminal({ token }: Props) {
           if (xtermTa) { xtermTa.inputMode = 'none'; xtermTa.blur() }
         } else {
           keyboardVisibleRef.current = true
-          const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
-          if (isIOS) {
-            // iOS Safari won't reliably show the keyboard for xterm's internal
-            // textarea (tiny element + restrictive attributes). Use our standard
-            // <input> instead — iOS handles it correctly.
-            if (xtermTa) xtermTa.inputMode = 'none'
-            if (inputRef.current) { inputRef.current.inputMode = 'text'; inputRef.current.focus() }
-          } else {
-            // Android / other: focus xterm's own textarea — term.onData handles
-            // all input natively (letters, numbers, IME/CJK).
-            if (xtermTa) { xtermTa.inputMode = 'text'; xtermTa.focus() }
-            if (inputRef.current) inputRef.current.inputMode = 'text'
-          }
+          // Unified: use our custom <input> on both iOS and Android.
+          // xterm's internal textarea leaks IME composition intermediate
+          // states on Android (WeChat/Sogou), causing duplicated/garbled
+          // characters. A standard <input> has predictable composition events.
+          if (xtermTa) xtermTa.inputMode = 'none'
+          if (inputRef.current) { inputRef.current.inputMode = 'text'; inputRef.current.focus() }
         }
       }
     }
@@ -1345,10 +1340,19 @@ export default function Terminal({ token }: Props) {
   }, [token, activeWindowIndex, wsSessionKey])
 
   const isComposingRef = useRef(false)
+  const keydownHandledRef = useRef(false)
 
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     if (isComposingRef.current) return // handled by compositionEnd
-    // Fallback for Android (keydown fires key='Unidentified', onChange is reliable there)
+    // If keydown already sent this character (common on mobile where
+    // preventDefault doesn't fully suppress input.value update), skip
+    // to avoid double-fire.
+    if (keydownHandledRef.current) {
+      e.target.value = ''
+      keydownHandledRef.current = false
+      return
+    }
+    // Fallback for Android when keydown fires key='Unidentified'.
     const val = e.target.value
     if (val) { sendToWs(val); e.target.value = '' }
   }
@@ -1377,7 +1381,10 @@ export default function Terminal({ token }: Props) {
       // preventDefault stops the browser from updating input.value, so onChange won't
       // double-fire. This is reliable on iOS/desktop where e.key is always correct.
       e.preventDefault()
+      keydownHandledRef.current = true
       sendToWs(e.key)
+      // Clear after one event-loop tick so fast typers aren't affected.
+      setTimeout(() => { keydownHandledRef.current = false }, 0)
     }
   }
 
