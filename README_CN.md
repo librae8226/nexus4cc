@@ -106,6 +106,11 @@ npm start
 
 ---
 
+安卓端上推荐与语音输入法 [Milo Input](https://miloinput.fay.wang/) 启用 vibe coding 语义改写模板一起配合使用，巴适得很。
+
+演示如下：
+<img width="1080" height="2376" alt="image" src="https://github.com/user-attachments/assets/de3cd1fe-6193-4ab6-97fc-9c256a1e65bd" />
+
 ## 安全说明
 
 Nexus 是**单用户自托管工具**，不是多租户平台。
