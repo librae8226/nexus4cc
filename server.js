@@ -1964,6 +1964,11 @@ wss.on('connection', (ws, req) => {
   entry.clients.add(ws);
   console.log(`Client connected to ${key} (clients: ${entry.clients.size})`);
 
+  // Heartbeat: Cloudflare closes idle WebSockets after ~100s. Track liveness
+  // via ping/pong so the server can detect and reclaim dead connections.
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+
   // Send recent output so the screen isn't blank while waiting for the first repaint.
   if (entry.lastOutput) {
     ws.send(entry.lastOutput.slice(-2000));
@@ -2025,6 +2030,21 @@ wss.on('connection', (ws, req) => {
     if (ent) { ent.clients.delete(ws); ent.clientSizes.delete(ws); }
   });
 });
+
+// Ping every 30s — well under Cloudflare's ~100s idle timeout. Any client that
+// didn't respond to the previous ping is treated as dead and forcibly closed.
+const heartbeatInterval = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.isAlive === false) {
+      ws.terminate();
+      continue;
+    }
+    ws.isAlive = false;
+    try { ws.ping(); } catch { /* socket already closing */ }
+  }
+}, 30000);
+
+wss.on('close', () => clearInterval(heartbeatInterval));
 
 // 启动时清理残留的 running 状态（服务重启导致的孤儿任务）
 try {
