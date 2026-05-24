@@ -1960,7 +1960,20 @@ wss.on('connection', (ws, req) => {
     return;
   }
 
-  const { key, entry } = ensureWindowPty(session, windowIndex);
+  let key, entry;
+  try {
+    ({ key, entry } = ensureWindowPty(session, windowIndex));
+  } catch (err) {
+    console.error('ensureWindowPty failed:', err.message);
+    ws.close(1011, 'internal error');
+    return;
+  }
+
+  if (!entry || !entry.pty) {
+    ws.close(1011, 'pty unavailable');
+    return;
+  }
+
   entry.clients.add(ws);
   console.log(`Client connected to ${key} (clients: ${entry.clients.size})`);
 
