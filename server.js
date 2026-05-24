@@ -1045,33 +1045,35 @@ end run`
 app.get('/api/projects', authMiddleware, (req, res) => {
   exec('tmux list-sessions -F "#{session_name}|#{session_windows}|#{session_attached}"', async (err, stdout) => {
     if (err) return res.json([])
-    const lines = stdout.trim().split('\n').filter(Boolean)
-    const projects = []
-    for (const line of lines) {
-      const [name, windows, attached] = line.split('|')
-      // 尝试读取 NEXUS_CWD
-      let path = ''
-      try {
-        const envOutput = (await execAsync(`tmux show-environment -t ${name} NEXUS_CWD 2>/dev/null`)).trim()
-        const match = envOutput.match(/^NEXUS_CWD=(.+)$/)
-        if (match) path = match[1]
-      } catch {}
-      // 没有 NEXUS_CWD，尝试取第一个 window 的 pane_current_path
-      if (!path && windows !== '0') {
+    try {
+      const lines = stdout.trim().split('\n').filter(Boolean)
+      const projects = []
+      for (const line of lines) {
+        const [name, windows, attached] = line.split('|')
+        let path = ''
         try {
-          const cwdOutput = (await execAsync(`tmux list-windows -t ${name} -F '#{pane_current_path}' 2>/dev/null | head -1`)).trim()
-          if (cwdOutput) path = cwdOutput
+          const envOutput = (await execAsync(`tmux show-environment -t ${name} NEXUS_CWD 2>/dev/null`)).trim()
+          const match = envOutput.match(/^NEXUS_CWD=(.+)$/)
+          if (match) path = match[1]
         } catch {}
+        if (!path && windows !== '0') {
+          try {
+            const cwdOutput = (await execAsync(`tmux list-windows -t ${name} -F '#{pane_current_path}' 2>/dev/null | head -1`)).trim()
+            if (cwdOutput) path = cwdOutput
+          } catch {}
+        }
+        projects.push({
+          name,
+          path: path || WORKSPACE_ROOT,
+          active: name === TMUX_SESSION,
+          channelCount: Number(windows) || 0
+        })
       }
-      projects.push({
-        name,
-        path: path || WORKSPACE_ROOT,
-        active: name === TMUX_SESSION,
-        channelCount: Number(windows) || 0
-      })
+      projects.reverse()
+      res.json(projects)
+    } catch (e) {
+      res.status(500).json({ error: e.message })
     }
-    projects.reverse()
-    res.json(projects)
   })
 })
 
@@ -1422,11 +1424,14 @@ app.post('/api/sessions/:id/attach', authMiddleware, (req, res) => {
   const session = req.query.session || TMUX_SESSION
   exec(`tmux select-window -t ${session}:${index}`, async (err) => {
     if (err) return res.status(500).json({ error: err.message })
-    // 记录最后激活的 channel 到环境变量
     try {
       await execAsync(`tmux set-environment -t ${session} NEXUS_LAST_CHANNEL ${index}`)
     } catch {}
-    res.json({ ok: true })
+    try {
+      res.json({ ok: true })
+    } catch (e) {
+      // headers already sent — connection likely closed
+    }
   })
 })
 
