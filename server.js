@@ -1929,12 +1929,30 @@ function ensureWindowPty(session, windowIndex) {
 
   ptyProc.onExit(({ exitCode }) => {
     console.log(`PTY ${actualKey} exited with code ${exitCode}`);
+    const savedClients = entry.clients;
+    const savedSizes = entry.clientSizes;
     ptyMap.delete(actualKey);
-    // 如果 window 还在，重新创建
+    // 如果 window 还在，重新创建并迁移孤儿客户端
     try {
       const list = execFileSync('tmux', ['list-windows', '-t', safeSession, '-F', '#I'], { encoding: 'utf8', stdio: 'pipe' }).trim().split('\n');
       if (list.includes(String(targetWindow))) {
-        setTimeout(() => ensureWindowPty(safeSession, targetWindow), 100);
+        setTimeout(() => {
+          try {
+            const { entry: newEntry } = ensureWindowPty(safeSession, targetWindow);
+            for (const ws of savedClients) {
+              if (ws.readyState === 1) {
+                newEntry.clients.add(ws);
+                const size = savedSizes.get(ws);
+                if (size) newEntry.clientSizes.set(ws, size);
+              }
+            }
+            if (newEntry.lastOutput) {
+              for (const ws of savedClients) {
+                if (ws.readyState === 1) ws.send(newEntry.lastOutput.slice(-2000));
+              }
+            }
+          } catch (e) { console.error('PTY recreation failed:', e.message); }
+        }, 100);
       }
     } catch {}
   });
