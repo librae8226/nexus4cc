@@ -47,9 +47,10 @@ function fakeEntry(overrides = {}) {
  * helper. This mirrors exactly what server.js does inside the setTimeout
  * callback after PTY recreation succeeds.
  */
-function migrateClients(savedClients, savedSizes, newEntry) {
+function migrateClients(savedClients, savedSizes, newKey, newEntry) {
   for (const ws of savedClients) {
     if (ws.readyState === 1) {
+      ws._ptyKey = newKey;
       newEntry.clients.add(ws);
       const size = savedSizes.get(ws);
       if (size) newEntry.clientSizes.set(ws, size);
@@ -104,12 +105,15 @@ describe('PTY client migration', () => {
       const savedSizes = oldEntry.clientSizes;
 
       // Simulate new PTY creation
+      const newKey = 'session:0';
       const newEntry = fakeEntry({ lastOutput: 'Hello from new PTY' });
 
-      migrateClients(savedClients, savedSizes, newEntry);
+      migrateClients(savedClients, savedSizes, newKey, newEntry);
 
       assert.ok(newEntry.clients.has(ws1), 'ws1 should be in new entry');
       assert.ok(newEntry.clients.has(ws2), 'ws2 should be in new entry');
+      assert.equal(ws1._ptyKey, newKey, 'ws1._ptyKey should be updated');
+      assert.equal(ws2._ptyKey, newKey, 'ws2._ptyKey should be updated');
       assert.deepEqual(newEntry.clientSizes.get(ws1), { cols: 80, rows: 24 });
       assert.deepEqual(newEntry.clientSizes.get(ws2), { cols: 120, rows: 40 });
 
@@ -128,7 +132,7 @@ describe('PTY client migration', () => {
       const longOutput = 'x'.repeat(5000);
       const newEntry = fakeEntry({ lastOutput: longOutput });
 
-      migrateClients(oldEntry.clients, oldEntry.clientSizes, newEntry);
+      migrateClients(oldEntry.clients, oldEntry.clientSizes, 'session:0', newEntry);
 
       assert.equal(ws.sent.length, 1);
       assert.equal(ws.sent[0].length, 2000);
@@ -141,7 +145,7 @@ describe('PTY client migration', () => {
       oldEntry.clients.add(ws);
 
       const newEntry = fakeEntry({ lastOutput: '' });
-      migrateClients(oldEntry.clients, oldEntry.clientSizes, newEntry);
+      migrateClients(oldEntry.clients, oldEntry.clientSizes, 'session:0', newEntry);
 
       assert.ok(newEntry.clients.has(ws), 'client still migrated');
       assert.equal(ws.sent.length, 0, 'nothing sent for empty lastOutput');
@@ -163,7 +167,7 @@ describe('PTY client migration', () => {
       oldEntry.clientSizes.set(wsClosing, { cols: 100, rows: 30 });
 
       const newEntry = fakeEntry({ lastOutput: 'output' });
-      migrateClients(oldEntry.clients, oldEntry.clientSizes, newEntry);
+      migrateClients(oldEntry.clients, oldEntry.clientSizes, 'session:0', newEntry);
 
       assert.ok(newEntry.clients.has(wsLive), 'live client migrated');
       assert.ok(!newEntry.clients.has(wsClosing), 'closing client NOT migrated');
@@ -180,7 +184,7 @@ describe('PTY client migration', () => {
       oldEntry.clients.add(wsClosed);
 
       const newEntry = fakeEntry({ lastOutput: 'output' });
-      migrateClients(oldEntry.clients, oldEntry.clientSizes, newEntry);
+      migrateClients(oldEntry.clients, oldEntry.clientSizes, 'session:0', newEntry);
 
       assert.ok(!newEntry.clients.has(wsClosed), 'closed client NOT migrated');
       assert.equal(wsClosed.sent.length, 0);
@@ -192,7 +196,7 @@ describe('PTY client migration', () => {
       oldEntry.clients.add(wsConnecting);
 
       const newEntry = fakeEntry({ lastOutput: 'output' });
-      migrateClients(oldEntry.clients, oldEntry.clientSizes, newEntry);
+      migrateClients(oldEntry.clients, oldEntry.clientSizes, 'session:0', newEntry);
 
       assert.ok(!newEntry.clients.has(wsConnecting));
     });
