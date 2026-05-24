@@ -5,7 +5,15 @@ import * as pty from 'node-pty';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { createServer } from 'node:http';
-import { exec, spawn, execSync, execFileSync } from 'child_process';
+import { exec, execFile, spawn, execSync, execFileSync } from 'child_process';
+
+// Async wrappers for request handlers — avoid blocking the event loop with sync calls
+const execAsync = (cmd, opts) => new Promise((resolve, reject) => {
+  exec(cmd, opts, (err, stdout) => err ? reject(err) : resolve(stdout || ''));
+});
+const execFileAsync = (cmd, args, opts) => new Promise((resolve, reject) => {
+  execFile(cmd, args, opts, (err, stdout) => err ? reject(err) : resolve(stdout || ''));
+});
 import { fileURLToPath } from 'url';
 import { dirname, join, normalize, isAbsolute, basename } from 'path';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, statSync, rmdirSync, renameSync, cpSync, rmSync } from 'fs';
@@ -141,7 +149,7 @@ app.post('/api/auth/login', async (req, res) => {
 // body: { rel_path?, shell_type?, profile? }
 // - 提供 rel_path: 设置 NEXUS_CWD 并在此目录创建窗口（新项目）
 // - 不提供 rel_path: 读取 NEXUS_CWD 并在此目录创建窗口（新窗口）
-app.post('/api/windows', authMiddleware, (req, res) => {
+app.post('/api/windows', authMiddleware, async (req, res) => {
   const { rel_path, shell_type = 'claude', profile } = req.body || {};
   const tmuxSession = req.query.session || TMUX_SESSION;
 
@@ -150,14 +158,14 @@ app.post('/api/windows', authMiddleware, (req, res) => {
     // 新项目：设置 NEXUS_CWD
     cwd = rel_path.startsWith('/') ? rel_path : `${WORKSPACE_ROOT}/${rel_path}`;
     try {
-      execSync(`tmux set-environment -t ${tmuxSession} NEXUS_CWD "${cwd}"`);
+      await execAsync(`tmux set-environment -t ${tmuxSession} NEXUS_CWD "${cwd}"`);
     } catch (err) {
       return res.status(500).json({ error: 'failed to set NEXUS_CWD: ' + err.message });
     }
   } else {
     // 新窗口：读取 NEXUS_CWD
     try {
-      const envOutput = execSync(`tmux show-environment -t ${tmuxSession} NEXUS_CWD 2>/dev/null`).toString().trim();
+      const envOutput = (await execAsync(`tmux show-environment -t ${tmuxSession} NEXUS_CWD 2>/dev/null`)).trim();
       const match = envOutput.match(/^NEXUS_CWD=(.+)$/);
       cwd = match ? match[1] : WORKSPACE_ROOT;
     } catch {
@@ -194,13 +202,13 @@ app.post('/api/windows', authMiddleware, (req, res) => {
 
   // 确保 tmux session 存在
   try {
-    execSync(`tmux has-session -t ${tmuxSession} 2>/dev/null || tmux new-session -d -s ${tmuxSession} -n shell "${INTERACTIVE_SHELL}"`);
+    await execAsync(`tmux has-session -t ${tmuxSession} 2>/dev/null || tmux new-session -d -s ${tmuxSession} -n shell "${INTERACTIVE_SHELL}"`);
   } catch {}
 
   // 将代理变量设置到 tmux session 环境
   for (const [key, value] of Object.entries(proxyVars)) {
     try {
-      execSync(`tmux set-environment -t ${tmuxSession} ${key} "${value}" 2>/dev/null`);
+      await execAsync(`tmux set-environment -t ${tmuxSession} ${key} "${value}" 2>/dev/null`);
     } catch {}
   }
 
@@ -216,7 +224,7 @@ app.post('/api/windows', authMiddleware, (req, res) => {
 //   shell_type: 'claude' | 'bash' (default: 'claude')
 //   当 shell_type='claude' 时，profile 可选，使用 nexus-run-claude.sh 启动
 //   当 shell_type='bash' 时，启动本地 shell（优先 zsh，不存在时回退 bash）
-app.post('/api/sessions', authMiddleware, (req, res) => {
+app.post('/api/sessions', authMiddleware, async (req, res) => {
   const { rel_path, shell_type = 'claude', profile, session } = req.body || {};
   const tmuxSession = session || TMUX_SESSION;
   if (!rel_path) return res.status(400).json({ error: 'rel_path required' });
@@ -250,13 +258,13 @@ app.post('/api/sessions', authMiddleware, (req, res) => {
 
   // 确保 tmux session 存在
   try {
-    execSync(`tmux has-session -t ${tmuxSession} 2>/dev/null || tmux new-session -d -s ${tmuxSession} -n shell "${INTERACTIVE_SHELL}"`);
+    await execAsync(`tmux has-session -t ${tmuxSession} 2>/dev/null || tmux new-session -d -s ${tmuxSession} -n shell "${INTERACTIVE_SHELL}"`);
   } catch {}
 
   // 将代理变量设置到 tmux session 环境，新窗口才能继承
   for (const [key, value] of Object.entries(proxyVars)) {
     try {
-      execSync(`tmux set-environment -t ${tmuxSession} ${key} "${value}" 2>/dev/null`);
+      await execAsync(`tmux set-environment -t ${tmuxSession} ${key} "${value}" 2>/dev/null`);
     } catch {}
   }
 
@@ -338,10 +346,10 @@ app.post('/api/toolbar-config', authMiddleware, (req, res) => {
 });
 
 // GET /api/version — 当前版本号及工作区状态
-app.get('/api/version', authMiddleware, (req, res) => {
+app.get('/api/version', authMiddleware, async (req, res) => {
   try {
-    const current = execSync('git describe --tags --abbrev=0', { cwd: __dirname }).toString().trim();
-    const dirty = execSync('git status --porcelain', { cwd: __dirname }).toString().trim();
+    const current = (await execAsync('git describe --tags --abbrev=0', { cwd: __dirname })).trim();
+    const dirty = (await execAsync('git status --porcelain', { cwd: __dirname })).trim();
     res.json({ current, clean: dirty === '' });
   } catch {
     res.json({ current: 'unknown', clean: true });
@@ -648,12 +656,12 @@ app.post('/api/workspace/move', authMiddleware, (req, res) => {
 // body: multipart/form-data, fields: file, session_name (optional)
 const upload = multer({
   storage: multer.diskStorage({
-    destination: (req, file, cb) => {
+    destination: async (req, file, cb) => {
       // 找到目标 session 的 cwd，否则存 WORKSPACE_ROOT
       let cwd = WORKSPACE_ROOT
       try {
         const sessionName = req.body?.session_name || ''
-        const windows = execSync(`tmux list-windows -t ${TMUX_SESSION} -F "#I:#W:#{pane_current_path}"`).toString().trim().split('\n')
+        const windows = (await execAsync(`tmux list-windows -t ${TMUX_SESSION} -F "#I:#W:#{pane_current_path}"`)).trim().split('\n')
         for (const line of windows) {
           const parts = line.split(':')
           const name = parts[1]
@@ -661,7 +669,7 @@ const upload = multer({
           if (sessionName && name === sessionName) { cwd = path; break }
           // 如果没指定 session，用 active window
           if (!sessionName) {
-            const activeLines = execSync(`tmux list-windows -t ${TMUX_SESSION} -F "#I:#W:#{pane_current_path}:#{window_active}"`).toString().trim().split('\n')
+            const activeLines = (await execAsync(`tmux list-windows -t ${TMUX_SESSION} -F "#I:#W:#{pane_current_path}:#{window_active}"`)).trim().split('\n')
             for (const al of activeLines) {
               const ap = al.split(':')
               if (ap[ap.length - 1]?.trim() === '1') { cwd = ap.slice(2, ap.length - 1).join(':'); break }
@@ -695,16 +703,16 @@ app.post('/api/upload', authMiddleware, (req, res, next) => {
 
 // 读取指定 session 的 uploads 目录
 // 优先级：NEXUS_CWD 环境变量 > tmux pane_current_path > WORKSPACE_ROOT
-function getWorkspaceUploadsDir(session = TMUX_SESSION) {
+async function getWorkspaceUploadsDir(session = TMUX_SESSION) {
   let cwd
   try {
-    const out = execSync(`tmux show-environment -t ${session} NEXUS_CWD 2>/dev/null`).toString().trim()
+    const out = (await execAsync(`tmux show-environment -t ${session} NEXUS_CWD 2>/dev/null`)).trim()
     const m = out.match(/^NEXUS_CWD=(.+)$/)
     if (m) cwd = m[1]
   } catch {}
   if (!cwd) {
     try {
-      cwd = execSync(`tmux display-message -t ${session} -p '#{pane_current_path}' 2>/dev/null`).toString().trim()
+      cwd = (await execAsync(`tmux display-message -t ${session} -p '#{pane_current_path}' 2>/dev/null`)).trim()
     } catch {}
   }
   if (!cwd) cwd = WORKSPACE_ROOT
@@ -719,12 +727,12 @@ const fileUpload = multer({
 // POST /api/files/upload — 上传文件到当前 workspace/data/uploads/日期/
 // Query: overwrite=1 强制覆盖已存在的文件
 app.post('/api/files/upload', authMiddleware, (req, res, next) => {
-  fileUpload.single('file')(req, res, (err) => {
+  fileUpload.single('file')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message })
     if (!req.file) return res.status(400).json({ error: 'no file' })
 
     const dateDir = new Date().toISOString().slice(0, 10)
-    const uploadsDir = getWorkspaceUploadsDir(req.query.session || TMUX_SESSION)
+    const uploadsDir = await getWorkspaceUploadsDir(req.query.session || TMUX_SESSION)
     const uploadDir = join(uploadsDir, dateDir)
     if (!existsSync(uploadDir)) mkdirSync(uploadDir, { recursive: true })
 
@@ -765,11 +773,11 @@ app.post('/api/files/upload', authMiddleware, (req, res, next) => {
 })
 
 // GET /api/files/content?path=... — 访问/下载已上传的文件（路径自描述，无状态）
-app.get('/api/files/content', authMiddleware, (req, res) => {
+app.get('/api/files/content', authMiddleware, async (req, res) => {
   const filePath = req.query.path
   if (!filePath || typeof filePath !== 'string') return res.status(400).json({ error: 'path required' })
   const normalized = normalize(filePath)
-  const uploadsDir = getWorkspaceUploadsDir()
+  const uploadsDir = await getWorkspaceUploadsDir()
   const allowed = normalized.startsWith(WORKSPACE_ROOT) || normalized.startsWith(uploadsDir)
   if (!allowed) return res.status(403).json({ error: 'access denied' })
   if (!existsSync(normalized)) return res.status(404).json({ error: 'file not found' })
@@ -777,9 +785,9 @@ app.get('/api/files/content', authMiddleware, (req, res) => {
 })
 
 // GET /api/files — 列出当前 workspace 上传的文件（按日期分组）
-app.get('/api/files', authMiddleware, (req, res) => {
+app.get('/api/files', authMiddleware, async (req, res) => {
   try {
-    const uploadsDir = getWorkspaceUploadsDir(req.query.session || TMUX_SESSION)
+    const uploadsDir = await getWorkspaceUploadsDir(req.query.session || TMUX_SESSION)
     const result = []
     if (!existsSync(uploadsDir)) return res.json(result)
 
@@ -815,9 +823,9 @@ app.get('/api/files', authMiddleware, (req, res) => {
 })
 
 // DELETE /api/files/all — 删除当前 workspace 所有上传的文件
-app.delete('/api/files/all', authMiddleware, (req, res) => {
+app.delete('/api/files/all', authMiddleware, async (req, res) => {
   try {
-    const uploadsDir = getWorkspaceUploadsDir(req.query.session || TMUX_SESSION)
+    const uploadsDir = await getWorkspaceUploadsDir(req.query.session || TMUX_SESSION)
     if (!existsSync(uploadsDir)) return res.json({ ok: true, deletedCount: 0 })
     const dateDirs = readdirSync(uploadsDir, { withFileTypes: true })
       .filter(e => e.isDirectory())
@@ -863,7 +871,7 @@ app.delete('/api/files/content', authMiddleware, (req, res) => {
 })
 
 // POST /api/sessions/:id/rename — 重命名窗口
-app.post('/api/sessions/:id/rename', authMiddleware, (req, res) => {
+app.post('/api/sessions/:id/rename', authMiddleware, async (req, res) => {
   const index = req.params.id
   const session = req.query.session || TMUX_SESSION
   const { name } = req.body || {}
@@ -873,7 +881,7 @@ app.post('/api/sessions/:id/rename', authMiddleware, (req, res) => {
   const safeName = String(name).replace(/[\r\n\t\0:]/g, '').trim().slice(0, 50)
   if (!safeName) return res.status(400).json({ error: 'name required' })
   try {
-    execFileSync('tmux', ['rename-window', '-t', `${session}:${index}`, '--', safeName], { stdio: 'pipe' })
+    await execFileAsync('tmux', ['rename-window', '-t', `${session}:${index}`, '--', safeName], { stdio: 'pipe' })
     res.json({ ok: true, name: safeName })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -990,7 +998,7 @@ app.get('/api/tmux-sessions', authMiddleware, (req, res) => {
 
 // POST /api/launch-iterm — 在本机启动 iTerm2 并用 tmux -CC 集成模式接管指定 session
 // 仅在 server 与 iTerm2 同机时有意义（macOS only）。
-app.post('/api/launch-iterm', authMiddleware, (req, res) => {
+app.post('/api/launch-iterm', authMiddleware, async (req, res) => {
   if (process.platform !== 'darwin') {
     return res.status(400).json({ error: 'launch-iterm requires macOS host' })
   }
@@ -1002,7 +1010,7 @@ app.post('/api/launch-iterm', authMiddleware, (req, res) => {
     return res.status(400).json({ error: 'invalid session name' })
   }
   try {
-    execSync(`tmux has-session -t '${session}' 2>/dev/null`)
+    await execAsync(`tmux has-session -t '${session}' 2>/dev/null`)
   } catch {
     return res.status(404).json({ error: 'session not found' })
   }
@@ -1035,45 +1043,46 @@ end run`
 
 // GET /api/projects — 列出所有 Projects（tmux sessions）
 app.get('/api/projects', authMiddleware, (req, res) => {
-  exec('tmux list-sessions -F "#{session_name}|#{session_windows}|#{session_attached}"', (err, stdout) => {
+  exec('tmux list-sessions -F "#{session_name}|#{session_windows}|#{session_attached}"', async (err, stdout) => {
     if (err) return res.json([])
     const lines = stdout.trim().split('\n').filter(Boolean)
-    const projects = lines.map(line => {
+    const projects = []
+    for (const line of lines) {
       const [name, windows, attached] = line.split('|')
       // 尝试读取 NEXUS_CWD
       let path = ''
       try {
-        const envOutput = execSync(`tmux show-environment -t ${name} NEXUS_CWD 2>/dev/null`).toString().trim()
+        const envOutput = (await execAsync(`tmux show-environment -t ${name} NEXUS_CWD 2>/dev/null`)).trim()
         const match = envOutput.match(/^NEXUS_CWD=(.+)$/)
         if (match) path = match[1]
       } catch {}
       // 没有 NEXUS_CWD，尝试取第一个 window 的 pane_current_path
       if (!path && windows !== '0') {
         try {
-          const cwdOutput = execSync(`tmux list-windows -t ${name} -F '#{pane_current_path}' 2>/dev/null | head -1`).toString().trim()
+          const cwdOutput = (await execAsync(`tmux list-windows -t ${name} -F '#{pane_current_path}' 2>/dev/null | head -1`)).trim()
           if (cwdOutput) path = cwdOutput
         } catch {}
       }
-      return {
+      projects.push({
         name,
         path: path || WORKSPACE_ROOT,
         active: name === TMUX_SESSION,
         channelCount: Number(windows) || 0
-      }
-    })
+      })
+    }
     projects.reverse()
     res.json(projects)
   })
 })
 
 // GET /api/session-cwd — 获取指定 session 的 NEXUS_CWD
-app.get('/api/session-cwd', authMiddleware, (req, res) => {
+app.get('/api/session-cwd', authMiddleware, async (req, res) => {
   const session = req.query.session || TMUX_SESSION
   let cwd = WORKSPACE_ROOT
 
   // 1. 尝试读取 NEXUS_CWD（外部启动的 session 可能没有，会抛异常）
   try {
-    const envOutput = execSync(`tmux show-environment -t ${session} NEXUS_CWD 2>/dev/null`).toString().trim()
+    const envOutput = (await execAsync(`tmux show-environment -t ${session} NEXUS_CWD 2>/dev/null`)).trim()
     const match = envOutput.match(/^NEXUS_CWD=(.+)$/)
     if (match) cwd = match[1]
   } catch { /* NEXUS_CWD 未设置 */ }
@@ -1081,7 +1090,7 @@ app.get('/api/session-cwd', authMiddleware, (req, res) => {
   // 2. 若 NEXUS_CWD 未设置，回退到 pane_current_path
   if (cwd === WORKSPACE_ROOT) {
     try {
-      const panePath = execSync(`tmux display-message -t ${session} -p '#{pane_current_path}' 2>/dev/null`).toString().trim()
+      const panePath = (await execAsync(`tmux display-message -t ${session} -p '#{pane_current_path}' 2>/dev/null`)).trim()
       if (panePath) cwd = panePath
     } catch { /* fallback to WORKSPACE_ROOT */ }
   }
@@ -1116,7 +1125,7 @@ app.get('/api/projects/:name/channels', authMiddleware, (req, res) => {
 // POST /api/projects — 新建 Project（创建 tmux session）
 // body: { path, shell_type?, profile? }
 // project 名称基于路径自动生成
-app.post('/api/projects', authMiddleware, (req, res) => {
+app.post('/api/projects', authMiddleware, async (req, res) => {
   const { path, shell_type = 'claude', profile } = req.body || {}
   if (!path) return res.status(400).json({ error: 'path required' })
 
@@ -1141,7 +1150,7 @@ app.post('/api/projects', authMiddleware, (req, res) => {
   // 检查是否已存在同名 session，如果存在则添加序号
   let finalName = safeName
   try {
-    const existing = execSync('tmux list-sessions -F "#{session_name}" 2>/dev/null').toString().trim().split('\n')
+    const existing = (await execAsync('tmux list-sessions -F "#{session_name}" 2>/dev/null')).trim().split('\n')
     let counter = 1
     while (existing.includes(finalName)) {
       finalName = `${safeName}-${counter++}`
@@ -1167,7 +1176,7 @@ app.post('/api/projects', authMiddleware, (req, res) => {
     if (profile) {
       const runScript = join(__dirname, 'nexus-run-claude.sh')
       // claude 失败时给出提示，再 fallback 到交互 shell，避免窗口看起来"没反应"
-      // 注意：提示文本里不能有 `"`；用单引号避免与 execFileSync 的参数边界冲突
+      // 注意：提示文本里不能有 `"`；用单引号避免与 execFileAsync 的参数边界冲突
       shellCmd = `${proxyPrefix}bash '${runScript}' ${profile} '${cwd}' || echo; echo '[Nexus] claude 退出或启动失败，fallback 到 ${INTERACTIVE_SHELL}（可直接输入 claude 重试）'; ${INTERACTIVE_SHELL_CMD}`
     } else {
       shellCmd = `${proxyPrefix}claude --dangerously-skip-permissions || echo; echo '[Nexus] claude 退出或启动失败，请确认已 claude login 或配置 API key'; ${INTERACTIVE_SHELL_CMD}`
@@ -1178,7 +1187,7 @@ app.post('/api/projects', authMiddleware, (req, res) => {
   const dirName = cwd.replace(/^\/+|\/+$/g, '').split('/').pop() || '~'
   const initialWindowName = profile ? `${dirName}-${profile}` : dirName
 
-  // 创建 tmux session（改用 execFileSync，避免 shellCmd 含引号时 shell 参数解析错位
+  // 创建 tmux session（改用 execFileAsync，避免 shellCmd 含引号时 shell 参数解析错位
   // 导致 tmux 收到截断的命令，window 瞬间退出 → session 消亡 → 后续 set-environment
   // 报 "no such session"）
   // 同时把 NEXUS_CWD 和 proxy vars 通过 `-e KEY=VAL` 在 new-session 时一次性注入，
@@ -1195,7 +1204,7 @@ app.post('/api/projects', authMiddleware, (req, res) => {
   }
   newSessionArgs.push(shellCmd)
   try {
-    execFileSync('tmux', newSessionArgs, { stdio: 'pipe' })
+    await execFileAsync('tmux', newSessionArgs, { stdio: 'pipe' })
   } catch (err) {
     return res.status(500).json({ error: 'failed to create project: ' + err.message })
   }
@@ -1204,7 +1213,7 @@ app.post('/api/projects', authMiddleware, (req, res) => {
 })
 
 // POST /api/projects/:name/channels — 在指定 Project 中新建 Channel（window）
-app.post('/api/projects/:name/channels', authMiddleware, (req, res) => {
+app.post('/api/projects/:name/channels', authMiddleware, async (req, res) => {
   const sessionName = req.params.name
   const { shell_type = 'claude', profile, path: bodyPath } = req.body || {}
 
@@ -1214,7 +1223,7 @@ app.post('/api/projects/:name/channels', authMiddleware, (req, res) => {
     cwd = bodyPath
   } else {
     try {
-      const envOutput = execSync(`tmux show-environment -t ${sessionName} NEXUS_CWD 2>/dev/null`).toString().trim()
+      const envOutput = (await execAsync(`tmux show-environment -t ${sessionName} NEXUS_CWD 2>/dev/null`)).trim()
       const match = envOutput.match(/^NEXUS_CWD=(.+)$/)
       if (match) cwd = match[1]
     } catch {}
@@ -1227,7 +1236,7 @@ app.post('/api/projects/:name/channels', authMiddleware, (req, res) => {
   const baseName = profile || 'channel'
   let channelName = baseName
   try {
-    const existing = execSync(`tmux list-windows -t ${sessionName} -F "#{window_name}"`).toString().trim().split('\n')
+    const existing = (await execAsync(`tmux list-windows -t ${sessionName} -F "#{window_name}"`)).trim().split('\n')
     let counter = 1
     while (existing.includes(channelName)) {
       channelName = `${baseName}-${counter++}`
@@ -1260,16 +1269,16 @@ app.post('/api/projects/:name/channels', authMiddleware, (req, res) => {
 
   // 确保 session 存在
   try {
-    execFileSync('tmux', ['has-session', '-t', sessionName], { stdio: 'pipe' })
+    await execFileAsync('tmux', ['has-session', '-t', sessionName], { stdio: 'pipe' })
   } catch {
     try {
-      execFileSync('tmux', ['new-session', '-d', '-s', sessionName, '-n', 'shell', INTERACTIVE_SHELL], { stdio: 'pipe' })
+      await execFileAsync('tmux', ['new-session', '-d', '-s', sessionName, '-n', 'shell', INTERACTIVE_SHELL], { stdio: 'pipe' })
     } catch {}
   }
 
-  // 创建新 window —— 改 execFileSync 避免 shellCmd 引号嵌套问题
+  // 创建新 window —— 改 execFileAsync 避免 shellCmd 引号嵌套问题
   try {
-    execFileSync('tmux', [
+    await execFileAsync('tmux', [
       'new-window',
       '-t', sessionName,
       '-c', cwd,
@@ -1283,25 +1292,25 @@ app.post('/api/projects/:name/channels', authMiddleware, (req, res) => {
 })
 
 // POST /api/projects/:name/activate — 切换到指定 Project（设置为目标 session）
-app.post('/api/projects/:name/activate', authMiddleware, (req, res) => {
+app.post('/api/projects/:name/activate', authMiddleware, async (req, res) => {
   const sessionName = req.params.name
   // 验证 session 存在
   try {
-    execSync(`tmux has-session -t ${sessionName}`)
+    await execAsync(`tmux has-session -t ${sessionName}`)
   } catch {
     return res.status(404).json({ error: 'project not found' })
   }
   // 读取该 session 最后激活的 channel
   let lastChannel = null
   try {
-    const envOutput = execSync(`tmux show-environment -t ${sessionName} NEXUS_LAST_CHANNEL 2>/dev/null`).toString().trim()
+    const envOutput = (await execAsync(`tmux show-environment -t ${sessionName} NEXUS_LAST_CHANNEL 2>/dev/null`)).trim()
     const match = envOutput.match(/^NEXUS_LAST_CHANNEL=(\d+)$/)
     if (match) lastChannel = parseInt(match[1], 10)
   } catch {}
   // 验证 channel 是否存在，不存在则返回 null（前端会用第一个）
   if (lastChannel !== null) {
     try {
-      const windows = execSync(`tmux list-windows -t ${sessionName} -F "#I"`).toString().trim().split('\n')
+      const windows = (await execAsync(`tmux list-windows -t ${sessionName} -F "#I"`)).trim().split('\n')
       if (!windows.includes(String(lastChannel))) {
         lastChannel = null
       }
@@ -1314,7 +1323,7 @@ app.post('/api/projects/:name/activate', authMiddleware, (req, res) => {
 })
 
 // POST /api/projects/:name/rename — 重命名 Project（重命名 tmux session）
-app.post('/api/projects/:name/rename', authMiddleware, (req, res) => {
+app.post('/api/projects/:name/rename', authMiddleware, async (req, res) => {
   const oldName = req.params.name
   const { name: newName } = req.body || {}
   if (!newName || !newName.trim()) {
@@ -1328,20 +1337,20 @@ app.post('/api/projects/:name/rename', authMiddleware, (req, res) => {
   }
   // 验证旧 session 存在
   try {
-    execSync(`tmux has-session -t ${oldName}`)
+    await execAsync(`tmux has-session -t ${oldName}`)
   } catch {
     return res.status(404).json({ error: 'project not found' })
   }
   // 检查新名称是否已存在
   try {
-    execSync(`tmux has-session -t ${sanitizedNewName}`)
+    await execAsync(`tmux has-session -t ${sanitizedNewName}`)
     return res.status(409).json({ error: 'project name already exists' })
   } catch {
     // 不存在，可以重命名
   }
   // 执行重命名
   try {
-    execFileSync('tmux', ['rename-session', '-t', oldName, '--', sanitizedNewName], { stdio: 'pipe' })
+    await execFileAsync('tmux', ['rename-session', '-t', oldName, '--', sanitizedNewName], { stdio: 'pipe' })
     res.json({ ok: true, oldName, newName: sanitizedNewName })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -1349,11 +1358,11 @@ app.post('/api/projects/:name/rename', authMiddleware, (req, res) => {
 })
 
 // DELETE /api/projects/:name — 关闭 Project（kill tmux session）
-app.delete('/api/projects/:name', authMiddleware, (req, res) => {
+app.delete('/api/projects/:name', authMiddleware, async (req, res) => {
   const sessionName = req.params.name
   // 验证 session 存在
   try {
-    execSync(`tmux has-session -t ${sessionName}`)
+    await execAsync(`tmux has-session -t ${sessionName}`)
   } catch {
     return res.status(404).json({ error: 'project not found' })
   }
@@ -1411,11 +1420,11 @@ app.delete('/api/sessions/:id', authMiddleware, (req, res) => {
 app.post('/api/sessions/:id/attach', authMiddleware, (req, res) => {
   const index = req.params.id
   const session = req.query.session || TMUX_SESSION
-  exec(`tmux select-window -t ${session}:${index}`, (err) => {
+  exec(`tmux select-window -t ${session}:${index}`, async (err) => {
     if (err) return res.status(500).json({ error: err.message })
     // 记录最后激活的 channel 到环境变量
     try {
-      execSync(`tmux set-environment -t ${session} NEXUS_LAST_CHANNEL ${index}`)
+      await execAsync(`tmux set-environment -t ${session} NEXUS_LAST_CHANNEL ${index}`)
     } catch {}
     res.json({ ok: true })
   })
@@ -1529,7 +1538,7 @@ app.delete('/api/tasks/:id', authMiddleware, (req, res) => {
 })
 
 // POST /api/tasks — 创建新任务，SSE 流式返回
-app.post('/api/tasks', authMiddleware, (req, res) => {
+app.post('/api/tasks', authMiddleware, async (req, res) => {
   const { session_name, prompt, profile, tmux_session } = req.body || {}
   if (!prompt) return res.status(400).json({ error: 'prompt required' })
 
@@ -1537,7 +1546,7 @@ app.post('/api/tasks', authMiddleware, (req, res) => {
   let cwd = WORKSPACE_ROOT
   const targetSession = tmux_session || TMUX_SESSION
   try {
-    const windows = execSync(`tmux list-windows -t ${targetSession} -F "#I:#W:#{pane_current_path}"`).toString().trim().split('\n')
+    const windows = (await execAsync(`tmux list-windows -t ${targetSession} -F "#I:#W:#{pane_current_path}"`)).trim().split('\n')
     for (const line of windows) {
       const parts = line.split(':')
       const name = parts[1]
