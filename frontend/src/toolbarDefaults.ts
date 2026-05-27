@@ -3,7 +3,7 @@ export interface KeyDef {
   label: string
   seq: string
   desc: string
-  action?: 'scrollToBottom' | 'pasteClipboard' | 'copyTerminal' | 'fit'
+  action?: 'scrollToBottom' | 'pasteClipboard' | 'copyTerminal' | 'fit' | 'modCtrl' | 'modAlt'
   category: 'nav' | 'edit' | 'control' | 'input' | 'ui'
 }
 
@@ -40,6 +40,11 @@ export const ALL_KEYS: KeyDef[] = [
   { id: 'ctrl-j',     label: '^J',    seq: '\x0a',     desc: 'toolbarKeys.newline', category: 'edit' },
   { id: 'ctrl-z',     label: '^Z',    seq: '\x1a',     desc: 'toolbarKeys.suspend', category: 'edit' },
 
+  // === Sticky modifiers (Termux-style: tap to arm, tap again to lock) ===
+  // seq is empty — handled by action, not sent directly. Applies to the NEXT typed key.
+  { id: 'mod-ctrl',   label: 'Ctrl',  seq: '',         desc: 'toolbarKeys.stickyCtrl', action: 'modCtrl', category: 'control' },
+  { id: 'mod-alt',    label: 'Alt',   seq: '',         desc: 'toolbarKeys.stickyAlt',  action: 'modAlt',  category: 'control' },
+
   // === Control (control) ===
   { id: 'esc',        label: 'Esc',   seq: '\x1b',     desc: 'toolbarKeys.escapeVim', category: 'control' },
   { id: 'ctrl-c',     label: '^C',    seq: '\x03',     desc: 'toolbarKeys.cancelInput', category: 'control' },
@@ -68,8 +73,10 @@ export const ALL_KEYS: KeyDef[] = [
 
 // Reorganized factory defaults by priority and category grouping
 export const FACTORY_PINNED = [
+  // Sticky modifiers — tap Ctrl/Alt then type any letter to combine
+  'mod-ctrl', 'mod-alt',
   // Control
-  'esc', 
+  'esc',
   // Navigation
    'ctrl-a', 'left', 'up', 'down', 'right', 'ctrl-e',
   'backspace', 

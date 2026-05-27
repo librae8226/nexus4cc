@@ -117,6 +117,11 @@ const THEME_KEY = 'nexus_theme'
 const WINDOW_KEY = 'nexus_window'
 const TAP_THRESHOLD = 8
 const MAX_UPLOAD_NOTIFICATIONS = 5
+// Cap on unacked input frames the client keeps queued for replay. Each frame
+// is one keystroke; 1000 means the user typed 1000 chars while the server
+// hadn't acked any (long disconnect). Beyond this the oldest is dropped to
+// bound memory; in practice acks return in tens of milliseconds.
+const MAX_PENDING_INPUT_FRAMES = 1000
 
 export type ThemeMode = 'dark' | 'light'
 
@@ -210,6 +215,31 @@ export default function Terminal({ token }: Props) {
   const userScrolledRef = useRef(false)
   const lastContainerSizeRef = useRef({ w: 0, h: 0 })
   const inputRef = useRef<HTMLInputElement>(null)
+
+  // ---- Reliable input transport (no-duplicate / no-loss on flaky network) ----
+  // Each input frame carries (epoch, seq). The server dedups by seq, so resends
+  // on reconnect can't double-apply. epoch/seq/pending reset per window session
+  // (Effect B); reconnects within a session reuse them to replay unacked frames.
+  const inputEpochRef = useRef('')
+  const inputSeqRef = useRef(0)
+  const pendingInputsRef = useRef<Map<number, string>>(new Map())
+  const serverSidRef = useRef<string | null>(null)
+
+  // ---- Sticky modifier keys (Termux-style): off -> armed -> locked -> off ----
+  // armed applies to the next typed key then clears; locked persists until tapped off.
+  type ModState = 'off' | 'armed' | 'locked'
+  const [ctrlMod, setCtrlMod] = useState<ModState>('off')
+  const [altMod, setAltMod] = useState<ModState>('off')
+  const modsRef = useRef<{ ctrl: ModState; alt: ModState }>({ ctrl: 'off', alt: 'off' })
+  useEffect(() => { modsRef.current = { ctrl: ctrlMod, alt: altMod } }, [ctrlMod, altMod])
+
+  const cycleMod = useCallback((name: 'ctrl' | 'alt') => {
+    const cur = modsRef.current[name]
+    const next: ModState = cur === 'off' ? 'armed' : cur === 'armed' ? 'locked' : 'off'
+    modsRef.current = { ...modsRef.current, [name]: next }
+    if (name === 'ctrl') setCtrlMod(next); else setAltMod(next)
+  }, [])
+
   const [windows, setWindows] = useState<TmuxWindow[]>([])
   const [activeWindowIndex, setActiveWindowIndex] = useState(() => parseInt(localStorage.getItem(WINDOW_KEY) || '0', 10))
   const [showSettings, setShowSettings] = useState(false)
@@ -420,11 +450,59 @@ export default function Terminal({ token }: Props) {
     setTimeout(() => setCopiedId(null), 2000)
   }, [copyToClipboard])
 
-  const sendToWs = useCallback((data: string) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(data)
+  // Apply armed/locked Ctrl/Alt to a raw keystroke (single printable char).
+  // Ctrl: map to its control byte (A-Z, @[\]^_); Alt: prefix ESC. Consumes
+  // armed modifiers (locked persist). Non-printable / multi-char data passes
+  // through but still consumes armed modifiers (the "next key" was used).
+  const applyMods = useCallback((raw: string): string => {
+    const m = modsRef.current
+    if (m.ctrl === 'off' && m.alt === 'off') return raw
+    // Modifiers only apply to a single keystroke. Multi-char input (paste,
+    // IME composition output, multi-byte arrow escape sequences) passes
+    // through WITHOUT consuming an armed modifier — the next real single
+    // keypress picks it up. Same for Ctrl on a key outside the encodable
+    // ASCII range (digits, Enter, Backspace, etc.): armed Ctrl is preserved
+    // so the user isn't penalized for a misfire.
+    if (raw.length !== 1) return raw
+    let ch = raw
+    let ctrlApplied = false
+    if (m.ctrl !== 'off') {
+      const code = ch.toUpperCase().charCodeAt(0)
+      if (code >= 64 && code <= 95) { // @, A-Z, [, \, ], ^, _
+        ch = String.fromCharCode(code & 0x1f)
+        ctrlApplied = true
+      }
     }
+    const altApplied = m.alt !== 'off' // Alt prefixes ESC for any single char (incl. Enter → ESC+CR)
+    const out = (altApplied ? '\x1b' : '') + ch
+    // Consume armed modifiers only when actually applied. Locked persist.
+    const consumeCtrl = m.ctrl === 'armed' && ctrlApplied
+    const consumeAlt = m.alt === 'armed' && altApplied
+    if (consumeCtrl || consumeAlt) {
+      const next = {
+        ctrl: consumeCtrl ? 'off' as ModState : m.ctrl,
+        alt: consumeAlt ? 'off' as ModState : m.alt,
+      }
+      modsRef.current = next
+      setCtrlMod(next.ctrl); setAltMod(next.alt)
+    }
+    return out
   }, [])
+
+  // Single chokepoint for ALL terminal input. Applies sticky modifiers, then
+  // sends a sequenced frame and keeps it in a pending queue until the server
+  // acks it (frames are replayed on reconnect via the hello handshake).
+  const sendToWs = useCallback((raw: string) => {
+    const data = applyMods(raw)
+    if (!data) return
+    const seq = ++inputSeqRef.current
+    const frame = JSON.stringify({ type: 'i', epoch: inputEpochRef.current, seq, data })
+    const pend = pendingInputsRef.current
+    pend.set(seq, frame)
+    if (pend.size > MAX_PENDING_INPUT_FRAMES) { const k = pend.keys().next().value as number; pend.delete(k) }
+    const ws = wsRef.current
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(frame)
+  }, [applyMods])
 
   useEffect(() => {
     applyTheme(themeMode)
@@ -1090,8 +1168,8 @@ export default function Terminal({ token }: Props) {
         seq = '\x1b[3~'
       }
 
-      if (seq && wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(seq)
+      if (seq) {
+        sendToWs(seq)
       }
     }
 
@@ -1118,7 +1196,7 @@ export default function Terminal({ token }: Props) {
     })
 
     // 键盘输入 → 发送到当前 WebSocket
-    term.onData((data) => wsRef.current?.send(data))
+    term.onData((data) => sendToWs(data))
 
     // 滚动位置追踪 → 浮动回底部按钮
     term.onScroll(() => {
@@ -1366,6 +1444,24 @@ export default function Terminal({ token }: Props) {
     userScrolledRef.current = hasSavedScroll
     hasConnectedRef.current = false
 
+    // New window session → fresh input epoch/seq and empty pending queue.
+    // INTENTIONAL: only Effect B mount resets these three. Transient reconnects
+    // within the same effect run preserve epoch / inputSeqRef / pendingInputsRef
+    // so that unacked frames can be replayed on the new ws with the SAME epoch,
+    // letting the server dedup recognize them as already-applied. Don't reset
+    // them on reconnect — that would break the "no duplicate, no loss" guarantee.
+    // Prefer crypto.randomUUID() for a collision-safe epoch (matters if multiple
+    // clients (re)connect to the same PTY at the same wall-clock instant), but
+    // fall back when it is unavailable: it's only defined in secure contexts
+    // (HTTPS / localhost), and self-hosted deployments often run over plain HTTP
+    // on a LAN/mesh IP where calling it would throw and break the WS setup.
+    inputEpochRef.current = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2) + Date.now().toString(36)
+    inputSeqRef.current = 0
+    pendingInputsRef.current = new Map()
+    serverSidRef.current = null
+
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
 
     // 延迟显示 loading，避免快速连接时的闪烁
@@ -1389,6 +1485,7 @@ export default function Terminal({ token }: Props) {
       const s = activeTmuxSessionRef.current
       const wi = activeWindowIndexRef.current
       const newWs = new WebSocket(`${protocol}//${location.host}/ws?token=${encodeURIComponent(token)}&window=${wi}&session=${encodeURIComponent(s)}`)
+      newWs.binaryType = 'arraybuffer' // control frames (hello/ack) arrive as binary
       wsRef.current = newWs
 
       newWs.onopen = () => {
@@ -1411,6 +1508,11 @@ export default function Terminal({ token }: Props) {
           // a same-size resize is a no-op in tmux and no repaint is sent.
           // The rows-1 nudge guarantees a size change → SIGWINCH → tmux pushes a
           // full repaint. The rAF below immediately corrects to the real dimensions.
+          //
+          // Resize is a control message (idempotent, last-write-wins) so it
+          // intentionally bypasses the reliable input pipeline (sendToWs):
+          // only typed input goes through seq/ack/dedup; resize / heartbeat
+          // are fire-and-forget and re-sent on reconnect by this very block.
           newWs.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: Math.max(term.rows - 1, 5) }))
         }
         // Follow-up fit: re-measures layout and sends correct final dimensions,
@@ -1424,6 +1526,31 @@ export default function Terminal({ token }: Props) {
       }
 
       newWs.onmessage = (e) => {
+        // Binary frames carry control messages (must have __ctrl: true). Future
+        // binary payload types (e.g. file transfer) without this marker fall
+        // through and are ignored here, avoiding silent miscategorization.
+        if (typeof e.data !== 'string') {
+          let msg: { __ctrl?: boolean; t?: string; sid?: string; seq?: number } | null = null
+          try { msg = JSON.parse(new TextDecoder().decode(e.data as ArrayBuffer)) } catch { /* malformed */ }
+          if (!msg || msg.__ctrl !== true) return
+          if (msg.t === 'ack' && typeof msg.seq === 'number') {
+            pendingInputsRef.current.delete(msg.seq)
+          } else if (msg.t === 'hello' && typeof msg.sid === 'string') {
+            const prev = serverSidRef.current
+            if (prev && prev !== msg.sid) {
+              // Server PTY entry was recreated (idle cleanup/crash) → unacked
+              // frames belong to a dead instance; drop them to avoid misapply.
+              pendingInputsRef.current = new Map()
+            } else if (newWs.readyState === WebSocket.OPEN) {
+              // Same entry (reconnect) or first connect → replay unacked frames
+              // in seq order. Server dedups, so this can't duplicate input.
+              const entries = [...pendingInputsRef.current.entries()].sort((a, b) => a[0] - b[0])
+              for (const [, f] of entries) newWs.send(f)
+            }
+            serverSidRef.current = msg.sid
+          }
+          return
+        }
         writeTerm(e.data)
         if (!userScrolledRef.current) termRef.current?.scrollToBottom()
       }
@@ -1436,6 +1563,10 @@ export default function Terminal({ token }: Props) {
         }
         if (reconnectAttempts >= maxReconnectAttempts) {
           writeTerm('\r\n\x1b[31m[Nexus: 重连失败，请刷新页面]\x1b[0m\r\n')
+          // No more retries: drop the pending queue so it can't grow further
+          // (user must refresh; Effect B will clear it then anyway, this is
+          // just earlier memory release).
+          pendingInputsRef.current.clear()
           return
         }
         reconnectAttempts++
@@ -1635,6 +1766,9 @@ export default function Terminal({ token }: Props) {
     onShowCopySheet: (text: string) => setCopySheetText(text),
     collapsed: toolbarCollapsed,
     onCollapsedChange: setToolbarCollapsed,
+    ctrlMod,
+    altMod,
+    onCycleMod: cycleMod,
   }
 
   return (

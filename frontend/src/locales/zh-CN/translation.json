@@ -112,6 +112,8 @@
     "done": "完成"
   },
   "toolbarKeys": {
+    "stickyCtrl": "Ctrl 粘滞键（点按激活，再敲字母组合）",
+    "stickyAlt": "Alt 粘滞键（点按激活，再敲字母组合）",
     "prevHistory": "上一条历史",
     "nextHistory": "下一条历史",
     "cursorLeft": "左移光标",

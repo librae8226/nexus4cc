@@ -1856,10 +1856,29 @@ app.get('*', (req, res) => {
 });
 
 // PTY 多实例管理（F-11/F-18：每个 session:window 独立 PTY）
-const ptyMap = new Map(); // "session:windowIndex" -> { pty, clients: Set<ws>, lastOutput, lastActivity }
+const ptyMap = new Map(); // "session:windowIndex" -> { pty, clients: Set<ws>, lastOutput, lastActivity, inputDedup, sid }
+
+// Cap on distinct client `epoch`s the dedup map keeps per PTY entry. Each
+// fresh client session (page reload) creates a new epoch; the oldest is
+// pruned when this cap is exceeded so the map can't grow unboundedly. 64
+// covers reasonable single-user reload churn before pruning kicks in.
+const MAX_DEDUP_EPOCHS_PER_PTY = 64;
+
+// Per-frame data byte cap. Sized to comfortably absorb typical clipboard
+// pastes (logs, JSON, base64 blobs) on self-hosted setups; far below the ws
+// library's 100MB maxPayload default. Frames over this are rejected with an
+// ack (so the client clears its pending queue instead of replaying forever)
+// and a warn log.
+const MAX_INPUT_DATA_LEN = 256 * 1024;
 
 function ptyKey(session, windowIndex) {
   return `${session}:${windowIndex}`;
+}
+
+// Unique id per PTY entry instance; changes when an entry is (re)created so
+// clients can detect server-side reset and drop stale unacked input frames.
+function newSid() {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
 function ensureWindowPty(session, windowIndex) {
@@ -1911,10 +1930,13 @@ function ensureWindowPty(session, windowIndex) {
     });
   } catch (err) {
     console.error(`pty.spawn failed for ${safeSession}:${targetWindow}:`, err.message);
-    return { key: actualKey, entry: { pty: null, clients: new Set(), clientSizes: new Map(), lastOutput: '', lastActivity: Date.now() } };
+    return { key: actualKey, entry: { pty: null, clients: new Set(), clientSizes: new Map(), lastOutput: '', lastActivity: Date.now(), inputDedup: new Map(), sid: newSid() } };
   }
 
-  const entry = { pty: ptyProc, clients: new Set(), clientSizes: new Map(), lastOutput: '', lastActivity: Date.now() };
+  // sid identifies this PTY instance; clients use it to detect server-side
+  // entry recreation (idle cleanup / crash) and abandon stale unacked input.
+  // inputDedup: epoch -> lastAppliedSeq, the core of "no duplicate input".
+  const entry = { pty: ptyProc, clients: new Set(), clientSizes: new Map(), lastOutput: '', lastActivity: Date.now(), inputDedup: new Map(), sid: newSid() };
   ptyMap.set(actualKey, entry);
 
   ptyProc.onData((data) => {
@@ -1929,6 +1951,19 @@ function ensureWindowPty(session, windowIndex) {
 
   ptyProc.onExit(({ exitCode }) => {
     console.log(`PTY ${actualKey} exited with code ${exitCode}`);
+    // Close every attached client so they reconnect and bind to the NEW
+    // entry (with a new sid + empty inputDedup). Without this, the old ws
+    // stays open, our message handler later resolves `ptyMap.get(key)` to
+    // the freshly respawned entry, and the client's still-pending input
+    // frames (carrying the old epoch) would all be applied to the brand-new
+    // PTY — corrupting the screen with no client warning. Force-close also
+    // makes the client clear its pending queue via the hello sid mismatch.
+    const existing = ptyMap.get(actualKey);
+    if (existing) {
+      for (const client of existing.clients) {
+        try { client.close(4003, 'pty_exited'); } catch { /* already closing */ }
+      }
+    }
     ptyMap.delete(actualKey);
     // 如果 window 还在，重新创建
     try {
@@ -1961,6 +1996,15 @@ wss.on('connection', (ws, req) => {
   }
 
   const { key, entry } = ensureWindowPty(session, windowIndex);
+  if (!entry.pty) {
+    // ensureWindowPty's catch path returns an entry with pty=null when the
+    // tmux attach failed. Surface this to the client (close 4002) instead of
+    // accepting the connection — otherwise hello + acks would be sent but
+    // every input frame would be silently dropped by the (!ent.pty) guard
+    // below, leaving the user with no feedback at all.
+    try { ws.close(4002, 'pty_spawn_failed'); } catch { /* already closing */ }
+    return;
+  }
   entry.clients.add(ws);
   console.log(`Client connected to ${key} (clients: ${entry.clients.size})`);
 
@@ -1969,6 +2013,11 @@ wss.on('connection', (ws, req) => {
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
 
+  // Handshake: tell the client this PTY instance's sid (binary control frame).
+  // Client compares it across reconnects to decide whether to replay unacked
+  // input. PTY output is sent as text frames, control as binary — never collide.
+  try { ws.send(Buffer.from(JSON.stringify({ __ctrl: true, t: 'hello', sid: entry.sid }))); } catch { /* closing */ }
+
   // Send recent output so the screen isn't blank while waiting for the first repaint.
   if (entry.lastOutput) {
     ws.send(entry.lastOutput.slice(-2000));
@@ -1976,25 +2025,67 @@ wss.on('connection', (ws, req) => {
 
   ws.on('message', (msg) => {
     const ent = ptyMap.get(key);
-    if (!ent) return;
+    if (!ent || !ent.pty) return;
     const str = typeof msg === 'string' ? msg : msg.toString();
-    let isResize = false;
-    try {
-      const data = JSON.parse(str);
-      if (data && data.type === 'resize' && data.cols && data.rows) {
-        isResize = true;
-        const newCols = Number(data.cols);
-        const newRows = Number(data.rows);
+    let parsed;
+    try { parsed = JSON.parse(str); } catch { parsed = undefined; }
+
+    if (parsed && typeof parsed === 'object') {
+      // Resize control (idempotent, not sequenced).
+      if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
+        const newCols = Number(parsed.cols);
+        const newRows = Number(parsed.rows);
         ent.clientSizes.set(ws, { cols: newCols, rows: newRows });
-        // 直接使用当前客户端的尺寸，而不是所有客户端的最小值
-        // 避免多个客户端/窗口切换时的尺寸混乱
+        // 直接使用当前客户端的尺寸，避免多客户端/窗口切换时的尺寸混乱
         ent.pty.resize(Math.max(newCols, 10), Math.max(newRows, 5));
+        return;
       }
-    } catch { /* not JSON — fall through to pty.write */ }
-    // Write for all non-resize messages. Previously only the catch branch wrote,
-    // which silently dropped single-digit strings ('1'..'9','0') since
-    // JSON.parse('1') succeeds without throwing.
-    if (!isResize) ent.pty.write(str);
+      // Reliable input frame: { type:'i', epoch, seq, data }.
+      // Dedup by (epoch, seq): a resent frame whose seq was already applied is
+      // dropped — this is what makes duplicate input impossible. Every frame is
+      // acked (even duplicates) so the client can clear its resend queue.
+      // Strict validation: reject Infinity / NaN / negative seq (would poison
+      // the epoch's dedup state — Infinity > anything, NaN > anything is false)
+      // and empty epoch. Oversized data is handled below (acked-and-dropped,
+      // not silently ignored, so the client doesn't replay forever).
+      if (parsed.type === 'i'
+          && Number.isInteger(parsed.seq) && parsed.seq >= 0
+          && typeof parsed.epoch === 'string' && parsed.epoch.length > 0) {
+        // Oversized data → ack + warn + drop. Without the ack, the frame
+        // sits in the client's pending queue and gets replayed on every
+        // reconnect (hello-sid-match branch) — server keeps rejecting,
+        // user sees no feedback, pending grows until MAX_PENDING_INPUT_FRAMES
+        // evicts. Acking releases the queue; warn log surfaces the cause.
+        if (typeof parsed.data === 'string' && parsed.data.length > MAX_INPUT_DATA_LEN) {
+          console.warn(`Nexus: dropped oversized input frame (epoch=${parsed.epoch} seq=${parsed.seq} dataLen=${parsed.data.length} cap=${MAX_INPUT_DATA_LEN})`);
+          if (ws.readyState === 1) {
+            try { ws.send(Buffer.from(JSON.stringify({ __ctrl: true, t: 'ack', seq: parsed.seq }))); } catch { /* closing */ }
+          }
+          return;
+        }
+        const last = ent.inputDedup.get(parsed.epoch) ?? 0;
+        if (parsed.seq > last) {
+          ent.inputDedup.set(parsed.epoch, parsed.seq);
+          if (typeof parsed.data === 'string' && parsed.data) ent.pty.write(parsed.data);
+        }
+        // Bound memory: prune the oldest non-active epoch (page reloads accumulate epochs).
+        if (ent.inputDedup.size > MAX_DEDUP_EPOCHS_PER_PTY) {
+          // Map iteration order = insertion order, so the first key we encounter
+          // that isn't the current epoch is the oldest tracked client session.
+          for (const k of ent.inputDedup.keys()) { if (k !== parsed.epoch) { ent.inputDedup.delete(k); break; } }
+        }
+        if (ws.readyState === 1) {
+          try { ws.send(Buffer.from(JSON.stringify({ __ctrl: true, t: 'ack', seq: parsed.seq }))); } catch { /* closing */ }
+        }
+        return;
+      }
+      // Unknown object envelope — ignore (don't write JSON noise to the PTY).
+      return;
+    }
+
+    // Legacy raw bytes (parse failed, or bare value like a single digit) — write as-is.
+    // Kept for backward compatibility with any non-enveloped client.
+    ent.pty.write(str);
   });
 
   ws.on('close', () => {
