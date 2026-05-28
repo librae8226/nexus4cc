@@ -109,7 +109,8 @@
     "resetToFactory": "将恢复到出厂配置",
     "reset": "重置",
     "saveAsDefault": "存为默认",
-    "done": "完成"
+    "done": "完成",
+    "showKeyboard": "显示键盘"
   },
   "toolbarKeys": {
     "prevHistory": "上一条历史",

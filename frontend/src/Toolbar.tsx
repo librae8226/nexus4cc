@@ -30,6 +30,8 @@ interface Props {
   collapsed?: boolean
   /** Callback when collapsed state changes (for controlled mode) */
   onCollapsedChange?: (collapsed: boolean) => void
+  /** Show / hide the mobile soft keyboard via an explicit toolbar button */
+  onToggleKeyboard?: () => void
 }
 
 // Convert a user-typed label (e.g. "^X", "M-b", "Esc") to the raw seq bytes.
@@ -102,7 +104,7 @@ interface DragState {
 
 const ITEM_HEIGHT = 48 // px，每行编辑项高度
 
-export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _termRef, themeMode, onToggleTheme, onOpenSettings, onUploadFile, onUploadFiles, onOpenFiles, onOpenWorkspace, onFitTerminal, onShowCopySheet, embedded, collapsed: controlledCollapsed, onCollapsedChange }: Props) {
+export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _termRef, themeMode, onToggleTheme, onOpenSettings, onUploadFile, onUploadFiles, onOpenFiles, onOpenWorkspace, onFitTerminal, onShowCopySheet, embedded, collapsed: controlledCollapsed, onCollapsedChange, onToggleKeyboard }: Props) {
   const { t } = useTranslation()
   const [config, setConfig]           = useState<ToolbarConfig>(loadConfig)
   const isControlled = controlledCollapsed !== undefined
@@ -173,12 +175,17 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
   // 根元素：阻止 touchstart 默认行为，防止键盘弹出。
   // 但滚动区及其子元素（含拖拽手柄）跳过 preventDefault，
   // 让浏览器正常处理滚动，也让 React 合成事件能到达 drag handle。
+  // 同样豁免带 data-allow-click 属性的元素（如显式的"唤起键盘"按钮）——
+  // 这类按钮就是要在 click 上下文里调 focus(),touchstart 上的 preventDefault
+  // 会在 Android 上连带掐掉 click 派发,导致 onClick 永远不触发。
   // editing 变化时重新注册，因为元素会切换（container ↔ editPanel）。
   useEffect(() => {
     const el = rootRef.current
     if (!el) return
     const prevent = (e: TouchEvent) => {
-      if (editScrollRef.current?.contains(e.target as Node)) return
+      const target = e.target as Element | null
+      if (editScrollRef.current?.contains(target as Node)) return
+      if (target?.closest('[data-allow-click]')) return
       e.preventDefault()
     }
     el.addEventListener('touchstart', prevent, { passive: false })
@@ -860,6 +867,21 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
       {fileInputsEl}
       <div className="flex items-center py-[3px] px-1.5 gap-1">
         <div className="flex-1" />
+        {/* Keyboard popup: must run in a real click context (synthetic mouse
+            event) for stripped Android WebViews like Via to count it as user
+            activation. The Toolbar root has a touchstart preventDefault that
+            normally suppresses click — data-allow-click opts this button out
+            of that suppression. */}
+        {onToggleKeyboard && (
+          <button
+            className={iconBtnClass}
+            data-allow-click
+            onClick={onToggleKeyboard}
+            title={t('toolbar.showKeyboard')}
+          >
+            <Icon name="keyboard" size={18} />
+          </button>
+        )}
         {/* 上传按钮 - 显示自定义面板 */}
         {onOpenWorkspace && (
           <button

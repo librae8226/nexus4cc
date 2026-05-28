@@ -473,6 +473,35 @@ export default function Terminal({ token }: Props) {
     setIsScrolledUp(false)
   }, [])
 
+  // Show / hide the mobile soft keyboard. Triggered by a real <button> click
+  // in the toolbar so the browser grants user-activation, which Android
+  // System WebView (Via and similar lightweight Chromium browsers) requires
+  // before focus() will pop the keyboard. A tap on the terminal area itself
+  // doesn't pop the keyboard on those engines because it doesn't land on a
+  // focusable interactive target — hence this explicit button.
+  const toggleKeyboard = useCallback(() => {
+    // Focus xterm's own textarea (the same target the master touch handler
+    // uses for Android — confirmed working in Via). Earlier attempts focused
+    // our hidden inputRef which Via silently refuses to pop the keyboard for
+    // even when activation is granted (likely due to its 1px size / cross-
+    // subtree focus from the toolbar button). Switching to xterm.textarea
+    // makes the click on this button do exactly what a click on the terminal
+    // area would do, with the bonus that it works as an always-available
+    // explicit affordance.
+    const xtermTa = termRef.current?.textarea
+    if (!xtermTa) return
+    if (keyboardVisibleRef.current) {
+      keyboardVisibleRef.current = false
+      xtermTa.inputMode = 'none'
+      xtermTa.blur()
+      if (inputRef.current) { inputRef.current.inputMode = 'none'; inputRef.current.blur() }
+    } else {
+      keyboardVisibleRef.current = true
+      xtermTa.inputMode = 'text'
+      xtermTa.focus()
+    }
+  }, [])
+
   const fitTerminal = useCallback(() => {
     const term = termRef.current
     const fitAddon = fitAddonRef.current
@@ -1635,13 +1664,19 @@ export default function Terminal({ token }: Props) {
     onShowCopySheet: (text: string) => setCopySheetText(text),
     collapsed: toolbarCollapsed,
     onCollapsedChange: setToolbarCollapsed,
+    onToggleKeyboard: toggleKeyboard,
   }
 
   return (
     <div className="flex flex-col w-full relative" style={{ height: vvHeight ?? '100dvh' }}>
       <input
         ref={inputRef}
-        className="fixed top-0 left-0 w-px h-px opacity-[0.01] text-base pointer-events-none -z-10"
+        // Lightweight Android WebViews (Via etc.) refuse to pop the soft
+        // keyboard for inputs flagged as non-interactive (aria-hidden /
+        // pointer-events:none), even when focus() is called from valid user
+        // activation. The 1px size + ~0 opacity + -z-10 still keep it
+        // visually invisible while being focusable by the toolbar button.
+        className="fixed top-0 left-0 w-px h-px opacity-[0.01] text-base -z-10"
         autoComplete="off"
         autoCorrect="off"
         autoCapitalize="off"
@@ -1650,7 +1685,6 @@ export default function Terminal({ token }: Props) {
         onKeyDown={handleKeyDown}
         onCompositionStart={() => { isComposingRef.current = true }}
         onCompositionEnd={handleCompositionEnd}
-        aria-hidden="true"
       />
       {/* iOS 相册/文件选择器有两条硬规则：
            1) input 必须是"视觉上真实存在"的元素（不能 display:none / 0 尺寸 /

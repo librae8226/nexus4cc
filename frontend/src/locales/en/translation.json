@@ -109,7 +109,8 @@
     "resetToFactory": "Resets to factory default config",
     "reset": "Reset",
     "saveAsDefault": "Save as Default",
-    "done": "Done"
+    "done": "Done",
+    "showKeyboard": "Show keyboard"
   },
   "toolbarKeys": {
     "prevHistory": "Previous history",
