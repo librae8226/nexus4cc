@@ -103,7 +103,7 @@ echo ""
 # ── 主循环：退出后提示续接 ──
 while true; do
     # kimi 不支持 claude -c 的 conversation resume，直接启动（历史通过左侧 Sessions 面板访问）
-    claude --dangerously-skip-permissions || true
+    $HOME/.local/bin/claude --dangerously-skip-permissions || true
     echo ""
     echo "[Nexus] Claude exited.  r=restart  b=shell  q=quit window"
     read -r REPLY

@@ -188,7 +188,7 @@ app.post('/api/windows', authMiddleware, (req, res) => {
       const runScript = join(__dirname, 'nexus-run-claude.sh');
       shellCmd = `${proxyPrefix}bash "${runScript}" ${profile} ${cwd}`;
     } else {
-      shellCmd = `${proxyPrefix}claude --dangerously-skip-permissions; ${INTERACTIVE_SHELL_CMD}`;
+      shellCmd = `${proxyPrefix}$HOME/.local/bin/claude --dangerously-skip-permissions; ${INTERACTIVE_SHELL_CMD}`;
     }
   }
 
@@ -244,7 +244,7 @@ app.post('/api/sessions', authMiddleware, (req, res) => {
       const runScript = join(__dirname, 'nexus-run-claude.sh');
       shellCmd = `${proxyPrefix}bash "${runScript}" ${profile} ${cwd}`;
     } else {
-      shellCmd = `${proxyPrefix}claude --dangerously-skip-permissions; ${INTERACTIVE_SHELL_CMD}`;
+      shellCmd = `${proxyPrefix}$HOME/.local/bin/claude --dangerously-skip-permissions; ${INTERACTIVE_SHELL_CMD}`;
     }
   }
 
@@ -1170,7 +1170,7 @@ app.post('/api/projects', authMiddleware, (req, res) => {
       // 注意：提示文本里不能有 `"`；用单引号避免与 execFileSync 的参数边界冲突
       shellCmd = `${proxyPrefix}bash '${runScript}' ${profile} '${cwd}' || echo; echo '[Nexus] claude 退出或启动失败，fallback 到 ${INTERACTIVE_SHELL}（可直接输入 claude 重试）'; ${INTERACTIVE_SHELL_CMD}`
     } else {
-      shellCmd = `${proxyPrefix}claude --dangerously-skip-permissions || echo; echo '[Nexus] claude 退出或启动失败，请确认已 claude login 或配置 API key'; ${INTERACTIVE_SHELL_CMD}`
+      shellCmd = `${proxyPrefix}$HOME/.local/bin/claude --dangerously-skip-permissions || echo; echo '[Nexus] claude 退出或启动失败，请确认已 claude login 或配置 API key'; ${INTERACTIVE_SHELL_CMD}`
     }
   }
 
@@ -1254,7 +1254,7 @@ app.post('/api/projects/:name/channels', authMiddleware, (req, res) => {
       const runScript = join(__dirname, 'nexus-run-claude.sh')
       shellCmd = `${proxyPrefix}bash '${runScript}' ${profile} '${cwd}' || echo; echo '[Nexus] claude 退出或启动失败，fallback 到 ${INTERACTIVE_SHELL}（可直接输入 claude 重试）'; ${INTERACTIVE_SHELL_CMD}`
     } else {
-      shellCmd = `${proxyPrefix}claude --dangerously-skip-permissions || echo; echo '[Nexus] claude 退出或启动失败，请确认已 claude login 或配置 API key'; ${INTERACTIVE_SHELL_CMD}`
+      shellCmd = `${proxyPrefix}$HOME/.local/bin/claude --dangerously-skip-permissions || echo; echo '[Nexus] claude 退出或启动失败，请确认已 claude login 或配置 API key'; ${INTERACTIVE_SHELL_CMD}`
     }
   }
 
