@@ -949,7 +949,7 @@ export default function Terminal({ token }: Props) {
       theme: THEMES[initialTheme],
       fontSize,
       fontFamily: 'Menlo, Monaco, "Cascadia Code", "Fira Code", monospace',
-      scrollback: 10000,
+      scrollback: 50000,
       cursorBlink: true,
       cursorInactiveStyle: 'block',
       allowProposedApi: true,
@@ -1019,9 +1019,20 @@ export default function Terminal({ token }: Props) {
 
       // 复制：有选中文字时复制到剪贴板
       if (clipboardMod && clipboardKey === 'c' && noOtherMod) {
-        if (term.hasSelection()) {
+        // 检查 xterm 内部选区（常规鼠标拖选）
+        const xtermSel = term.hasSelection() ? term.getSelection() : ''
+        // 兜底：检查浏览器原生 DOM 选区（tmux mouse on 时 Shift+drag 可能走此路径）
+        const nativeSel = (() => {
+          if (xtermSel) return ''
+          const ns = window.getSelection()
+          if (!ns || ns.isCollapsed) return ''
+          // 选区锚点必须在终端容器内，避免拦截浏览器地址栏等外部操作
+          return containerRef.current?.contains(ns.anchorNode) ? ns.toString() : ''
+        })()
+        const selectedText = xtermSel || nativeSel
+        if (selectedText) {
           e.preventDefault()
-          navigator.clipboard.writeText(term.getSelection()).catch(() => {})
+          copyToClipboard(selectedText)
           return
         }
         // Mac Cmd+C 无选中：不拦截（Mac 终端里 Cmd+C 永远是复制，不发送 SIGINT）
