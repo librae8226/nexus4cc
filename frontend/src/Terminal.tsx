@@ -2085,9 +2085,6 @@ export default function Terminal({ token }: Props) {
               <li>📁 新项目：在选定目录创建窗口</li>
               <li>➕ 新窗口：在当前项目目录创建窗口</li>
             </ul>
-            <p className="text-nexus-muted text-[11px] mt-2">
-              Telegram Bot: /api/telegram/setup 一键配置
-            </p>
             <button
               onClick={() => {
                 setShowGuide(false)
