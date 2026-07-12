@@ -30,6 +30,11 @@ interface Props {
   collapsed?: boolean
   /** Callback when collapsed state changes (for controlled mode) */
   onCollapsedChange?: (collapsed: boolean) => void
+  /** Sticky modifier states (Termux-style) for highlighting the Ctrl/Alt keys. */
+  ctrlMod?: 'off' | 'armed' | 'locked'
+  altMod?: 'off' | 'armed' | 'locked'
+  /** Toggle a sticky modifier (off → armed → locked → off). */
+  onCycleMod?: (name: 'ctrl' | 'alt') => void
 }
 
 // Convert a user-typed label (e.g. "^X", "M-b", "Esc") to the raw seq bytes.
@@ -71,14 +76,31 @@ const COLLAPSED_KEY = 'nexus_toolbar_collapsed'
 // PC 端断点
 const PC_BREAKPOINT = 768
 
+// One-time migration: surface the new Ctrl/Alt sticky modifier keys for users
+// whose saved config predates them. Runs once (guarded by a flag), so a user
+// who later removes the keys keeps them removed.
+const MODS_MIGRATION_KEY = 'nexus_toolbar_mods_v1'
+function migrateMods(cfg: ToolbarConfig): ToolbarConfig {
+  try {
+    if (localStorage.getItem(MODS_MIGRATION_KEY)) return cfg
+    localStorage.setItem(MODS_MIGRATION_KEY, '1')
+    const have = new Set([...(cfg.pinned ?? []), ...(cfg.expanded ?? [])])
+    const add = ['mod-ctrl', 'mod-alt'].filter(id => !have.has(id))
+    if (add.length === 0) return cfg
+    const next = { ...cfg, pinned: [...add, ...(cfg.pinned ?? [])] }
+    localStorage.setItem(CONFIG_KEY, JSON.stringify(next))
+    return next
+  } catch { return cfg }
+}
+
 function loadConfig(): ToolbarConfig {
   try {
     const s = localStorage.getItem(CONFIG_KEY)
-    if (s) return JSON.parse(s)
+    if (s) return migrateMods(JSON.parse(s))
   } catch {}
   try {
     const d = localStorage.getItem(USER_DEFAULT_KEY)
-    if (d) return JSON.parse(d)
+    if (d) return migrateMods(JSON.parse(d))
   } catch {}
   return { pinned: [...FACTORY_CONFIG.pinned], expanded: [...FACTORY_CONFIG.expanded] }
 }
@@ -102,7 +124,7 @@ interface DragState {
 
 const ITEM_HEIGHT = 48 // px，每行编辑项高度
 
-export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _termRef, themeMode, onToggleTheme, onOpenSettings, onUploadFile, onUploadFiles, onOpenFiles, onOpenWorkspace, onFitTerminal, onShowCopySheet, embedded, collapsed: controlledCollapsed, onCollapsedChange }: Props) {
+export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _termRef, themeMode, onToggleTheme, onOpenSettings, onUploadFile, onUploadFiles, onOpenFiles, onOpenWorkspace, onFitTerminal, onShowCopySheet, embedded, collapsed: controlledCollapsed, onCollapsedChange, ctrlMod = 'off', altMod = 'off', onCycleMod }: Props) {
   const { t } = useTranslation()
   const [config, setConfig]           = useState<ToolbarConfig>(loadConfig)
   const isControlled = controlledCollapsed !== undefined
@@ -220,7 +242,11 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
   function updateConfig(next: ToolbarConfig) { setConfig(next); saveConfig(next) }
 
   async function handleKey(key: KeyDef) {
-    if (key.action === 'scrollToBottom') {
+    if (key.action === 'modCtrl') {
+      onCycleMod?.('ctrl')
+    } else if (key.action === 'modAlt') {
+      onCycleMod?.('alt')
+    } else if (key.action === 'scrollToBottom') {
       scrollToBottom()
     } else if (key.action === 'pasteClipboard') {
       // Try clipboard API silently (HTTPS only); fall back to the paste sheet
@@ -371,10 +397,19 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
         {ids.map(id => {
           const key = KEY_MAP[id]
           if (!key) return null
+          // Sticky modifier keys reflect their state: armed = outlined, locked = solid.
+          const modState = key.action === 'modCtrl' ? ctrlMod : key.action === 'modAlt' ? altMod : undefined
+          const baseClass = isPC ? keyPCClass : keyClass
+          const modClass = modState === 'locked'
+            ? ' !bg-nexus-accent !text-white !border-nexus-accent'
+            : modState === 'armed'
+              ? ' !border-nexus-accent !text-nexus-accent ring-1 ring-nexus-accent'
+              : ''
           return (
             <button
               key={id}
-              className={isPC ? keyPCClass : keyClass}
+              className={baseClass + modClass}
+              aria-pressed={modState ? modState !== 'off' : undefined}
               onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); handleKey(key) }}
             >
               {key.label}

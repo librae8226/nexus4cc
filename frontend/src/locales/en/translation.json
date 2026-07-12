@@ -116,6 +116,8 @@
     "done": "Done"
   },
   "toolbarKeys": {
+    "stickyCtrl": "Ctrl sticky key (tap to arm, then type a letter)",
+    "stickyAlt": "Alt sticky key (tap to arm, then type a letter)",
     "prevHistory": "Previous history",
     "nextHistory": "Next history",
     "cursorLeft": "Move cursor left",
