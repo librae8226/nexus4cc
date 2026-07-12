@@ -1394,6 +1394,7 @@ function ensureWindowPty(session, windowIndex) {
     const out = execFileSync('tmux', ['list-windows', '-t', safeSession, '-F', '#I'], { encoding: 'utf8', stdio: 'pipe' });
     const windows = out.trim().split('\n');
     if (!windows.includes(String(windowIndex))) {
+      console.log(`[ensureWindowPty] window ${windowIndex} not found in session ${safeSession}, falling back`);
       if (windows.length > 0) {
         targetWindow = parseInt(windows[0], 10);
       } else {
@@ -1557,6 +1558,12 @@ server.listen(Number(PORT), '0.0.0.0', () => {
   console.log(`Nexus listening on :${PORT}`);
   console.log(`tmux session: ${TMUX_SESSION}`);
   console.log(`workspace: ${WORKSPACE_ROOT}`);
+  // 宕机恢复：若是全新 tmux 服务器（宿主机重启后），先恢复上次会话快照，再做默认 bootstrap。
+  // 脚本自带幂等与 NEXUS_RESTORED 标记保护，Nexus 普通重启不会覆盖在跑的会话。
+  // 详见 docs/SESSION-PERSISTENCE.md。
+  try {
+    execSync(`bash "${join(__dirname, 'scripts', 'nexus-restore-tmux.sh')}"`, { stdio: 'inherit', timeout: 90000 });
+  } catch (e) { console.warn('[Nexus] tmux restore on boot failed:', e.message); }
   // 启动时确保默认 tmux session 存在，窗口名使用 WORKSPACE_ROOT 的目录名
   try {
     const defaultWindowName = WORKSPACE_ROOT.replace(/^\/+|\/+$/, '').split('/').pop() || '~'

@@ -740,26 +740,59 @@ export default function Terminal({ token }: Props) {
     setTimeout(() => sessionManagerRef.current?.refresh(), 500)
   }
 
-  function handleSwitchSession(newSession: string, lastChannel?: number) {
+  async function handleSwitchSession(newSession: string, lastChannel?: number) {
     localStorage.setItem('nexus_session', newSession)
-    // 同步更新 ref，确保 fetchWindows 能立即读到新 session
+    // 同步更新 ref，确保 fetch 能立即读到新 session
     activeTmuxSessionRef.current = newSession
     setActiveTmuxSession(newSession)
-    // 强制 WebSocket 重新连接（即使 activeWindowIndex 没变）
-    setWsSessionKey(newSession)
-    // 重置窗口状态，但如果有 lastChannel 则使用它
+    // 重置窗口状态
     setWindows([])
-    if (lastChannel !== undefined && lastChannel !== null) {
-      setActiveWindowIndex(lastChannel)
-      localStorage.setItem(WINDOW_KEY, String(lastChannel))
-    } else {
-      setActiveWindowIndex(0)
-      localStorage.removeItem(WINDOW_KEY)
-    }
     windowsInitializedRef.current = false
     windowsLoadedRef.current = false
     setWindowsLoaded(false)
-    // 重新获取窗口列表
+
+    // 先获取新 session 的实际窗口列表，验证 lastChannel 是否存在，
+    // 避免 WebSocket 连接到错误窗口（server 端 ensureWindowPty 的静默 fallback）
+    try {
+      const r = await fetch(`/api/sessions?session=${encodeURIComponent(newSession)}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (r.ok) {
+        const d = await r.json()
+        const wins: TmuxWindow[] = d.windows ?? []
+        setWindows(wins)
+        windowsLoadedRef.current = true
+        setWindowsLoaded(true)
+        windowsInitializedRef.current = true
+
+        // 确定正确的目标窗口：
+        // 1. 优先使用 lastChannel（如果在新 session 中仍然存在）
+        // 2. 否则回退到 tmux 的活跃窗口
+        // 3. 兜底为 0
+        let target = 0
+        if (lastChannel != null && wins.some(w => w.index === lastChannel)) {
+          target = lastChannel
+        } else {
+          const active = wins.find(w => w.active)
+          if (active) target = active.index
+        }
+
+        setActiveWindowIndex(target)
+        localStorage.setItem(WINDOW_KEY, String(target))
+        // 强制 WebSocket 重连到验证后的窗口
+        setWsSessionKey(newSession)
+        return
+      }
+    } catch {}
+
+    // fetch 失败时的兜底：使用 lastChannel 或 0，延迟重试
+    setActiveWindowIndex(lastChannel ?? 0)
+    if (lastChannel != null) {
+      localStorage.setItem(WINDOW_KEY, String(lastChannel))
+    } else {
+      localStorage.removeItem(WINDOW_KEY)
+    }
+    setWsSessionKey(newSession)
     setTimeout(() => fetchWindows(), 100)
   }
 
