@@ -93,7 +93,7 @@ function loadDefault(): ToolbarConfig {
 
 // ---- 拖拽状态 ----
 interface DragState {
-  section: 'pinned' | 'expanded'
+  section: 'pinned' | 'expanded' | 'all'
   fromIdx: number
   toIdx: number
   startY: number
@@ -271,13 +271,24 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
     }
   }
 
-  function removeKey(section: 'pinned' | 'expanded', id: string) {
-    updateConfig({ ...config, [section]: config[section].filter(k => k !== id) })
+  function removeKey(_section: 'pinned' | 'expanded' | 'all', id: string) {
+    updateConfig({
+      ...config,
+      pinned: config.pinned.filter(k => k !== id),
+      expanded: config.expanded.filter(k => k !== id),
+    })
   }
 
-  function addKey(section: 'pinned' | 'expanded', id: string) {
-    if (config[section].includes(id)) return
-    updateConfig({ ...config, [section]: [...config[section], id] })
+  function addKey(section: 'pinned' | 'expanded' | 'all', id: string) {
+    if (config.pinned.includes(id) || config.expanded.includes(id)) return
+    if (section === 'pinned') {
+      updateConfig({ ...config, pinned: [...config.pinned, id] })
+    } else if (section === 'expanded') {
+      updateConfig({ ...config, expanded: [...config.expanded, id] })
+    } else {
+      // 'all' — unified mode: append to pinned
+      updateConfig({ ...config, pinned: [...config.pinned, id] })
+    }
   }
 
   function resetConfig() {
@@ -292,32 +303,45 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
   }
 
   // ---- 拖拽逻辑 ----
-  function onDragStart(section: 'pinned' | 'expanded', idx: number, clientY: number) {
+  function onDragStart(section: 'pinned' | 'expanded' | 'all', idx: number, clientY: number) {
     setDrag({ section, fromIdx: idx, toIdx: idx, startY: clientY, currentY: clientY })
+  }
+
+  function getSectionIds(section: 'pinned' | 'expanded' | 'all'): string[] {
+    return section === 'all' ? [...config.pinned, ...config.expanded] : config[section]
   }
 
   function onDragMove(clientY: number) {
     if (!drag) return
     const delta = clientY - drag.startY
     const shift = Math.round(delta / ITEM_HEIGHT)
-    const len = config[drag.section].length
+    const ids = getSectionIds(drag.section)
+    const len = ids.length
     const toIdx = Math.max(0, Math.min(len - 1, drag.fromIdx + shift))
     setDrag(prev => prev ? { ...prev, currentY: clientY, toIdx } : null)
   }
 
   function onDragEnd() {
     if (!drag || drag.fromIdx === drag.toIdx) { setDrag(null); return }
-    const arr = [...config[drag.section]]
-    const [item] = arr.splice(drag.fromIdx, 1)
-    arr.splice(drag.toIdx, 0, item)
-    updateConfig({ ...config, [drag.section]: arr })
+    if (drag.section === 'all') {
+      const all = [...config.pinned, ...config.expanded]
+      const [item] = all.splice(drag.fromIdx, 1)
+      all.splice(drag.toIdx, 0, item)
+      updateConfig({ ...config, pinned: all, expanded: [] })
+    } else {
+      const arr = [...config[drag.section]]
+      const [item] = arr.splice(drag.fromIdx, 1)
+      arr.splice(drag.toIdx, 0, item)
+      updateConfig({ ...config, [drag.section]: arr })
+    }
     setDrag(null)
   }
 
   // 拖拽中预览排列
-  function getDisplayIds(section: 'pinned' | 'expanded'): string[] {
-    if (!drag || drag.section !== section) return config[section]
-    const arr = [...config[section]]
+  function getDisplayIds(section: 'pinned' | 'expanded' | 'all'): string[] {
+    const base = getSectionIds(section)
+    if (!drag || drag.section !== section) return base
+    const arr = [...base]
     const [item] = arr.splice(drag.fromIdx, 1)
     arr.splice(drag.toIdx, 0, item)
     return arr
@@ -350,7 +374,8 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
     updateConfig({
       ...config,
       custom: [...customKeys, keyDef],
-      expanded: [...config.expanded, id],
+      // PC: add to expanded section; mobile: add to unified pinned list
+      ...(isPC ? { expanded: [...config.expanded, id] } : { pinned: [...config.pinned, id] }),
     })
     setNewLabel(''); setNewDesc(''); setFormError('')
   }
@@ -362,27 +387,6 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
       expanded: config.expanded.filter(k => k !== id),
       custom: customKeys.filter(k => k.id !== id),
     })
-  }
-
-  // ---- 渲染按键 ----
-  function renderKeys(ids: string[]) {
-    return (
-      <div className={isPC ? 'flex flex-wrap gap-1.5 px-3 py-1' : 'flex flex-wrap gap-1 px-1.5 py-0.5'}>
-        {ids.map(id => {
-          const key = KEY_MAP[id]
-          if (!key) return null
-          return (
-            <button
-              key={id}
-              className={isPC ? keyPCClass : keyClass}
-              onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); handleKey(key) }}
-            >
-              {key.label}
-            </button>
-          )
-        })}
-      </div>
-    )
   }
 
   // ---- 编辑面板 ----
@@ -411,53 +415,106 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
 
         {/* 列表 */}
         <div ref={editScrollRef} className={isPC ? 'overflow-y-auto flex-1 py-2' : 'overflow-y-auto flex-1'}>
-          {(['pinned', 'expanded'] as const).map(section => (
-            <div key={section} className="mb-1">
-              <div className={isPC ? 'text-nexus-text-2 text-xs px-5 py-2.5 pb-1.5 tracking-wide uppercase' : 'text-nexus-text-2 text-[11px] px-2.5 py-1.5 pb-[3px] tracking-wide uppercase'}>
-                {section === 'pinned' ? t('toolbar.fixedRow') : t('toolbar.expandSection')}
-              </div>
-              {getDisplayIds(section).map((id, idx) => {
-                const key = KEY_MAP[id]
-                if (!key) return null
-                const isDragging = drag?.section === section && drag.toIdx === idx && drag.fromIdx !== idx
-                const isSource   = drag?.section === section && drag.fromIdx === idx && drag.fromIdx !== drag.toIdx
-                return (
-                  <div
-                    key={id}
-                    className={[
-                      isPC ? 'flex items-center px-5 h-12 gap-3 border-b border-nexus-border box-border' : 'flex items-center px-2.5 h-12 gap-2 border-b border-nexus-border box-border',
-                      isDragging ? 'bg-[color-mix(in_srgb,var(--nexus-accent)_12%,transparent)] border-nexus-accent' : '',
-                      isSource ? 'opacity-[0.35]' : ''
-                    ].filter(Boolean).join(' ')}
-                  >
-                    {/* 拖拽手柄 */}
+          {isPC ? (
+            /* PC: pinned + expanded 双区 */
+            (['pinned', 'expanded'] as const).map(section => (
+              <div key={section} className="mb-1">
+                <div className="text-nexus-text-2 text-xs px-5 py-2.5 pb-1.5 tracking-wide uppercase">
+                  {section === 'pinned' ? t('toolbar.fixedRow') : t('toolbar.expandSection')}
+                </div>
+                {getDisplayIds(section).map((id, idx) => {
+                  const key = KEY_MAP[id]
+                  if (!key) return null
+                  const isDragging = drag?.section === section && drag.toIdx === idx && drag.fromIdx !== idx
+                  const isSource   = drag?.section === section && drag.fromIdx === idx && drag.fromIdx !== drag.toIdx
+                  return (
                     <div
-                      className="text-nexus-text-2 text-base cursor-grab py-2 px-1 shrink-0 touch-none flex items-center"
-                      onTouchStart={(e) => { e.stopPropagation(); onDragStart(section, idx, e.touches[0].clientY) }}
-                      onTouchMove={(e) => { e.stopPropagation(); onDragMove(e.touches[0].clientY) }}
-                      onTouchEnd={() => onDragEnd()}
-                      onMouseDown={(e) => {
-                        e.preventDefault()
-                        isDraggingMouse.current = true
-                        onDragStart(section, idx, e.clientY)
-                      }}
+                      key={id}
+                      className={[
+                        'flex items-center px-5 h-12 gap-3 border-b border-nexus-border box-border',
+                        isDragging ? 'bg-[color-mix(in_srgb,var(--nexus-accent)_12%,transparent)] border-nexus-accent' : '',
+                        isSource ? 'opacity-[0.35]' : ''
+                      ].filter(Boolean).join(' ')}
                     >
-                      <Icon name="grip" size={16} />
+                      <div
+                        className="text-nexus-text-2 text-base cursor-grab py-2 px-1 shrink-0 touch-none flex items-center"
+                        onTouchStart={(e) => { e.stopPropagation(); onDragStart(section, idx, e.touches[0].clientY) }}
+                        onTouchMove={(e) => { e.stopPropagation(); onDragMove(e.touches[0].clientY) }}
+                        onTouchEnd={() => onDragEnd()}
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          isDraggingMouse.current = true
+                          onDragStart(section, idx, e.clientY)
+                        }}
+                      >
+                        <Icon name="grip" size={16} />
+                      </div>
+                      <span className="text-nexus-text font-mono text-sm min-w-[60px] shrink-0">{key.label}</span>
+                      <span className="text-nexus-text-2 text-xs flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{t(key.desc)}</span>
+                      <button
+                        className="bg-transparent border-none text-nexus-error cursor-pointer text-xl px-2 py-1 shrink-0 leading-none flex items-center justify-center"
+                        onPointerDown={(e) => { e.preventDefault(); removeKey(section, id) }}
+                        title={t('toolbar.remove')}
+                      >
+                        <Icon name="x" size={14} />
+                      </button>
                     </div>
-                    <span className={isPC ? 'text-nexus-text font-mono text-sm min-w-[60px] shrink-0' : 'text-nexus-text font-mono text-[13px] min-w-[48px] shrink-0'}>{key.label}</span>
-                    <span className={isPC ? 'text-nexus-text-2 text-xs flex-1 overflow-hidden text-ellipsis whitespace-nowrap' : 'text-nexus-text-2 text-[11px] flex-1 overflow-hidden text-ellipsis whitespace-nowrap'}>{t(key.desc)}</span>
-                    <button
-                      className={isPC ? 'bg-transparent border-none text-nexus-error cursor-pointer text-xl px-2 py-1 shrink-0 leading-none flex items-center justify-center' : 'bg-transparent border-none text-nexus-error cursor-pointer text-lg px-0.5 shrink-0 leading-none flex items-center justify-center'}
-                      onPointerDown={(e) => { e.preventDefault(); removeKey(section, id) }}
-                      title={t('toolbar.remove')}
-                    >
-                      <Icon name="x" size={14} />
-                    </button>
+                  )
+                })}
+              </div>
+            ))
+          ) : (
+            /* Mobile: 统一列表，拖放排序 */
+            (() => {
+              const ids = getDisplayIds('all')
+              return ids.length > 0 ? (
+                <div className="mb-1">
+                  <div className="text-nexus-text-2 text-[11px] px-2.5 py-1.5 pb-[3px] tracking-wide uppercase">
+                    {t('toolbar.shortcuts')}
                   </div>
-                )
-              })}
-            </div>
-          ))}
+                  {ids.map((id, idx) => {
+                    const key = KEY_MAP[id]
+                    if (!key) return null
+                    const isDragging = drag?.section === 'all' && drag.toIdx === idx && drag.fromIdx !== idx
+                    const isSource   = drag?.section === 'all' && drag.fromIdx === idx && drag.fromIdx !== drag.toIdx
+                    return (
+                      <div
+                        key={id}
+                        className={[
+                          'flex items-center px-2.5 h-12 gap-2 border-b border-nexus-border box-border',
+                          isDragging ? 'bg-[color-mix(in_srgb,var(--nexus-accent)_12%,transparent)] border-nexus-accent' : '',
+                          isSource ? 'opacity-[0.35]' : ''
+                        ].filter(Boolean).join(' ')}
+                      >
+                        <div
+                          className="text-nexus-text-2 text-base cursor-grab py-2 px-1 shrink-0 touch-none flex items-center"
+                          onTouchStart={(e) => { e.stopPropagation(); onDragStart('all', idx, e.touches[0].clientY) }}
+                          onTouchMove={(e) => { e.stopPropagation(); onDragMove(e.touches[0].clientY) }}
+                          onTouchEnd={() => onDragEnd()}
+                          onMouseDown={(e) => {
+                            e.preventDefault()
+                            isDraggingMouse.current = true
+                            onDragStart('all', idx, e.clientY)
+                          }}
+                        >
+                          <Icon name="grip" size={16} />
+                        </div>
+                        <span className="text-nexus-text font-mono text-[13px] min-w-[48px] shrink-0">{key.label}</span>
+                        <span className="text-nexus-text-2 text-[11px] flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{t(key.desc)}</span>
+                        <button
+                          className="bg-transparent border-none text-nexus-error cursor-pointer text-lg px-0.5 shrink-0 leading-none flex items-center justify-center"
+                          onPointerDown={(e) => { e.preventDefault(); removeKey('all', id) }}
+                          title={t('toolbar.remove')}
+                        >
+                          <Icon name="x" size={14} />
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : null
+            })()
+          )}
 
           {/* 自定义按键 */}
           <div className="mb-1">
@@ -467,22 +524,31 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
             {customKeys.map(key => {
               const inPinned = config.pinned.includes(key.id)
               const inExpanded = config.expanded.includes(key.id)
+              const inToolbar = inPinned || inExpanded
               return (
                 <div key={key.id} className={isPC ? 'flex items-center px-5 h-12 gap-3 border-b border-nexus-border box-border' : 'flex items-center px-2.5 h-12 gap-2 border-b border-nexus-border box-border'}>
                   <span className={isPC ? 'text-nexus-text font-mono text-sm min-w-[60px] shrink-0' : 'text-nexus-text font-mono text-[13px] min-w-[48px] shrink-0'}>{key.label}</span>
                   <span className={isPC ? 'text-nexus-text-2 text-xs flex-1 overflow-hidden text-ellipsis whitespace-nowrap' : 'text-nexus-text-2 text-[11px] flex-1 overflow-hidden text-ellipsis whitespace-nowrap'}>{key.desc}</span>
                   <div className="flex gap-1 shrink-0">
-                    {!inPinned && !inExpanded && (
+                    {isPC ? (
                       <>
-                        <button className={isPC ? addBtnPCClass : addBtnClass} onPointerDown={(e) => { e.preventDefault(); addKey('pinned', key.id) }}>{t('toolbar.pinToFixed')}</button>
-                        <button className={isPC ? addBtnPCClass : addBtnClass} onPointerDown={(e) => { e.preventDefault(); addKey('expanded', key.id) }}>{t('toolbar.pinToExpand')}</button>
+                        {!inPinned && !inExpanded && (
+                          <>
+                            <button className={addBtnPCClass} onPointerDown={(e) => { e.preventDefault(); addKey('pinned', key.id) }}>{t('toolbar.pinToFixed')}</button>
+                            <button className={addBtnPCClass} onPointerDown={(e) => { e.preventDefault(); addKey('expanded', key.id) }}>{t('toolbar.pinToExpand')}</button>
+                          </>
+                        )}
+                        {inExpanded && (
+                          <button className={addBtnPCClass} onPointerDown={(e) => { e.preventDefault(); updateConfig({ ...config, expanded: config.expanded.filter(k => k !== key.id), pinned: [...config.pinned, key.id] }) }}>→ {t('toolbar.pinToFixed')}</button>
+                        )}
+                        {inPinned && (
+                          <button className={addBtnPCClass} onPointerDown={(e) => { e.preventDefault(); updateConfig({ ...config, pinned: config.pinned.filter(k => k !== key.id), expanded: [...config.expanded, key.id] }) }}>→ {t('toolbar.pinToExpand')}</button>
+                        )}
                       </>
-                    )}
-                    {inExpanded && (
-                      <button className={isPC ? addBtnPCClass : addBtnClass} onPointerDown={(e) => { e.preventDefault(); updateConfig({ ...config, expanded: config.expanded.filter(k => k !== key.id), pinned: [...config.pinned, key.id] }) }}>→ {t('toolbar.pinToFixed')}</button>
-                    )}
-                    {inPinned && (
-                      <button className={isPC ? addBtnPCClass : addBtnClass} onPointerDown={(e) => { e.preventDefault(); updateConfig({ ...config, pinned: config.pinned.filter(k => k !== key.id), expanded: [...config.expanded, key.id] }) }}>→ {t('toolbar.pinToExpand')}</button>
+                    ) : (
+                      !inToolbar && (
+                        <button className={addBtnClass} onPointerDown={(e) => { e.preventDefault(); addKey('all', key.id) }}>Add</button>
+                      )
                     )}
                     <button
                       className={isPC ? 'bg-transparent border-none text-nexus-error cursor-pointer text-xl px-2 py-1 shrink-0 leading-none flex items-center justify-center' : 'bg-transparent border-none text-nexus-error cursor-pointer text-lg px-0.5 shrink-0 leading-none flex items-center justify-center'}
@@ -537,8 +603,14 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
                   <span className={isPC ? 'text-nexus-text font-mono text-sm min-w-[60px] shrink-0' : 'text-nexus-text font-mono text-[13px] min-w-[48px] shrink-0'}>{key.label}</span>
                   <span className={isPC ? 'text-nexus-text-2 text-xs flex-1 overflow-hidden text-ellipsis whitespace-nowrap' : 'text-nexus-text-2 text-[11px] flex-1 overflow-hidden text-ellipsis whitespace-nowrap'}>{t(key.desc)}</span>
                   <div className="flex gap-1 ml-auto shrink-0">
-                    <button className={isPC ? addBtnPCClass : addBtnClass} onPointerDown={(e) => { e.preventDefault(); addKey('pinned', key.id) }}>{t('toolbar.pinToFixed')}</button>
-                    <button className={isPC ? addBtnPCClass : addBtnClass} onPointerDown={(e) => { e.preventDefault(); addKey('expanded', key.id) }}>{t('toolbar.pinToExpand')}</button>
+                    {isPC ? (
+                      <>
+                        <button className={addBtnPCClass} onPointerDown={(e) => { e.preventDefault(); addKey('pinned', key.id) }}>{t('toolbar.pinToFixed')}</button>
+                        <button className={addBtnPCClass} onPointerDown={(e) => { e.preventDefault(); addKey('expanded', key.id) }}>{t('toolbar.pinToExpand')}</button>
+                      </>
+                    ) : (
+                      <button className={addBtnClass} onPointerDown={(e) => { e.preventDefault(); addKey('all', key.id) }}>Add</button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -950,29 +1022,33 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
         </button>
       </div>
 
-      {renderKeys(config.pinned)}
-
-      {!collapsed && (
-        <div className="pb-1">
-          {chunk(config.expanded, 8).map((row, i) => (
-            <div key={i} className="flex flex-wrap gap-1 px-1.5 py-0.5">
-              {row.map(id => {
-                const key = KEY_MAP[id]
-                if (!key) return null
-                return (
-                  <button
-                    key={id}
-                    className={keyClass}
-                    onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); handleKey(key) }}
-                  >
-                    {key.label}
-                  </button>
-                )
-              })}
-            </div>
-          ))}
-        </div>
-      )}
+      {(() => {
+        const ids = [...config.pinned, ...config.expanded]
+        if (ids.length === 0) return null
+        return (
+          <div
+            className="grid gap-1 px-1.5 py-0.5"
+            style={{
+              gridTemplateColumns: 'repeat(auto-fill, minmax(38px, 1fr))',
+              ...(collapsed ? { maxHeight: '34px', overflow: 'hidden' } : { paddingBottom: '0.25rem' }),
+            }}
+          >
+            {ids.map(id => {
+              const key = KEY_MAP[id]
+              if (!key) return null
+              return (
+                <button
+                  key={id}
+                  className={`${keyClass} w-full`}
+                  onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); handleKey(key) }}
+                >
+                  {key.label}
+                </button>
+              )
+            })}
+          </div>
+        )
+      })()}
       {pasteBoxEl}
     </div>
   )
