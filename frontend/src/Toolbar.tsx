@@ -431,14 +431,14 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
                     <div
                       key={id}
                       className={[
-                        'flex items-center px-5 h-12 gap-3 border-b border-nexus-border box-border',
+                        'flex items-center px-5 h-12 gap-3 border-b border-nexus-border box-border select-none',
                         isDragging ? 'bg-[color-mix(in_srgb,var(--nexus-accent)_12%,transparent)] border-nexus-accent' : '',
                         isSource ? 'opacity-[0.35]' : ''
                       ].filter(Boolean).join(' ')}
                     >
                       <div
                         className="text-nexus-text-2 text-base cursor-grab py-2 px-1 shrink-0 touch-none flex items-center"
-                        onTouchStart={(e) => { e.stopPropagation(); onDragStart(section, idx, e.touches[0].clientY) }}
+                        onTouchStart={(e) => { e.preventDefault(); e.stopPropagation(); onDragStart(section, idx, e.touches[0].clientY) }}
                         onTouchMove={(e) => { e.stopPropagation(); onDragMove(e.touches[0].clientY) }}
                         onTouchEnd={() => onDragEnd()}
                         onMouseDown={(e) => {
@@ -481,14 +481,14 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
                       <div
                         key={id}
                         className={[
-                          'flex items-center px-2.5 h-12 gap-2 border-b border-nexus-border box-border',
+                          'flex items-center px-2.5 h-12 gap-2 border-b border-nexus-border box-border select-none',
                           isDragging ? 'bg-[color-mix(in_srgb,var(--nexus-accent)_12%,transparent)] border-nexus-accent' : '',
                           isSource ? 'opacity-[0.35]' : ''
                         ].filter(Boolean).join(' ')}
                       >
                         <div
                           className="text-nexus-text-2 text-base cursor-grab py-2 px-1 shrink-0 touch-none flex items-center"
-                          onTouchStart={(e) => { e.stopPropagation(); onDragStart('all', idx, e.touches[0].clientY) }}
+                          onTouchStart={(e) => { e.preventDefault(); e.stopPropagation(); onDragStart('all', idx, e.touches[0].clientY) }}
                           onTouchMove={(e) => { e.stopPropagation(); onDragMove(e.touches[0].clientY) }}
                           onTouchEnd={() => onDragEnd()}
                           onMouseDown={(e) => {
