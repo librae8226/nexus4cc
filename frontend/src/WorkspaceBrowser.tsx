@@ -59,6 +59,29 @@ function TocNode({ entry, depth, expandedIds, onToggle, onNavigate }: {
   const hasChildren = entry.children.length > 0
   const isExpanded = expandedIds.has(entry.id)
   const indent = Math.min(depth, 5) * 16
+  const clickTimer = useRef<number | null>(null)
+
+  function handleTextClick() {
+    if (hasChildren && clickTimer.current !== null) {
+      // Double-click detected: toggle expand/collapse
+      clearTimeout(clickTimer.current)
+      clickTimer.current = null
+      onToggle(entry.id)
+      return
+    }
+    // Wait briefly to see if a second click follows (double-click)
+    clickTimer.current = window.setTimeout(() => {
+      clickTimer.current = null
+      onNavigate(entry.id)
+    }, 280)
+  }
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (clickTimer.current !== null) clearTimeout(clickTimer.current)
+    }
+  }, [])
 
   return (
     <div>
@@ -78,7 +101,7 @@ function TocNode({ entry, depth, expandedIds, onToggle, onNavigate }: {
           <span className="w-[18px] flex-shrink-0" />
         )}
         <span
-          onClick={() => onNavigate(entry.id)}
+          onClick={handleTextClick}
           className="text-nexus-text text-sm truncate hover:text-nexus-accent flex-1"
         >
           {entry.text}
