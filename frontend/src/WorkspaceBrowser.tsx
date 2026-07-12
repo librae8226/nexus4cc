@@ -30,6 +30,149 @@ function formatTime(ts: number): string {
   return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
 }
 
+// TOC types and utilities
+interface TocEntry {
+  id: string
+  text: string
+  level: number
+  children: TocEntry[]
+}
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[^\w一-鿿-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+// Recursive TOC node component
+function TocNode({ entry, depth, expandedIds, onToggle, onNavigate }: {
+  entry: TocEntry
+  depth: number
+  expandedIds: Set<string>
+  onToggle: (id: string) => void
+  onNavigate: (id: string) => void
+}) {
+  const hasChildren = entry.children.length > 0
+  const isExpanded = expandedIds.has(entry.id)
+  const indent = Math.min(depth, 5) * 16
+
+  return (
+    <div>
+      <div
+        className="flex items-center gap-0.5 py-1 pr-2 rounded hover:bg-nexus-bg-2 cursor-pointer select-none"
+        style={{ paddingLeft: `${indent}px` }}
+      >
+        {hasChildren ? (
+          <button
+            onClick={(e) => { e.stopPropagation(); onToggle(entry.id) }}
+            className="p-0.5 text-nexus-muted hover:text-nexus-text flex-shrink-0 bg-transparent border-none cursor-pointer"
+            aria-label={isExpanded ? 'Collapse' : 'Expand'}
+          >
+            <Icon name={isExpanded ? 'chevronDown' : 'chevronRight'} size={14} />
+          </button>
+        ) : (
+          <span className="w-[18px] flex-shrink-0" />
+        )}
+        <span
+          onClick={() => onNavigate(entry.id)}
+          className="text-nexus-text text-sm truncate hover:text-nexus-accent flex-1"
+        >
+          {entry.text}
+        </span>
+      </div>
+      {hasChildren && isExpanded && (
+        <div>
+          {entry.children.map(child => (
+            <TocNode
+              key={child.id}
+              entry={child}
+              depth={depth + 1}
+              expandedIds={expandedIds}
+              onToggle={onToggle}
+              onNavigate={onNavigate}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function buildToc(markdown: string): TocEntry[] {
+  // Use marked's lexer for proper parsing — regex can't distinguish
+  // real headings from # lines inside fenced code blocks.
+  const tokens = marked.lexer(markdown)
+  const headings: { level: number; text: string; id: string }[] = []
+  for (const token of tokens) {
+    if (token.type === 'heading') {
+      const t = token as any
+      const text = (t.text || '').trim()
+      if (text) {
+        headings.push({ level: t.depth as number, text, id: slugify(text) })
+      }
+    }
+  }
+
+  // Deduplicate IDs
+  const idCounts = new Map<string, number>()
+  for (const h of headings) {
+    const count = idCounts.get(h.id) || 0
+    if (count > 0) {
+      h.id = `${h.id}-${count}`
+    }
+    idCounts.set(h.id, (idCounts.get(h.id) || 0) + 1)
+  }
+
+  // Build tree
+  const root: TocEntry[] = []
+  const stack: TocEntry[] = []
+  for (const h of headings) {
+    const entry: TocEntry = { id: h.id, text: h.text, level: h.level, children: [] }
+    while (stack.length > 0 && stack[stack.length - 1].level >= h.level) {
+      stack.pop()
+    }
+    if (stack.length === 0) {
+      root.push(entry)
+    } else {
+      stack[stack.length - 1].children.push(entry)
+    }
+    stack.push(entry)
+  }
+  return root
+}
+
+// Collect all node IDs that have children (for expand-all)
+function collectParentIds(tree: TocEntry[]): string[] {
+  const ids: string[] = []
+  for (const entry of tree) {
+    if (entry.children.length > 0) {
+      ids.push(entry.id)
+      ids.push(...collectParentIds(entry.children))
+    }
+  }
+  return ids
+}
+
+// marked renderer factory: creates a Renderer that generates heading IDs using slugify
+function createMarkedRenderer() {
+  const r = new marked.Renderer()
+  const seenIds = new Map<string, number>()
+  r.heading = function (opts: { tokens: any[]; depth: number; text: string }) {
+    let id = slugify(opts.text)
+    const count = seenIds.get(id) || 0
+    if (count > 0) {
+      id = `${id}-${count}`
+    }
+    seenIds.set(id, (seenIds.get(id) || 0) + 1)
+    return `<h${opts.depth} id="${id}">${this.parser.parseInline(opts.tokens)}</h${opts.depth}>\n`
+  }
+  return r
+}
+
 export default function WorkspaceBrowser({ token, onClose, initialPath = '', currentSession }: Props) {
   const { t } = useTranslation()
   const [workspaceRoot, setWorkspaceRoot] = useState('')
@@ -106,6 +249,17 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
   const [editorFontSize, setEditorFontSize] = useState(14) // 基础 14px
   const [pinchStartDist, setPinchStartDist] = useState(0)
   const [pinchStartFontSize, setPinchStartFontSize] = useState(14)
+
+  // TOC state
+  const [showToc, setShowToc] = useState(false)
+  const [tocExpandedIds, setTocExpandedIds] = useState<Set<string>>(new Set())
+  const pendingScrollId = useRef<string | null>(null)
+
+  // Build TOC tree from editor content
+  const tocTree = useMemo(() => {
+    if (!editingFile || !isMarkdownFile(editingFile.name)) return []
+    return buildToc(editorContent)
+  }, [editingFile, editorContent])
 
   // 长按 / 右键菜单状态
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry: FileEntry } | null>(null)
@@ -426,7 +580,9 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
       const data = await r.json()
       setEditingFile({ name, path: filePath, content: data.content })
       setEditorContent(data.content)
-      setIsPreviewMode(false)
+      setIsPreviewMode(true)
+      setShowToc(false)
+      setTocExpandedIds(new Set())
     } catch (e: any) {
       setError(e.message || 'Failed to open file')
     }
@@ -451,6 +607,56 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
       setIsSaving(false)
     }
   }
+
+  // TOC helpers
+  function toggleTocNode(id: string) {
+    setTocExpandedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
+
+  function expandAllToc() {
+    setTocExpandedIds(new Set(collectParentIds(tocTree)))
+  }
+
+  function collapseAllToc() {
+    setTocExpandedIds(new Set())
+  }
+
+  const isAllExpanded = tocTree.length > 0 && tocExpandedIds.size >= collectParentIds(tocTree).length
+
+  function scrollToHeading(id: string) {
+    const el = document.getElementById(id)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }
+
+  function navigateToHeading(id: string) {
+    if (!isPreviewMode) {
+      setIsPreviewMode(true)
+      pendingScrollId.current = id
+    } else {
+      scrollToHeading(id)
+    }
+  }
+
+  // Scroll to pending heading after preview mode renders
+  useEffect(() => {
+    if (isPreviewMode && pendingScrollId.current) {
+      const id = pendingScrollId.current
+      pendingScrollId.current = null
+      requestAnimationFrame(() => {
+        document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
+    }
+  }, [isPreviewMode, editorContent])
 
   // 双击处理：目录进入，文件在编辑器中打开
   function handleDoubleClick(entry: FileEntry) {
@@ -1107,7 +1313,7 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
                 <Icon name="save" size={14} />
                 {isSaving ? t('common.saving') : t('common.save')}
               </button>
-              {editingFile && isMarkdownFile(editingFile.name) && (
+              {editingFile && (
                 <button
                   onClick={() => setIsPreviewMode(!isPreviewMode)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded transition-colors border ${
@@ -1116,12 +1322,25 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
                       : 'bg-nexus-bg-2 text-nexus-text border-nexus-border hover:bg-nexus-bg-2/80'
                   }`}
                 >
-                  <Icon name="eye" size={14} />
+                  <Icon name={isPreviewMode ? 'edit' : 'eye'} size={14} />
                   {isPreviewMode ? t('workspace.edit') : t('workspace.preview')}
                 </button>
               )}
+              {editingFile && isMarkdownFile(editingFile.name) && (
+                <button
+                  onClick={() => setShowToc(!showToc)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded transition-colors border ${
+                    showToc
+                      ? 'bg-nexus-accent text-white border-nexus-accent'
+                      : 'bg-nexus-bg-2 text-nexus-text border-nexus-border hover:bg-nexus-bg-2/80'
+                  }`}
+                >
+                  <Icon name="list" size={14} />
+                  {t('workspace.toc')}
+                </button>
+              )}
               <button
-                onClick={() => { setEditingFile(null); setEditorContent(''); setIsPreviewMode(false); setEditorFontSize(14) }}
+                onClick={() => { setEditingFile(null); setEditorContent(''); setIsPreviewMode(false); setEditorFontSize(14); setShowToc(false); setTocExpandedIds(new Set()) }}
                 className="bg-transparent border-none text-nexus-text-2 cursor-pointer p-1.5 flex items-center justify-center rounded-md"
               >
                 <Icon name="x" size={20} />
@@ -1146,7 +1365,12 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
               <textarea
                 value={editorContent}
                 onChange={(e) => setEditorContent(e.target.value)}
-                className="w-full h-full bg-nexus-bg-2 border border-nexus-border rounded p-3 text-nexus-text font-mono resize-none focus:outline-none focus:border-nexus-accent"
+                readOnly={isPreviewMode}
+                className={`w-full h-full bg-nexus-bg-2 border border-nexus-border rounded p-3 font-mono resize-none focus:outline-none focus:border-nexus-accent ${
+                  isPreviewMode
+                    ? 'text-nexus-text cursor-default'
+                    : 'text-nexus-text'
+                }`}
                 style={{ fontSize: `${editorFontSize}px`, lineHeight: '1.6' }}
                 spellCheck={false}
               />
@@ -1167,6 +1391,55 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
             </div>
             <span>{editingFile.path}</span>
           </div>
+
+          {/* TOC Panel */}
+          {showToc && editingFile && isMarkdownFile(editingFile.name) && (
+            <>
+              {/* Backdrop */}
+              <div
+                className="fixed inset-0 z-[475] bg-black/20"
+                onClick={() => setShowToc(false)}
+              />
+              {/* TOC side panel */}
+              <div className="fixed top-0 right-0 bottom-0 w-[280px] max-w-[80vw] z-[480] bg-nexus-bg border-l border-nexus-border flex flex-col shadow-xl">
+                {/* TOC Header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-nexus-border flex-shrink-0">
+                  <span className="text-nexus-text font-medium text-sm">{t('workspace.toc')}</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={isAllExpanded ? collapseAllToc : expandAllToc}
+                      className="text-xs text-nexus-accent hover:underline bg-transparent border-none cursor-pointer"
+                    >
+                      {isAllExpanded ? t('workspace.collapseAll') : t('workspace.expandAll')}
+                    </button>
+                    <button
+                      onClick={() => setShowToc(false)}
+                      className="bg-transparent border-none text-nexus-text-2 cursor-pointer p-1 flex items-center justify-center rounded-md"
+                    >
+                      <Icon name="x" size={16} />
+                    </button>
+                  </div>
+                </div>
+                {/* TOC Tree */}
+                <div className="flex-1 overflow-y-auto px-3 py-2">
+                  {tocTree.length === 0 ? (
+                    <p className="text-nexus-muted text-sm text-center py-4">{t('workspace.noHeadings')}</p>
+                  ) : (
+                    tocTree.map(entry => (
+                      <TocNode
+                        key={entry.id}
+                        entry={entry}
+                        depth={0}
+                        expandedIds={tocExpandedIds}
+                        onToggle={toggleTocNode}
+                        onNavigate={navigateToHeading}
+                      />
+                    ))
+                  )}
+                </div>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>
@@ -1199,7 +1472,10 @@ marked.setOptions({
 
 // Markdown preview component using marked + DOMPurify
 function MarkdownPreview({ content, fontSize = 14 }: { content: string; fontSize?: number }) {
-  const rawHtml = marked.parse(content, { async: false }) as string
+  // Always create a fresh renderer — the renderer has mutable seenIds state
+  // and must not be reused across separate parse calls
+  const renderer = createMarkedRenderer()
+  const rawHtml = marked.parse(content, { renderer, async: false }) as string
   const cleanHtml = DOMPurify.sanitize(rawHtml, {
     ALLOWED_TAGS: [
       'p', 'br', 'strong', 'em', 'del', 'a', 'img', 'code', 'pre',
@@ -1207,7 +1483,7 @@ function MarkdownPreview({ content, fontSize = 14 }: { content: string; fontSize
       'ul', 'ol', 'li', 'blockquote', 'hr', 'table', 'thead', 'tbody',
       'tr', 'th', 'td', 'input' // input for task lists
     ],
-    ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'target', 'rel', 'checked', 'disabled'],
+    ALLOWED_ATTR: ['id', 'href', 'src', 'alt', 'title', 'target', 'rel', 'checked', 'disabled'],
     ALLOW_DATA_ATTR: false,
   })
 
