@@ -202,6 +202,49 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
   const { t } = useTranslation()
   const [workspaceRoot, setWorkspaceRoot] = useState('')
 
+  // Sidebar width for embedded mode (persisted + draggable)
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    if (typeof localStorage !== 'undefined') {
+      const saved = localStorage.getItem('nexus_filetree_width')
+      if (saved) return Math.max(200, Math.min(600, parseInt(saved, 10)))
+    }
+    return 280
+  })
+  const draggingRef = useRef(false)
+  const dragStartXRef = useRef(0)
+  const dragStartWidthRef = useRef(0)
+  const dragWidthRef = useRef(sidebarWidth)
+
+  function handleResizeMouseDown(e: React.MouseEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    draggingRef.current = true
+    dragStartXRef.current = e.clientX
+    dragStartWidthRef.current = sidebarWidth
+
+    function onMouseMove(ev: MouseEvent) {
+      if (!draggingRef.current) return
+      const dx = ev.clientX - dragStartXRef.current
+      const newWidth = Math.max(200, Math.min(window.innerWidth * 0.5, dragStartWidthRef.current + dx))
+      dragWidthRef.current = newWidth
+      setSidebarWidth(newWidth)
+    }
+
+    function onMouseUp() {
+      draggingRef.current = false
+      localStorage.setItem('nexus_filetree_width', String(dragWidthRef.current))
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }
+
   // 路径状态：null 表示正在初始化
   const [currentPath, setCurrentPath] = useState<string | null>(null)
   const [entries, setEntries] = useState<FileEntry[]>([])
@@ -797,9 +840,10 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
   return (
     <>
     <div className={embedded
-      ? 'w-[280px] h-full border-r border-nexus-border bg-nexus-bg flex flex-col flex-shrink-0 overflow-hidden'
+      ? 'h-full border-r border-nexus-border bg-nexus-bg flex flex-col flex-shrink-0 overflow-hidden relative'
       : 'fixed inset-0 z-[450] bg-nexus-bg flex flex-col'
-    }>
+    }
+      style={embedded ? { width: sidebarWidth } : undefined}>
       {/* Header — hidden in embedded mode (sidebar has own toggle) */}
       {!embedded && (
       <div className="flex items-center justify-between px-4 py-3.5 border-b border-nexus-border flex-shrink-0">
@@ -1342,6 +1386,13 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
         </div>
       )}
 
+      {/* Resize handle — right edge of embedded sidebar */}
+      {embedded && (
+        <div
+          className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-nexus-accent/30 active:bg-nexus-accent/50 transition-colors z-10"
+          onMouseDown={handleResizeMouseDown}
+        />
+      )}
     </div>
     {/* 文件编辑器 — in embedded mode renders as adjacent panel, otherwise full-screen overlay */}
     {editingFile && (
