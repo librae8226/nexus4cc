@@ -753,7 +753,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
 
   // ---- 嵌入侧边栏模式（PC端） ----
   if (embedded) {
-    const allEmbedded = [...config.pinned, ...(collapsed ? [] : config.expanded)]
+    const allEmbedded = [...config.pinned, ...config.expanded]
     return (
       <div ref={rootRef} className="border-t border-nexus-border shrink-0 bg-nexus-bg">
         {/* Section header */}
@@ -770,8 +770,14 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
             title={collapsed ? t('toolbar.expand') : t('toolbar.collapse')}
           ><Icon name={collapsed ? 'chevronUp' : 'chevronDown'} size={18} /></button>
         </div>
-        {/* Key grid */}
-        <div className="flex flex-wrap gap-[3px] px-2 pb-2">
+        {/* Key grid — unified pinned+expanded; collapsed clips to one row */}
+        <div
+          className="grid gap-[3px] px-2"
+          style={{
+            gridTemplateColumns: 'repeat(auto-fill, minmax(30px, 1fr))',
+            ...(collapsed ? { maxHeight: '28px', overflow: 'hidden' } : { paddingBottom: '0.5rem' }),
+          }}
+        >
           {allEmbedded.map(id => {
             const key = KEY_MAP[id]
             if (!key) return null
