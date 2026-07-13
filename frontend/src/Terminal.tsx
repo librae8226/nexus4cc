@@ -225,6 +225,9 @@ export default function Terminal({ token }: Props) {
   const hasConnectedRef = useRef(false)
   const [showFiles, setShowFiles] = useState(false)
   const [showWorkspace, setShowWorkspace] = useState(false)
+  const [isVeryWide, setIsVeryWide] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 1024)
+  const [showFileBrowser, setShowFileBrowser] = useState(false)
+  const [fileEditorOpen, setFileEditorOpen] = useState(false)
   const [copySheetText, setCopySheetText] = useState<string | null>(null)
   const [showScrollback, setShowScrollback] = useState(false)
   const [scrollbackContent, setScrollbackContent] = useState('')
@@ -345,7 +348,10 @@ export default function Terminal({ token }: Props) {
   }, [token])
 
   useEffect(() => {
-    const check = () => setIsWidePC(window.innerWidth >= 768)
+    const check = () => {
+      setIsWidePC(window.innerWidth >= 768)
+      setIsVeryWide(window.innerWidth >= 1024)
+    }
     window.addEventListener('resize', check)
     return () => window.removeEventListener('resize', check)
   }, [])
@@ -1672,7 +1678,7 @@ export default function Terminal({ token }: Props) {
     onToggleTheme: toggleTheme,
     onOpenSettings: () => setShowGeneralSettings(true),
     onOpenFiles: () => setShowFiles(true),
-    onOpenWorkspace: () => setShowWorkspace(true),
+    onOpenWorkspace: () => { if (isVeryWide) { setShowFileBrowser(v => !v); setFileEditorOpen(false) } else setShowWorkspace(true) },
     onUpload: handleFileUpload,
     onUploadFile: uploadFile,
     onUploadFiles: enqueueFiles,
@@ -1811,8 +1817,8 @@ export default function Terminal({ token }: Props) {
                     </button>
 
                     <button
-                      onClick={(e) => { e.stopPropagation(); setShowWorkspace(true); }}
-                      className="w-12 h-10 bg-transparent border-none text-nexus-text-2 flex items-center justify-center cursor-pointer"
+                      onClick={(e) => { e.stopPropagation(); if (isVeryWide) { setShowFileBrowser(v => !v); setFileEditorOpen(false) } else setShowWorkspace(true); }}
+                      className={`w-12 h-10 bg-transparent border-none flex items-center justify-center cursor-pointer ${isVeryWide && showFileBrowser ? 'text-nexus-accent' : 'text-nexus-text-2'}`}
                       title="浏览工作目录"
                     >
                       <Icon name="folderOpen" size={18} />
@@ -1878,7 +1884,19 @@ export default function Terminal({ token }: Props) {
                 </div>
               )}
             </div>
-            <div className="flex-1 flex flex-col min-w-0 relative">
+            {/* Embedded File Browser Sidebar */}
+            {isVeryWide && showFileBrowser && (
+              <Suspense fallback={null}>
+                <WorkspaceBrowser
+                  embedded
+                  token={token}
+                  onClose={() => { setShowFileBrowser(false); setFileEditorOpen(false) }}
+                  currentSession={activeTmuxSession}
+                  onEditingChange={setFileEditorOpen}
+                />
+              </Suspense>
+            )}
+            <div className={`flex-1 flex flex-col min-w-0 relative ${fileEditorOpen ? 'hidden' : ''}`}>
               <div ref={containerRef} className="flex-1 overflow-hidden relative" />
               {isConnecting && (
                 <div className="absolute inset-0 bg-nexus-bg flex flex-col items-center justify-center gap-3 z-10">
@@ -2024,7 +2042,7 @@ export default function Terminal({ token }: Props) {
           />
         </Suspense>
       )}
-      {showWorkspace && (
+      {showWorkspace && !isVeryWide && (
         <Suspense fallback={null}>
           <WorkspaceBrowser
             token={token}

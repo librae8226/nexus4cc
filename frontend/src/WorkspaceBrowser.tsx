@@ -16,6 +16,8 @@ interface Props {
   onClose: () => void
   initialPath?: string
   currentSession?: string
+  embedded?: boolean
+  onEditingChange?: (editing: boolean) => void
 }
 
 function formatSize(bytes?: number): string {
@@ -196,7 +198,7 @@ function createMarkedRenderer() {
   return r
 }
 
-export default function WorkspaceBrowser({ token, onClose, initialPath = '', currentSession }: Props) {
+export default function WorkspaceBrowser({ token, onClose, initialPath = '', currentSession, embedded, onEditingChange }: Props) {
   const { t } = useTranslation()
   const [workspaceRoot, setWorkspaceRoot] = useState('')
 
@@ -681,6 +683,11 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
     }
   }, [isPreviewMode, editorContent])
 
+  // Notify parent when editor opens/closes (for embedded mode layout)
+  useEffect(() => {
+    onEditingChange?.(editingFile !== null)
+  }, [editingFile, onEditingChange])
+
   // 双击处理：目录进入，文件在编辑器中打开
   function handleDoubleClick(entry: FileEntry) {
     if (entry.type === 'dir') {
@@ -788,8 +795,13 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
     : null
 
   return (
-    <div className="fixed inset-0 z-[450] bg-nexus-bg flex flex-col">
-      {/* Header */}
+    <>
+    <div className={embedded
+      ? 'w-[280px] h-full border-r border-nexus-border bg-nexus-bg flex flex-col flex-shrink-0 overflow-hidden'
+      : 'fixed inset-0 z-[450] bg-nexus-bg flex flex-col'
+    }>
+      {/* Header — hidden in embedded mode (sidebar has own toggle) */}
+      {!embedded && (
       <div className="flex items-center justify-between px-4 py-3.5 border-b border-nexus-border flex-shrink-0">
         <div className="flex items-center gap-2.5 min-w-0">
           <Icon name="folder" size={20} />
@@ -804,6 +816,20 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
           <Icon name="x" size={20} />
         </button>
       </div>
+      )}
+
+      {/* Embedded mode header */}
+      {embedded && (
+        <div className="flex items-center justify-between px-3 py-2 border-b border-nexus-border flex-shrink-0">
+          <span className="text-nexus-text font-medium text-sm">{t('workspace.title')}</span>
+          <button
+            onClick={onClose}
+            className="bg-transparent border-none text-nexus-text-2 cursor-pointer p-1 flex items-center justify-center rounded hover:text-nexus-text"
+          >
+            <Icon name="x" size={16} />
+          </button>
+        </div>
+      )}
 
       {/* Breadcrumb */}
       <div className="flex items-center gap-1 px-4 py-2 border-b border-nexus-border bg-nexus-bg-2 flex-shrink-0 overflow-x-auto">
@@ -1316,9 +1342,13 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
         </div>
       )}
 
-      {/* 文件编辑器 */}
-      {editingFile && (
-        <div className="fixed inset-0 z-[470] bg-nexus-bg flex flex-col">
+    </div>
+    {/* 文件编辑器 — in embedded mode renders as adjacent panel, otherwise full-screen overlay */}
+    {editingFile && (
+      <div className={embedded
+        ? 'flex-1 h-full bg-nexus-bg flex flex-col min-w-0'
+        : 'fixed inset-0 z-[470] bg-nexus-bg flex flex-col'
+      }>
           {/* Editor Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-nexus-border flex-shrink-0">
             <div className="flex items-center gap-2 min-w-0">
@@ -1465,7 +1495,7 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
           )}
         </div>
       )}
-    </div>
+    </>
   )
 }
 
