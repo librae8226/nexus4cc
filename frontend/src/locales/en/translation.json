@@ -51,6 +51,7 @@
     "footer": "{{count}} items",
     "view": "View",
     "download": "Download",
+    "new": "New",
     "newFolder": "New Folder",
     "newFile": "New File",
     "edit": "Edit",

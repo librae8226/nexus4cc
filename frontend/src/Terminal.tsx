@@ -221,11 +221,12 @@ export default function Terminal({ token }: Props) {
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme)
 
   const [isWidePC, setIsWidePC] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 768)
+  // 折叠屏文件浏览器嵌入阈值（700px）：独立于 PC 布局，仅控制文件浏览器嵌入 vs 全屏
+  const [canEmbedBrowser, setCanEmbedBrowser] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 700)
   const [isConnecting, setIsConnecting] = useState(false)
   const hasConnectedRef = useRef(false)
   const [showFiles, setShowFiles] = useState(false)
   const [showWorkspace, setShowWorkspace] = useState(false)
-  const [isVeryWide, setIsVeryWide] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 1024)
   const [showFileBrowser, setShowFileBrowser] = useState(false)
   const [fileEditorOpen, setFileEditorOpen] = useState(false)
   const [copySheetText, setCopySheetText] = useState<string | null>(null)
@@ -347,13 +348,22 @@ export default function Terminal({ token }: Props) {
     return () => clearInterval(interval)
   }, [token])
 
+  // 使用 matchMedia 替代 resize 事件：折叠屏设备（vivo X Fold 等）
+  // 展开/折叠时 window resize 事件不可靠，matchMedia change 由浏览器引擎底层触发
   useEffect(() => {
+    const mqWide = window.matchMedia('(min-width: 768px)')
+    const mqEmbed = window.matchMedia('(min-width: 700px)')
     const check = () => {
-      setIsWidePC(window.innerWidth >= 768)
-      setIsVeryWide(window.innerWidth >= 1024)
+      setIsWidePC(mqWide.matches)
+      setCanEmbedBrowser(mqEmbed.matches)
     }
-    window.addEventListener('resize', check)
-    return () => window.removeEventListener('resize', check)
+    check()
+    mqWide.addEventListener('change', check)
+    mqEmbed.addEventListener('change', check)
+    return () => {
+      mqWide.removeEventListener('change', check)
+      mqEmbed.removeEventListener('change', check)
+    }
   }, [])
 
   // 请求通知权限（首次使用时，静默请求）
@@ -1678,7 +1688,7 @@ export default function Terminal({ token }: Props) {
     onToggleTheme: toggleTheme,
     onOpenSettings: () => setShowGeneralSettings(true),
     onOpenFiles: () => setShowFiles(true),
-    onOpenWorkspace: () => { if (isVeryWide) { setShowFileBrowser(v => !v); setFileEditorOpen(false) } else setShowWorkspace(true) },
+    onOpenWorkspace: () => { if (canEmbedBrowser) { setShowFileBrowser(v => !v) } else setShowWorkspace(true) },
     onUpload: handleFileUpload,
     onUploadFile: uploadFile,
     onUploadFiles: enqueueFiles,
@@ -1794,7 +1804,7 @@ export default function Terminal({ token }: Props) {
                     <button
                       onClick={(e) => { e.stopPropagation(); openNewSessionDialog(); }}
                       className="w-12 h-10 bg-transparent border-none text-nexus-text-2 flex items-center justify-center cursor-pointer"
-                      title="新建项目"
+                      title={t('sessionMgr.newProject')}
                     >
                       <Icon name="folderPlus" size={18} />
                     </button>
@@ -1802,7 +1812,7 @@ export default function Terminal({ token }: Props) {
                     <button
                       onClick={(e) => { e.stopPropagation(); handleCreateWindow(); }}
                       className="w-12 h-10 bg-transparent border-none text-nexus-text-2 flex items-center justify-center cursor-pointer"
-                      title="新建窗口"
+                      title={t('sessionMgr.newChannel')}
                     >
                       <Icon name="plus" size={18} />
                     </button>
@@ -1811,23 +1821,23 @@ export default function Terminal({ token }: Props) {
                     <button
                       onClick={(e) => { e.stopPropagation(); setShowFiles(true); }}
                       className="w-12 h-10 bg-transparent border-none text-nexus-text-2 flex items-center justify-center cursor-pointer"
-                      title="文件列表"
+                      title={t('toolbar.fileList')}
+                    >
+                      <Icon name="image" size={18} />
+                    </button>
+
+                    <button
+                      onClick={(e) => { e.stopPropagation(); if (canEmbedBrowser) { setShowFileBrowser(v => !v) } else setShowWorkspace(true); }}
+                      className={`w-12 h-10 bg-transparent border-none flex items-center justify-center cursor-pointer ${canEmbedBrowser && showFileBrowser ? 'text-nexus-accent' : 'text-nexus-text-2'}`}
+                      title={t('toolbar.workspace')}
                     >
                       <Icon name="folder" size={18} />
                     </button>
 
                     <button
-                      onClick={(e) => { e.stopPropagation(); if (isVeryWide) { setShowFileBrowser(v => !v); setFileEditorOpen(false) } else setShowWorkspace(true); }}
-                      className={`w-12 h-10 bg-transparent border-none flex items-center justify-center cursor-pointer ${isVeryWide && showFileBrowser ? 'text-nexus-accent' : 'text-nexus-text-2'}`}
-                      title="浏览工作目录"
-                    >
-                      <Icon name="folderOpen" size={18} />
-                    </button>
-
-                    <button
                       onClick={(e) => { e.stopPropagation(); handleFileUpload(); }}
                       className="w-12 h-10 bg-transparent border-none text-nexus-text-2 flex items-center justify-center cursor-pointer"
-                      title="上传文件"
+                      title={t('files.upload')}
                     >
                       <Icon name="paperclip" size={18} />
                     </button>
@@ -1837,7 +1847,7 @@ export default function Terminal({ token }: Props) {
                     <button
                       onClick={(e) => { e.stopPropagation(); toggleTheme(); }}
                       className="w-12 h-10 bg-transparent border-none text-nexus-text-2 flex items-center justify-center cursor-pointer"
-                      title={themeMode === 'dark' ? '切换亮色' : '切换暗色'}
+                      title={themeMode === 'dark' ? t('toolbar.switchLight') : t('toolbar.switchDark')}
                     >
                       <Icon name={themeMode === 'dark' ? 'sun' : 'moon'} size={18} />
                     </button>
@@ -1845,7 +1855,7 @@ export default function Terminal({ token }: Props) {
                     <button
                       onClick={(e) => { e.stopPropagation(); setShowSessionManagerV2(true); }}
                       className="w-12 h-10 bg-transparent border-none text-nexus-text-2 flex items-center justify-center cursor-pointer"
-                      title="配置管理"
+                      title={t('sessionMgr.title')}
                     >
                       <Icon name="settings" size={18} />
                     </button>
@@ -1885,7 +1895,7 @@ export default function Terminal({ token }: Props) {
               )}
             </div>
             {/* Embedded File Browser Sidebar */}
-            {isVeryWide && showFileBrowser && (
+            {canEmbedBrowser && showFileBrowser && (
               <Suspense fallback={null}>
                 <WorkspaceBrowser
                   embedded
@@ -1913,6 +1923,7 @@ export default function Terminal({ token }: Props) {
       ) : (
         <div className="flex flex-col flex-1 overflow-hidden min-h-0">
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
+            {/* 终端 — 始终渲染，保持 xterm DOM 稳定 */}
             <div ref={containerRef} className="flex-1 overflow-hidden relative" />
             {isConnecting && (
               <div className="absolute inset-0 bg-nexus-bg flex flex-col items-center justify-center gap-3 z-10">
@@ -1923,9 +1934,53 @@ export default function Terminal({ token }: Props) {
             {isScrolledUp && (
               <button className="absolute bottom-3 right-3 w-9 h-9 rounded-full bg-nexus-accent border-none text-white text-lg cursor-pointer z-50 flex items-center justify-center shadow-lg backdrop-blur-sm" onClick={scrollToBottom} title="滚到底部"><Icon name="arrowDown" size={16} /></button>
             )}
+            {/* 折叠屏文件浏览器浮层（≥700px）：覆盖在终端上方，不挤压内容 */}
+            {canEmbedBrowser && (showFileBrowser || fileEditorOpen) && (
+              <>
+                {/* 仅侧边栏模式时显示半透明遮罩 */}
+                {showFileBrowser && !fileEditorOpen && (
+                  <div
+                    className="absolute inset-0 z-[99] bg-black/20"
+                    onClick={() => setShowFileBrowser(false)}
+                  />
+                )}
+                <div
+                  className={`absolute top-0 bottom-0 z-[100] flex flex-row ${
+                    fileEditorOpen ? 'inset-0' : 'left-0'
+                  }`}
+                  style={fileEditorOpen ? undefined : { maxWidth: 'calc(100vw - 48px)' }}
+                >
+                  <Suspense fallback={null}>
+                    <WorkspaceBrowser
+                      overlay={fileEditorOpen}
+                      embedded={!fileEditorOpen}
+                      hideSidebar={!showFileBrowser}
+                      token={token}
+                      onClose={() => setShowFileBrowser(false)}
+                      currentSession={activeTmuxSession}
+                      onEditingChange={setFileEditorOpen}
+                    />
+                  </Suspense>
+                </div>
+                {/* 全屏阅读时侧边栏已收起 → 显示左侧拖拽手柄，点击重新展开文件浏览器 */}
+                {fileEditorOpen && !showFileBrowser && (
+                  <button
+                    className="absolute left-0 top-1/2 -translate-y-1/2 z-[110] w-7 h-14 bg-nexus-bg border border-nexus-border border-l-0 rounded-r-lg flex items-center justify-center cursor-pointer shadow-md text-nexus-text-2 hover:text-nexus-text active:bg-nexus-bg-2"
+                    onClick={(e) => { e.stopPropagation(); setShowFileBrowser(true); }}
+                    title="展开文件浏览器"
+                  >
+                    <Icon name="chevronRight" size={16} />
+                  </button>
+                )}
+              </>
+            )}
           </div>
-          <SessionFAB onClick={() => setShowSessionManagerV2(v => !v)} windowCount={windows.length} bottomInset={toolbarHeightRef.current} />
-          <div ref={toolbarWrapRef}><Toolbar {...toolbarProps} /></div>
+          {!fileEditorOpen && (
+            <>
+              <SessionFAB onClick={() => setShowSessionManagerV2(v => !v)} windowCount={windows.length} bottomInset={toolbarHeightRef.current} />
+              <div ref={toolbarWrapRef}><Toolbar {...toolbarProps} /></div>
+            </>
+          )}
         </div>
       )}
 
@@ -2042,7 +2097,7 @@ export default function Terminal({ token }: Props) {
           />
         </Suspense>
       )}
-      {showWorkspace && !isVeryWide && (
+      {showWorkspace && !canEmbedBrowser && (
         <Suspense fallback={null}>
           <WorkspaceBrowser
             token={token}

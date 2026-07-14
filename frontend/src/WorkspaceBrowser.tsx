@@ -17,6 +17,8 @@ interface Props {
   initialPath?: string
   currentSession?: string
   embedded?: boolean
+  overlay?: boolean
+  hideSidebar?: boolean
   onEditingChange?: (editing: boolean) => void
 }
 
@@ -195,10 +197,15 @@ function createMarkedRenderer() {
     seenIds.set(id, (seenIds.get(id) || 0) + 1)
     return `<h${opts.depth} id="${id}">${this.parser.parseInline(opts.tokens)}</h${opts.depth}>\n`
   }
+  r.link = function (opts: { href: string; title?: string; tokens: any[] }) {
+    const text = this.parser.parseInline(opts.tokens)
+    const title = opts.title ? ` title="${opts.title}"` : ''
+    return `<a href="${opts.href}"${title} target="_blank" rel="noopener noreferrer">${text}</a>`
+  }
   return r
 }
 
-export default function WorkspaceBrowser({ token, onClose, initialPath = '', currentSession, embedded, onEditingChange }: Props) {
+export default function WorkspaceBrowser({ token, onClose, initialPath = '', currentSession, embedded, overlay, hideSidebar, onEditingChange }: Props) {
   const { t } = useTranslation()
   const [workspaceRoot, setWorkspaceRoot] = useState('')
 
@@ -299,6 +306,9 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
 
   // 选中条目
   const [selectedName, setSelectedName] = useState<string | null>(null)
+
+  // 新建按钮弹出菜单状态
+  const [showNewMenu, setShowNewMenu] = useState(false)
 
   // 新建文件夹/文件对话框状态
   const [showNewFolderDialog, setShowNewFolderDialog] = useState(false)
@@ -832,20 +842,18 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
     return [...dirs.sort(cmpFn), ...files.sort(cmpFn)]
   }, [entries, sortKey, sortAsc])
 
-  // 获取当前选中的文件条目
-  const selectedEntry = selectedName && selectedName !== '..'
-    ? sortedEntries.find(e => e.name === selectedName)
-    : null
-
   return (
     <>
-    <div className={embedded
-      ? 'h-full border-r border-nexus-border bg-nexus-bg flex flex-col flex-shrink-0 overflow-hidden relative'
-      : 'fixed inset-0 z-[450] bg-nexus-bg flex flex-col'
+    <div className={overlay
+      ? `h-full border-r border-nexus-border bg-nexus-bg flex flex-col flex-shrink-0 overflow-hidden relative z-10 ${hideSidebar ? 'hidden' : ''}`
+      : embedded
+        ? 'h-full border-r border-nexus-border bg-nexus-bg flex flex-col flex-shrink-0 overflow-hidden relative'
+        : 'fixed inset-0 z-[450] bg-nexus-bg flex flex-col'
     }
-      style={embedded ? { width: sidebarWidth } : undefined}>
-      {/* Header — hidden in embedded mode (sidebar has own toggle) */}
-      {!embedded && (
+      style={(overlay || embedded) ? { width: sidebarWidth } : undefined}
+      onClick={(overlay || embedded) ? (e: React.MouseEvent) => e.stopPropagation() : undefined}>
+      {/* Header — only in full-screen (non-embedded, non-overlay) mode */}
+      {!embedded && !overlay && (
       <div className="flex items-center justify-between px-4 py-3.5 border-b border-nexus-border flex-shrink-0">
         <div className="flex items-center gap-2.5 min-w-0">
           <Icon name="folder" size={20} />
@@ -862,8 +870,8 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
       </div>
       )}
 
-      {/* Embedded mode header */}
-      {embedded && (
+      {/* Embedded / Overlay mode header */}
+      {(embedded || overlay) && (
         <div className="flex items-center justify-between px-3 py-2 border-b border-nexus-border flex-shrink-0">
           <span className="text-nexus-text font-medium text-sm">{t('workspace.title')}</span>
           <button
@@ -1046,56 +1054,39 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
             {currentPath && t('workspace.footer', { count: entries.length })}
           </span>
           {/* 新建按钮 */}
-          <div className="flex items-center gap-1.5 ml-2">
+          <div className="flex items-center gap-1.5 ml-2 relative">
             <button
-              onClick={() => setShowNewFolderDialog(true)}
+              onClick={() => setShowNewMenu(!showNewMenu)}
               className="flex items-center gap-1 px-2 py-1.5 bg-nexus-bg-2 hover:bg-nexus-bg-2/80 text-nexus-text text-xs rounded border border-nexus-border transition-colors"
-              title={t('workspace.newFolder')}
+              title={t('workspace.new')}
             >
-              <Icon name="folder" size={14} />
-              <span className="hidden sm:inline">{t('workspace.newFolder')}</span>
+              <Icon name="plus" size={14} />
+              <span className="hidden sm:inline">{t('workspace.new')}</span>
+              <Icon name="chevronDown" size={10} />
             </button>
-            <button
-              onClick={() => setShowNewFileDialog(true)}
-              className="flex items-center gap-1 px-2 py-1.5 bg-nexus-bg-2 hover:bg-nexus-bg-2/80 text-nexus-text text-xs rounded border border-nexus-border transition-colors"
-              title={t('workspace.newFile')}
-            >
-              <Icon name="file" size={14} />
-              <span className="hidden sm:inline">{t('workspace.newFile')}</span>
-            </button>
+            {showNewMenu && (
+              <>
+                <div className="fixed inset-0 z-[470]" onClick={() => setShowNewMenu(false)} />
+                <div className="absolute bottom-full left-0 mb-1 z-[480] bg-nexus-bg rounded-lg border border-nexus-border shadow-lg py-1 min-w-[140px]">
+                  <button
+                    onClick={() => { setShowNewMenu(false); setShowNewFolderDialog(true) }}
+                    className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-nexus-bg-2 transition-colors text-nexus-text"
+                  >
+                    <Icon name="folder" size={14} />
+                    {t('workspace.newFolder')}
+                  </button>
+                  <button
+                    onClick={() => { setShowNewMenu(false); setShowNewFileDialog(true) }}
+                    className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-nexus-bg-2 transition-colors text-nexus-text"
+                  >
+                    <Icon name="file" size={14} />
+                    {t('workspace.newFile')}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
-        {/* 文件操作按钮 */}
-        {selectedEntry?.type === 'file' && (
-          <div className="flex items-center gap-2">
-            {isTextFile(selectedEntry.name) && (
-              <button
-                onClick={() => openEditor(selectedEntry.name)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-nexus-bg-2 hover:bg-nexus-bg-2/80 text-nexus-text text-xs rounded border border-nexus-border transition-colors"
-                title={t('workspace.edit')}
-              >
-                <Icon name="edit" size={14} />
-                <span className="hidden sm:inline">{t('workspace.edit')}</span>
-              </button>
-            )}
-            <button
-              onClick={() => openFile(selectedEntry.name)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-nexus-bg-2 hover:bg-nexus-bg-2/80 text-nexus-text text-xs rounded border border-nexus-border transition-colors"
-              title={t('workspace.view')}
-            >
-              <Icon name="eye" size={14} />
-              <span className="hidden sm:inline">{t('workspace.view')}</span>
-            </button>
-            <button
-              onClick={() => downloadFile(selectedEntry.name)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-nexus-accent hover:bg-nexus-accent/90 text-white text-xs rounded transition-colors"
-              title={t('workspace.download')}
-            >
-              <Icon name="download" size={14} />
-              <span className="hidden sm:inline">{t('workspace.download')}</span>
-            </button>
-          </div>
-        )}
       </div>
 
       {/* 长按 / 右键菜单 */}
@@ -1394,11 +1385,13 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
         />
       )}
     </div>
-    {/* 文件编辑器 — in embedded mode renders as adjacent panel, otherwise full-screen overlay */}
+    {/* 文件编辑器 — overlay: full-screen base layer; embedded: adjacent panel; default: full-screen overlay */}
     {editingFile && (
-      <div className={embedded
-        ? 'flex-1 h-full bg-nexus-bg flex flex-col min-w-0'
-        : 'fixed inset-0 z-[470] bg-nexus-bg flex flex-col'
+      <div className={overlay
+        ? 'absolute inset-0 z-[1] bg-nexus-bg flex flex-col'
+        : embedded
+          ? 'flex-1 h-full bg-nexus-bg flex flex-col min-w-0'
+          : 'fixed inset-0 z-[470] bg-nexus-bg flex flex-col'
       }>
           {/* Editor Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-nexus-border flex-shrink-0">
@@ -1457,6 +1450,7 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
             onTouchStart={handleEditorTouchStart}
             onTouchMove={handleEditorTouchMove}
             onTouchEnd={handleEditorTouchEnd}
+            onClick={overlay ? onClose : undefined}
           >
             {editingFile && isMarkdownFile(editingFile.name) && isPreviewMode ? (
               <div
