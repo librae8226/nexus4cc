@@ -69,7 +69,7 @@ const USER_DEFAULT_KEY = 'nexus_toolbar_default'
 const COLLAPSED_KEY = 'nexus_toolbar_collapsed'
 
 // PC 端断点
-const PC_BREAKPOINT = 768
+const PC_BREAKPOINT = 1024
 
 function loadConfig(): ToolbarConfig {
   try {

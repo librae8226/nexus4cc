@@ -220,7 +220,7 @@ export default function Terminal({ token }: Props) {
   const [showSessionDrawer, setShowSessionDrawer] = useState(false)
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme)
 
-  const [isWidePC, setIsWidePC] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 768)
+  const [isWidePC, setIsWidePC] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 1024)
   // 折叠屏文件浏览器嵌入阈值（700px）：独立于 PC 布局，仅控制文件浏览器嵌入 vs 全屏
   const [canEmbedBrowser, setCanEmbedBrowser] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 700)
   const [isConnecting, setIsConnecting] = useState(false)
@@ -263,6 +263,7 @@ export default function Terminal({ token }: Props) {
   const [uploadQueue, setUploadQueue] = useState<UploadItem[]>([])
   const uploadQueueRef = useRef(uploadQueue)
   uploadQueueRef.current = uploadQueue
+  const browserOpenTimeRef = useRef(0)
   const [windowOutputs, setWindowOutputs] = useState<Record<number, { output: string; clients: number; idleMs: number; connected: boolean }>>({})
     const scrollPositionsRef = useRef<Record<number, number>>({})
   const windowsRef = useRef<TmuxWindow[]>([])
@@ -351,7 +352,7 @@ export default function Terminal({ token }: Props) {
   // 使用 matchMedia 替代 resize 事件：折叠屏设备（vivo X Fold 等）
   // 展开/折叠时 window resize 事件不可靠，matchMedia change 由浏览器引擎底层触发
   useEffect(() => {
-    const mqWide = window.matchMedia('(min-width: 768px)')
+    const mqWide = window.matchMedia('(min-width: 1024px)')
     const mqEmbed = window.matchMedia('(min-width: 700px)')
     const check = () => {
       setIsWidePC(mqWide.matches)
@@ -1006,7 +1007,11 @@ export default function Terminal({ token }: Props) {
     })
 
     const fitAddon = new FitAddon()
-    const webLinksAddon = new WebLinksAddon()
+    const webLinksAddon = new WebLinksAddon((_event, uri) => {
+      // 在移动端 PWA 环境中，默认的 window.open(uri) 可能直接导航当前页面，
+      // 导致离开应用。显式指定 _blank 在新标签页打开，保持当前页面不动。
+      window.open(uri, '_blank', 'noopener,noreferrer')
+    })
     term.loadAddon(fitAddon)
     term.loadAddon(webLinksAddon)
     termRef.current = term
@@ -1043,7 +1048,7 @@ export default function Terminal({ token }: Props) {
       if (e.isComposing) return
 
       // 仅在PC宽屏模式处理
-      if (window.innerWidth < 768) return
+      if (window.innerWidth < 1024) return
 
       // 焦点在终端容器外的 input/textarea/contenteditable 时不拦截
       // 用 activeElement 而非 overlay 状态变量，避免 stale closure 问题
@@ -1158,7 +1163,7 @@ export default function Terminal({ token }: Props) {
     window.addEventListener('keydown', onGlobalKeyDown, true)
 
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
-      if (window.innerWidth >= 768) {
+      if (window.innerWidth >= 1024) {
         // IME 组合期间：让 xterm 原生处理
         if (e.isComposing) return true
         // 可打印字符（无修饰键）：让 xterm 处理 → textarea → onData
@@ -1941,7 +1946,19 @@ export default function Terminal({ token }: Props) {
                 {showFileBrowser && !fileEditorOpen && (
                   <div
                     className="absolute inset-0 z-[99] bg-black/20"
-                    onClick={() => setShowFileBrowser(false)}
+                    onPointerDown={(e) => {
+                      // 防止工具栏按钮触发的 open 动作被 backdrop 立即关闭：
+                      // 工具栏按钮 onPointerDown → setShowFileBrowser(true) → 重渲染
+                      // → backdrop 出现 → 用户松手时 click 落在 backdrop 上。
+                      // 记录打开时间戳，300ms 内的 backdrop 点击被忽略。
+                      if (Date.now() - browserOpenTimeRef.current < 300) return
+                      // preventDefault 阻止 pointerdown 后续的 click 事件生成，
+                      // 否则 React 重渲染移除 backdrop 后，click 会穿透到终端 xterm
+                      // 里的 WebLinksAddon 链接上，导致误导航到文件/外部 URL。
+                      e.preventDefault()
+                      e.stopPropagation()
+                      setShowFileBrowser(false)
+                    }}
                   />
                 )}
                 <div
@@ -1962,20 +1979,25 @@ export default function Terminal({ token }: Props) {
                     />
                   </Suspense>
                 </div>
-                {/* 全屏阅读时侧边栏已收起 → 显示左侧拖拽手柄，点击重新展开文件浏览器 */}
-                {fileEditorOpen && !showFileBrowser && (
-                  <button
-                    className="absolute left-0 top-1/2 -translate-y-1/2 z-[110] w-7 h-14 bg-nexus-bg border border-nexus-border border-l-0 rounded-r-lg flex items-center justify-center cursor-pointer shadow-md text-nexus-text-2 hover:text-nexus-text active:bg-nexus-bg-2"
-                    onClick={(e) => { e.stopPropagation(); setShowFileBrowser(true); }}
-                    title="展开文件浏览器"
-                  >
-                    <Icon name="chevronRight" size={16} />
-                  </button>
-                )}
               </>
             )}
+            {/* 左侧把手：文件浏览器关闭时常驻，点击展开 */}
+            {canEmbedBrowser && !showFileBrowser && (
+              <button
+                className="absolute left-0 top-1/2 -translate-y-1/2 z-[110] w-7 h-14 bg-nexus-bg border border-nexus-border border-l-0 rounded-r-lg flex items-center justify-center cursor-pointer shadow-md text-nexus-text-2 hover:text-nexus-text active:bg-nexus-bg-2"
+                onPointerDown={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  browserOpenTimeRef.current = Date.now()
+                  setShowFileBrowser(true)
+                }}
+                title="展开文件浏览器"
+              >
+                <Icon name="chevronRight" size={16} />
+              </button>
+            )}
           </div>
-          {!fileEditorOpen && (
+          {!fileEditorOpen && !showFileBrowser && (
             <>
               <SessionFAB onClick={() => setShowSessionManagerV2(v => !v)} windowCount={windows.length} bottomInset={toolbarHeightRef.current} />
               <div ref={toolbarWrapRef}><Toolbar {...toolbarProps} /></div>

@@ -1073,14 +1073,14 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
                     className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-nexus-bg-2 transition-colors text-nexus-text"
                   >
                     <Icon name="folder" size={14} />
-                    {t('workspace.newFolder')}
+                    {t('workspace.folder')}
                   </button>
                   <button
                     onClick={() => { setShowNewMenu(false); setShowNewFileDialog(true) }}
                     className="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-nexus-bg-2 transition-colors text-nexus-text"
                   >
                     <Icon name="file" size={14} />
-                    {t('workspace.newFile')}
+                    {t('workspace.file')}
                   </button>
                 </div>
               </>
@@ -1450,6 +1450,15 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
             onTouchStart={handleEditorTouchStart}
             onTouchMove={handleEditorTouchMove}
             onTouchEnd={handleEditorTouchEnd}
+            onClickCapture={(e) => {
+              // 在嵌入/浮层模式下，侧边栏可见时先收起侧边栏，
+              // 阻止点击穿透到文件内容中的链接（如 markdown 里的 URL）
+              if ((embedded || overlay) && !hideSidebar) {
+                e.preventDefault()
+                e.stopPropagation()
+                onClose()
+              }
+            }}
             onClick={overlay ? onClose : undefined}
           >
             {editingFile && isMarkdownFile(editingFile.name) && isPreviewMode ? (
