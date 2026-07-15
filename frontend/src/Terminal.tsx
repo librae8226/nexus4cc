@@ -1984,7 +1984,7 @@ export default function Terminal({ token }: Props) {
             {/* 左侧把手：文件浏览器关闭时常驻，点击展开 */}
             {canEmbedBrowser && !showFileBrowser && (
               <button
-                className="absolute left-0 top-1/2 -translate-y-1/2 z-[110] w-7 h-14 bg-nexus-bg border border-nexus-border border-l-0 rounded-r-lg flex items-center justify-center cursor-pointer shadow-md text-nexus-text-2 hover:text-nexus-text active:bg-nexus-bg-2"
+                className="absolute left-0 top-1/2 -translate-y-1/2 z-[110] w-7 h-14 bg-nexus-bg border border-nexus-border border-l-0 rounded-r-lg flex items-center justify-center cursor-pointer shadow-md text-nexus-text-2 opacity-50 hover:opacity-100 active:bg-nexus-bg-2 transition-opacity"
                 onPointerDown={(e) => {
                   e.preventDefault()
                   e.stopPropagation()
