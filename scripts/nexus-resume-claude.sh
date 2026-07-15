@@ -7,11 +7,17 @@
 #   3. 匹配成功 → claude --resume <session-id>（精确接续该条对话）
 #   4. 匹配失败 → claude --continue（回退到最近一条对话）
 #
-# 用法: nexus-resume-claude.sh <snapshot_file> [skip_pane]
+# 用法: nexus-resume-claude.sh [--dry-run] <snapshot_file> [skip_pane]
+#   --dry-run: 只打印匹配结果，不实际发送任何按键
 #   skip_pane: 形如 session:window.pane，手动恢复时跳过调用方自身 pane（避免自杀）。
 #
 # 安全：只对当前是普通 shell 的 pane 注入，不覆盖已在跑 claude 的 pane；逐个错峰拉起。
 set -u
+
+DRY_RUN=false
+if [ "${1:-}" = "--dry-run" ]; then
+  DRY_RUN=true; shift
+fi
 
 SNAP="${1:-}"
 SKIP_PANE="${2:-}"
@@ -131,13 +137,21 @@ echo "$MATCHES" | while IFS='|' read -r target resume_arg score pane_title; do
   fi
 
   if [ "$resume_arg" = "CONTINUE" ]; then
-    echo "[nexus-resume] $target ($pane_title) → --continue (score=$score)"
-    tmux send-keys -t "$target" "NEXUS_RESUME=1 $pfull" C-m
+    if $DRY_RUN; then
+      echo "[DRY-RUN] $target ($pane_title) → --continue"
+    else
+      echo "[nexus-resume] $target ($pane_title) → --continue (score=$score)"
+      tmux send-keys -t "$target" "NEXUS_RESUME=1 $pfull" C-m
+    fi
   else
-    echo "[nexus-resume] $target ($pane_title) → --resume $resume_arg (score=$score)"
-    tmux send-keys -t "$target" "NEXUS_RESUME_SESSION=$resume_arg $pfull" C-m
+    if $DRY_RUN; then
+      echo "[DRY-RUN] $target ($pane_title) → --resume $resume_arg"
+    else
+      echo "[nexus-resume] $target ($pane_title) → --resume $resume_arg (score=$score)"
+      tmux send-keys -t "$target" "NEXUS_RESUME_SESSION=$resume_arg $pfull" C-m
+    fi
   fi
-  sleep 1
+  $DRY_RUN || sleep 1
 done
 
 echo "[nexus-resume] done"

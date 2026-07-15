@@ -52,6 +52,8 @@
     "view": "查看",
     "download": "下载",
     "new": "新建",
+    "folder": "文件夹",
+    "file": "文件",
     "newFolder": "新建文件夹",
     "newFile": "新建文件",
     "edit": "编辑",

@@ -39,3 +39,4 @@ logs/
 # Local scratch files (whiteboard mermaid sources, temp docs)
 .wb-*.mmd
 nexus-tech-report-wb.md
+.blackboard/

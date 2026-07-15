@@ -197,7 +197,7 @@ function createMarkedRenderer() {
     seenIds.set(id, (seenIds.get(id) || 0) + 1)
     return `<h${opts.depth} id="${id}">${this.parser.parseInline(opts.tokens)}</h${opts.depth}>\n`
   }
-  r.link = function (opts: { href: string; title?: string; tokens: any[] }) {
+  r.link = function (opts: { href: string; title?: string | null; tokens: any[] }) {
     const text = this.parser.parseInline(opts.tokens)
     const title = opts.title ? ` title="${opts.title}"` : ''
     return `<a href="${opts.href}"${title} target="_blank" rel="noopener noreferrer">${text}</a>`
@@ -1451,9 +1451,10 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
             onTouchMove={handleEditorTouchMove}
             onTouchEnd={handleEditorTouchEnd}
             onClickCapture={(e) => {
-              // 在嵌入/浮层模式下，侧边栏可见时先收起侧边栏，
+              // 仅在浮层模式（折叠屏等窄屏设备）下：侧边栏可见时先收起侧边栏，
               // 阻止点击穿透到文件内容中的链接（如 markdown 里的 URL）
-              if ((embedded || overlay) && !hideSidebar) {
+              // PC 嵌入模式不拦截，用户可以直接与编辑器内容交互
+              if (overlay && !hideSidebar) {
                 e.preventDefault()
                 e.stopPropagation()
                 onClose()

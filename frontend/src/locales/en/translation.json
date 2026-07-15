@@ -52,6 +52,8 @@
     "view": "View",
     "download": "Download",
     "new": "New",
+    "folder": "Folder",
+    "file": "File",
     "newFolder": "New Folder",
     "newFile": "New File",
     "edit": "Edit",
