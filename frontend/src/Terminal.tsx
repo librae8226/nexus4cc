@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState, lazy, Suspense } from 'react'
 import type { SessionManagerV2Handle } from './SessionManagerV2'
+import type { WorkspaceBrowserHandle } from './WorkspaceBrowser'
 import { useTranslation } from 'react-i18next'
 import { mapSpecialKey, shouldSkipInput } from './mobileInput'
 import { Terminal as XTerm, type ITheme } from '@xterm/xterm'
@@ -297,6 +298,7 @@ export default function Terminal({ token }: Props) {
   const activeTmuxSessionRef = useRef(activeTmuxSession)
   activeTmuxSessionRef.current = activeTmuxSession
   const sessionManagerRef = useRef<SessionManagerV2Handle>(null)
+  const workspaceBrowserRef = useRef<WorkspaceBrowserHandle>(null)
 
   // Projects list (for getting project path when creating new channel)
   interface ProjectInfo {
@@ -1890,6 +1892,7 @@ export default function Terminal({ token }: Props) {
                       onSwitchChannel={(idx) => attachToWindow(idx)}
                       onNewProject={openNewSessionDialog}
                       onNewChannel={handleCreateWindow}
+                      onCloseEditor={() => workspaceBrowserRef.current?.closeEditor()}
                       layout="sidebar"
                     />
                   </div>
@@ -1903,6 +1906,7 @@ export default function Terminal({ token }: Props) {
             {canEmbedBrowser && showFileBrowser && (
               <Suspense fallback={null}>
                 <WorkspaceBrowser
+                  ref={workspaceBrowserRef}
                   embedded
                   token={token}
                   onClose={() => { setShowFileBrowser(false); setFileEditorOpen(false) }}

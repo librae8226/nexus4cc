@@ -61,6 +61,8 @@ interface Props {
   onNewChannel: () => void
   /** Refresh callback — exposed for sidebar toggle integration */
   onRefresh?: () => void
+  /** Called when user double-clicks a channel — should close any open file editor */
+  onCloseEditor?: () => void
   layout?: 'modal' | 'sidebar'
 }
 
@@ -103,6 +105,7 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
   onNewProject,
   onNewChannel,
   onRefresh: _onRefresh,
+  onCloseEditor,
   layout = 'modal',
 }: Props, ref) {
   const { t } = useTranslation()
@@ -662,6 +665,7 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
                   className={`flex items-start gap-2 px-2.5 py-1.5 rounded cursor-pointer mb-0.5 select-none transition-colors duration-75 group/item ${isActive ? 'bg-nexus-bg-2' : ''}`}
                   style={{ WebkitTouchCallout: 'none' }}
                   onPointerDown={() => { doSwitchChannel(channel, false) }}
+                  onDoubleClick={() => { onCloseEditor?.(); doSwitchChannel(channel, false) }}
                   onContextMenu={(e) => { e.preventDefault(); handleSidebarContext(e, channel, undefined) }}
                 >
                   <span className="w-2 h-2 rounded-full shrink-0 mt-0.5" style={{ background: STATUS_DOT[status] }} title={status} />

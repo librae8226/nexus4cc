@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo, useImperativeHandle, forwardRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -205,7 +205,11 @@ function createMarkedRenderer() {
   return r
 }
 
-export default function WorkspaceBrowser({ token, onClose, initialPath = '', currentSession, embedded, overlay, hideSidebar, onEditingChange }: Props) {
+export interface WorkspaceBrowserHandle {
+  closeEditor: () => void
+}
+
+const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function WorkspaceBrowser({ token, onClose, initialPath = '', currentSession, embedded, overlay, hideSidebar, onEditingChange }: Props, ref) {
   const { t } = useTranslation()
   const [workspaceRoot, setWorkspaceRoot] = useState('')
 
@@ -327,6 +331,14 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
   const [editorFontSize, setEditorFontSize] = useState(14) // 基础 14px
   const [pinchStartDist, setPinchStartDist] = useState(0)
   const [pinchStartFontSize, setPinchStartFontSize] = useState(14)
+
+  // Expose closeEditor for external components (e.g., double-click channel to close file)
+  useImperativeHandle(ref, () => ({
+    closeEditor: () => {
+      setEditingFile(null)
+      setEditorContent('')
+    },
+  }), [])
 
   // TOC state
   const [showToc, setShowToc] = useState(false)
@@ -1552,7 +1564,7 @@ export default function WorkspaceBrowser({ token, onClose, initialPath = '', cur
       )}
     </>
   )
-}
+})
 
 function getFileIcon(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase()
@@ -1626,3 +1638,5 @@ function MarkdownPreview({ content, fontSize = 14 }: { content: string; fontSize
     />
   )
 }
+
+export default WorkspaceBrowser
