@@ -21,44 +21,42 @@
 
 ---
 
-## Highlights
+## What is Nexus4CC?
 
-| | |
-|---|---|
-| **AI on the go** | Your time is fragmented. Your AI shouldn't be. Command Claude Code from your phone — commuting, in a meeting, or away from your desk. |
-| **Built for touch** | Not a desktop terminal shoehorned onto mobile. Swipe between windows, pinch-to-zoom, configurable toolbar — purpose-built for fingers. |
-| **Full context, always** | Claude Code runs on your machine, in your tmux sessions — your full codebase, your history, your preferences. Not a cloud chat that forgets everything. |
-| **Fire and forget** | Give the instruction, close your phone. Your agents keep running. Open later — everything's exactly where you left it. |
+Nexus4CC turns any browser into a command center for **Claude Code** — and works with Codex, Gemini CLI, or any terminal-based AI agent. It bridges directly to tmux sessions running on your machine, so you can monitor, switch between, and command your agents from anywhere.
 
----
-
-## Why Nexus 4 CC?
-
-|                          | Anthropic Remote Control | Happy Coder | Omnara  | **nexus4cc** |
-|--------------------------|:---:|:---:|:---:|:---:|
-| Self-hosted              | ❌ | ❌ | ⚠️ | ✅ |
-| No subscription needed   | ❌ ($100+/mo) | ✅ | ❌ ($9/mo) | ✅ |
-| Data stays on your infra | ❌ | ❌ | ❌ | ✅ |
-| Real terminal (xterm)    | ❌ | ❌ | ❌ | ✅ |
-| Project & channel management | ❌ | ⚠️ | ⚠️ | ✅ |
-| Fire & forget            | ⚠️ (10min timeout) | ✅ (via relay) | ✅ (via relay) | ✅ (pure tmux) |
-| PWA / installable        | ❌ | ✅ (native app) | ✅ (native app) | ✅ |
-| Open source              | ❌ | ⚠️ partial | ✅ | ✅ |
-
-> **Project & channel management:** Organize work by directory-based projects, each with multiple channel-like sessions — switch between them instantly, like Slack channels for your terminal.
+Phone, tablet, foldable, or desktop — one interface, every device. No cloud. No subscription. No SSH gymnastics. Just your terminal, everywhere.
 
 ---
 
 ## Features
 
-- 🔌 **WebSocket ↔ tmux bridge** — one PTY per window, real-time bidirectional I/O
-- 📱 **Mobile-first terminal** — xterm.js, swipe navigation, pinch-to-zoom, configurable soft toolbar
-- 🤖 **Task Panel** — launch Claude tasks, monitor via SSE streaming, async progress
-- 📂 **File browser** — browse, edit, upload workspace files (sort by name / modified / size)
-- 🗂️ **Project & channel management** — directory-based projects, each with channel-like sessions (like Slack channels for your terminal)
-- 🔀 **Multi-session** — switch tmux sessions instantly
-- 🎨 **PWA** — installable, dark / light themes
-- ⚡ **Zero overhead** — direct WebSocket pipe, no SSH
+| | |
+|---|---|
+| 🔌 **WebSocket ↔ tmux bridge** | One PTY per window. Real-time bidirectional I/O. Close your browser — your agents keep running. |
+| 📱 **Any-screen terminal** | xterm.js with swipe navigation, pinch-to-zoom, and a configurable soft toolbar. Touch-friendly on mobile, full keyboard on desktop — one interface that adapts. |
+| 📂 **Embedded file browser** | Browse, edit, and preview Markdown files in a resizable sidebar. Sort by name, date, or size. |
+| 🗂️ **Project & channel management** | Directory-based projects with Slack-like channel sessions. Switch contexts instantly — like workspaces for your terminal. |
+| 💾 **Session persistence** | tmux-resurrect keeps your sessions alive across reboots. Pick up exactly where you left off. |
+| 🔀 **Multi-session** | Run multiple tmux sessions in parallel. Switch between them without leaving the browser. |
+| 🎨 **PWA** | Installable on iOS and Android. Dark and light themes. Feels like a native app, works offline. |
+
+---
+
+## Why Nexus4CC?
+
+|                          | Anthropic Remote Control | Happy Coder | Omnara  | **Nexus4CC** |
+|--------------------------|:---:|:---:|:---:|:---:|
+| Self-hosted              | ❌ | ❌ | ⚠️ | ✅ |
+| No subscription needed   | ❌ | ✅ | ❌ | ✅ |
+| Data stays on your infra | ❌ | ❌ | ❌ | ✅ |
+| Real terminal (xterm)    | ❌ | ❌ | ❌ | ✅ |
+| Project & channel management | ❌ | ⚠️ | ⚠️ | ✅ |
+| Fire & forget            | ⚠️ | ✅ | ✅ | ✅ (pure tmux) |
+| PWA / installable        | ❌ | ✅ | ✅ | ✅ |
+| Open source              | ❌ | ⚠️ | ✅ | ✅ |
+
+> **Project & channel management:** Organize work by directory-based projects, each with multiple channel-like sessions — switch between them instantly, like Slack channels for your terminal.
 
 ---
 
@@ -76,9 +74,11 @@ npm start
 
 ---
 
-## Install with Claude Code
+> 💡 **For human users:** follow the Quick Start above. The instructions below are for AI assistants helping with installation.
 
-If you're an AI assistant helping a user install Nexus, follow this path:
+### For AI Assistants
+
+If you're an AI assistant helping a user install Nexus:
 
 1. Clone this repo and `cd` into it
 2. Run `node scripts/setup.js` — handles deps, frontend build, PM2, and first tmux session
@@ -121,7 +121,8 @@ Nexus is a **single-user, self-hosted tool** — not a multi-tenant platform.
 | Doc | |
 |---|---|
 | [QUICKSTART.md](docs/QUICKSTART.md) | Step-by-step setup guide |
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design & API reference |
+| [PRD.md](docs/PRD.md) | Feature specifications |
 | [ROADMAP.md](docs/ROADMAP.md) | What's next |
 | [📖 The story behind Nexus](docs/story.md) | Why this was built |
 
@@ -132,6 +133,14 @@ Nexus is a **single-user, self-hosted tool** — not a multi-tenant platform.
 <p>
   <img src="https://github.com/user-attachments/assets/6960ca95-f26d-484b-aa66-56b5315e39d3" width="225" />
 </p>
+
+---
+
+## Author
+
+Nexus4CC was built by [Librae](https://github.com/librae8226) — software engineer, entrepreneur, and early-stage VC investor.
+
+The best ideas never come at your desk. Nexus4CC was born from a real need: commanding AI agents on the go — from airports, taxis, and between meetings. Now it's open source, and it's yours.
 
 ---
 
@@ -147,4 +156,4 @@ Dual-licensed: **[GPL v3](LICENSE.md)** for open-source use · **Commercial lice
 
 ---
 
-*Built with Claude Code, for Claude Code.*
+*Built for **Claude Code** first. Also works with any AI agent that runs in a terminal.*

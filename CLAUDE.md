@@ -26,26 +26,43 @@ Anchor: `docs/NORTH-STAR.md` — 修改任何文档前先对照锚点三原则
 ## Key Files
 
 ```
-server.js                  # 唯一后端入口：Express + WS + PTY + Tasks + Telegram
-data/                      # 持久化数据（toolbar、tasks、configs）
+server.js                  # 唯一后端入口：Express + WS + PTY
+data/                      # 持久化数据（toolbar、configs）
 public/
   sw.js                    # Service Worker（cache-first 静态资源）
   icon.svg                 # PWA 图标
+  manifest.json            # PWA manifest
 frontend/src/
   App.tsx                  # 路由：登录页 / 终端页
-  Terminal.tsx             # xterm.js + WebSocket + 触摸处理 + 双 Effect 模式
+  Terminal.tsx             # xterm.js + WebSocket + 触摸处理
   Toolbar.tsx              # 可配置工具栏（固定行 + 展开区）
   TabBar.tsx               # tmux window 标签（< 768px 顶部导航）
-  TaskPanel.tsx            # claude -p 异步任务面板（SSE 流式）
-  SessionManager.tsx       # 新建/切换 session 面板（lazy）
+  SessionManager.tsx       # 旧版 session 面板（lazy, legacy）
+  SessionManagerV2.tsx     # Project-Channel 双层会话管理（lazy）
   WorkspaceSelector.tsx    # 目录选择器（lazy）
+  WorkspaceBrowser.tsx     # 文件浏览器（嵌入式侧栏 + 全屏 overlay）
+  FilePanel.tsx            # 文件查看/编辑/Markdown 预览（lazy）
+  GeneralSettings.tsx      # 通用设置面板（lazy）
+  NewWindowDialog.tsx      # 新建窗口对话框（lazy）
+  SessionFAB.tsx           # 移动端浮动操作按钮
+  GhostShield.tsx          # 覆盖层守卫（防止意外 keyboard 弹出）
   toolbarDefaults.ts       # 按键定义与出厂配置
   windowStatus.ts          # 窗口状态检测（Terminal + TabBar 共享）
+  icons.tsx                # 图标组件
+  mobileInput.ts           # 移动端键盘映射
+  useOverlayGuard.ts       # Overlay 点击防护 hook
+  i18n/                    # 国际化入口
+  locales/                 # 翻译文件（en, zh-CN）
 docs/
   NORTH-STAR.md            # 锚点文件（核心问题/用户/Out-of-Scope）
   PRD.md                   # 功能规格
   ROADMAP.md               # 迭代路线图
   ARCHITECTURE.md          # 架构现状
+  QUICKSTART.md            # 快速开始指南
+  SESSION-PERSISTENCE.md   # 会话持久化方案
+  HISTORY_MODE_REDESIGN.md # 历史模式重设计（设计阶段）
+  story.md                 # 项目故事/背景
+  pm2-setup.md             # PM2 部署指南
 ```
 
 ## Agent Workflow Rules
@@ -139,3 +156,4 @@ Rules: English subject, imperative mood, no trailing period, blank line before b
 | Process / convention | `CLAUDE.md` (this file) |
 | Env var added | `.env.example` + commit body |
 | Bug fix | commit body (root cause) |
+| Session/persistence change | `docs/SESSION-PERSISTENCE.md` |

@@ -1,6 +1,6 @@
-# PRD — Nexus AI 终端面板 **(v1 Complete / 已完成)**
+# PRD — Nexus AI 终端面板
 
-**版本**: v1.0.0  **状态**: Complete  **锚点**: `docs/NORTH-STAR.md`  **完成日期**: 2026-04-01
+**版本**: v1.0.0  **状态**: Complete  **锚点**: `docs/NORTH-STAR.md`  **最后更新**: 2026-07-15
 
 ---
 
@@ -50,14 +50,9 @@
 
 > 对应北极星「轴二：零摩擦上下文同步」——不限于浏览器终端的交互渠道
 
-| ID | Feature | 场景 |
-|---|---|---|
-| F-13 | `claude -p` 非交互派发 | 发一条 prompt，AI 在后台处理，前端显示结果卡片；不占用交互 PTY |
-| F-14 | 上下文附件同步 | 在移动端将图片/文件/文本片段发送给指定 Agent session |
-| F-16 | Telegram Bot 频道 | 外出时在 Telegram 给 AI 下任务，结果回传聊天；调用 `/api/tasks` |
-| F-17 | 多输入渠道统一路由 | 任意渠道（Web/IM/CLI）的 prompt 统一进入 task 队列，结果同步回发起方 |
+*(F-13/F-14/F-16/F-17 已移除 — 非交互派发、上下文附件、Telegram Bot、多渠道路由功能已从代码库中移除，不再需要。)*
 
-### Nice（v4：直觉化项目管理）
+### Done（原 Nice/v4 — 已提前完成）
 
 > 对应北极星「轴一：零配置启动」——消灭一切不必要的决策步骤
 
@@ -65,26 +60,6 @@
 |---|---|---|
 | **F-19** | **项目-窗口两级结构** | **项目 = 目录，窗口 = 同目录标签**。新建项目时选目录；新窗口自动继承当前目录；消灭「每次新建都要选目录」的重复操作 |
 | **F-20** | **统一会话管理界面** | **借鉴 Slack Workspace/Channel 模式**：项目列表（下部）+ 窗口列表（上部），新建按钮分区放置，视觉层次清晰 |
-
----
-
-## Feature Detail: v3 非交互派发（F-13/F-16/F-17）
-
-```
-POST /api/tasks
-  body: { session_name, prompt, attachments? }
-  → spawn claude -p "<prompt>" --cwd <session.cwd>
-  → 流式 SSE 返回结果
-  → 前端结果卡片（不占用交互 PTY）
-  → 同步回发起方渠道（Web / Telegram / ...）
-
-POST /api/webhooks/telegram
-  → 解析消息 + 附件（图片/文件）
-  → 调用 POST /api/tasks
-  → 结果回传 Telegram 对话
-```
-
-**设计原则**：任务派发与交互终端解耦——交互 PTY 继续用于实时 claude 对话，tasks API 用于异步一次性任务，两者共存，各司其职。
 
 ---
 
@@ -331,7 +306,6 @@ interface Channel {
 | 移动端 Esc/Ctrl+C 发送成功率 | 100% |
 | 浏览器重连后终端恢复时间 | < 2s |
 | 工具栏配置跨设备同步 | 重连后自动加载 |
-| 从 Telegram 发出 prompt 到收到首个 token | < 5s |
 | PWA 添加主屏并可用 | iOS Safari / Android Chrome |
 
 ---
@@ -348,9 +322,6 @@ interface Channel {
 
 ## Known Limitations（v1）
 
-| 问题 | 影响 | v2 解法 |
+| 问题 | 影响 | 解法 |
 |---|---|---|
-| 多客户端 resize 冲突 | 多设备同时连接时 PTY 尺寸以最后收到的为准 | 取最小尺寸策略 |
-| 单 PTY 全局切换 | window 切换所有设备同步跳转 | 独立 window PTY Map（F-11） |
-| claude 配置未挂载 | 容器内 claude 使用镜像内配置，非宿主机配置 | docker-compose volumes 增加挂载 |
-| 文件权限 | 容器 claude UID ≠ 宿主机 UID 时写文件失败 | Dockerfile usermod -u 1000 |
+| 多客户端 resize 冲突 | 多设备同时连接时 PTY 尺寸以最后收到的为准 | 直接使用当前客户端尺寸 |

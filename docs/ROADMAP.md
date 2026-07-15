@@ -1,21 +1,20 @@
 # ROADMAP — Nexus
 
-**锚点**: `docs/NORTH-STAR.md` | **PRD**: `docs/PRD.md` (v1 Complete) | **更新**: 2026-04-01
+**锚点**: `docs/NORTH-STAR.md` | **PRD**: `docs/PRD.md` | **更新**: 2026-07-15
 
 ---
 
 ## v1.0 Released (2026-04-01)
 
-All F-01 to F-18 complete.
+F-01 to F-12, F-15, F-18 complete.（F-13/14/16/17 已移除，F-19/F-20 提前完成）
 
 ## v2.0 Backlog
 
 ---
 
-| ANSI output in task history | Add `-e` flag; frontend ansi-to-html |
-| F-19 Project-Window hierarchy | tmux env NEXUS_CWD per-session |
-| F-20 Unified session manager | Slack-style Project/Channel UI |
 | Open-source polish | Git history rewrite, rate limits, etc. |
+| History mode redesign | In-place swap 方案（见 `docs/HISTORY_MODE_REDESIGN.md`） |
+| ANSI output in file viewer | 文件内容 ANSI 渲染 |
 
 ---
 
@@ -36,14 +35,10 @@ All F-01 to F-18 complete.
 | 移动端底导航（BottomNav.tsx） | `fb21eee` |
 | 主题跟随系统 + CSS vars 修复 | 本会话 |
 | 加载遮罩 + 窗口切换 race 修复 | 本会话 |
-| F-13 TaskPanel 前端（SSE 流式）| 本会话 |
-| F-16 Telegram Bot webhook 后端 | 本会话 |
-| F-14 文件上传 (`POST /api/upload`) | 本会话 |
 | 登录页主题适配 CSS vars | 本会话 |
 | 移动端上传入口（TabBar 📎）| 本会话 |
 | F-15 Agent 状态指示器（运行中绿点）| 本会话 |
 | F-11 独立 Window PTY | 本会话 |
-| F-16 Telegram 接收文件（photo/document）| 本会话 |
 | 前端 Code-splitting（lazy load 面板）| 本会话 |
 | 窗口重命名（TabBar/Sidebar/BottomNav）| 本会话 |
 | WebSocket 指数退避重连 | 本会话 |
@@ -60,7 +55,7 @@ All F-01 to F-18 complete.
 | F-15 完整：动态 Agent 状态（运行/等待/shell）| 本会话 |
 | TabBar 移动端 session 切换（多 session 时显示）| 本会话 |
 | 动态页面标题（显示窗口名+状态图标）| 本会话 |
-| 浏览器通知：任务完成时推送（TaskPanel）| `016771b` |
+| 浏览器通知 | `016771b` |
 | 浮动「回底部」按钮（term.onScroll 追踪）| `d2f73f6` |
 | 优化：xterm/WS 双 Effect 分离（窗口切换无抖动）| `dcac810` |
 | 修复：多客户端 resize 改用最小尺寸策略 | `3b56134` |
@@ -68,29 +63,12 @@ All F-01 to F-18 complete.
 | 跟随系统深色/浅色模式自动切换 | `3f736a0` |
 | 布局：100dvh 修复 iOS Safari 高度 | `3f736a0` |
 | 任务取消按钮（AbortController + SIGTERM）| `34d9f0f` |
-| TaskPanel 5s 轮询 + Telegram TG 来源标识 | `0854359` |
 | 工具栏新增 ^Z / ^A / ^E 快捷键 | `19e7cb1` |
-| 修复：tasks cwd 路径含冒号解析错误 | `e346c8b` |
 | F-18 多 tmux session 支持 | 本会话 |
-| 修复：/api/tasks 支持多 tmux session（tmux_session 参数）| `aab1aaf` |
 | 修复：窗口切换时滚动位置恢复（userScrolledRef 保持）| `aab1aaf` |
-| Telegram 增量进度更新（editMessageText 每 5 秒）| `053fad6` |
 | 移动端水平滑动切换 tmux 窗口 | `5f33934` |
-| Telegram /switch 命令切换目标窗口 | `6387cdc` |
-| 修复：sanitize /switch target（防命令注入）| `cc9fb01` |
-| feat: 任务 running 状态实时可见（Web+Telegram）| `608e77b` |
-| feat: 任务删除按钮 + 服务启动清理孤儿任务 | `5f09814` |
-| feat: 任务输出复制按钮 + 一键重新执行 | `586df3c` |
-| style: running 状态改用 pulse 动画 | `5b59f4d` |
-| fix(mobile): TabBar 新增任务面板按钮（移动端 TaskPanel 入口） | `b754914` |
 | fix(perf): 消除 TabBar 重复轮询（统一从 Terminal.tsx 传入） | `b754914` |
-| feat(tasks): 运行中任务徽标（Sidebar + TabBar 📋 按钮绿点） | `24e95a4` |
-| fix(tasks): TaskPanel 首次打开时申请浏览器通知权限 | `667fc8f` |
-| feat(ui): 页面标题显示运行中任务数量 `(N)` | `524c9fa` |
-| fix: tasks.json 上限 200 条；窗口输出轮询加 session 参数 | `8cf0aba` |
 | refactor: 抽取 windowStatus.ts，消除 Terminal/TabBar 重复定义 | `044c542` |
-| F-17: 统一 runTask() 抽象（Web + Telegram 共享执行入口） | `605b057` |
 | fix(toolbar): ctrl-a/ctrl-e/ctrl-z 加入出厂展开列表 | `a8c4e6b` |
 | fix(pwa): 仅缓存静态资源，跳过 index.html（修复构建后 404） | `c31cc20` |
-| fix(tasks): 恢复 profile 参数；修复通知图标/正文 | `56f226d` |
 | fix(mobile): GhostShield 全局幽灵点击防护（所有 overlay） | `ff542a0` |

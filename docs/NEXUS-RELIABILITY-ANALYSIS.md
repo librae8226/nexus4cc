@@ -1,6 +1,8 @@
 # Nexus 高可用与 Claude Profile 启动流程分析
 
-**日期**: 2026-04-02
+> **注意**: 本文撰写于 2026-04-02，其中引用的行号基于旧版 server.js（当时约 1775 行，现已缩减至 1573 行），大部分行号引用已失效。建议的 `process.on('uncaughtException')`、`process.on('unhandledRejection')`、PM2 `max_restarts`/`max_memory_restart` 等防护措施截至 2026-07-15 尚未实施。CLAUDE_CONFIG_DIR 已清空解决 profile 混用问题。
+
+**日期**: 2026-04-02 | **更新**: 2026-07-15
 **分析范围**: nexus 服务防挂/自恢复机制 + nexus 目录下 Claude profile 启动链路
 
 ---

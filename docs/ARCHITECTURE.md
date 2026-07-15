@@ -1,6 +1,6 @@
 # ARCHITECTURE — Nexus 架构现状
 
-**Last Updated**: 2026-04-06  **版本**: v4.3.1  **锚点**: `docs/NORTH-STAR.md`
+**Last Updated**: 2026-07-15  **版本**: v4.x  **锚点**: `docs/NORTH-STAR.md`
 
 ---
 
@@ -16,23 +16,19 @@ tmux attach-session -t <session>:<window>
     ├── window 0: vault
     ├── window 1: projects-blog
     └── window N: ...
-Telegram Bot（可选）
-    ↕  webhook POST /api/webhooks/telegram
-    ↕  runTask() → claude -p
 ```
 
 ---
 
-## 后端（server.js ~1775 行，单文件 ESM）
+## 后端（server.js ~1573 行，单文件 ESM）
 
 ### 启动流程
 
 1. 加载 `.env`（手动解析，无 dotenv 依赖）
 2. 验证 `JWT_SECRET` 和 `ACC_PASSWORD_HASH`（缺失则 exit(1)）
 3. 确保 `data/` 和 `data/configs/` 存在
-4. 清理孤儿 running 任务（启动时 status → error）
-5. 注册 Express 路由 + multipart 上传 + 静态文件
-6. 创建 HTTP server + WebSocketServer（共享端口）
+4. 注册 Express 路由 + multipart 上传 + 静态文件
+5. 创建 HTTP server + WebSocketServer（共享端口）
 
 ### API Endpoints
 
@@ -74,7 +70,7 @@ Telegram Bot（可选）
 | POST | `/api/upload` | Bearer | 图片/文档上传（终端粘贴用） |
 | POST | `/api/files/upload` | Bearer | 文件上传到工作区 |
 | GET | `/api/files` | Bearer | 列出已上传文件 |
-| DELETE | `/api/files/:date/:filename` | Bearer | 删除单个上传文件 |
+| DELETE | `/api/files/content` | Bearer | 删除单个上传文件（`?path=`） |
 | DELETE | `/api/files/all` | Bearer | 清空所有上传文件 |
 | **配置** | | | |
 | GET | `/api/config` | Bearer | 返回 WORKSPACE_ROOT 等配置 |
@@ -83,13 +79,9 @@ Telegram Bot（可选）
 | DELETE | `/api/configs/:id` | Bearer | 删除 profile |
 | GET | `/api/toolbar-config` | Bearer | 读取工具栏配置 |
 | POST | `/api/toolbar-config` | Bearer | 保存工具栏配置 |
-| **任务** | | | |
-| GET | `/api/tasks` | Bearer | 列出任务历史（data/tasks.json） |
-| POST | `/api/tasks` | Bearer | 提交任务（SSE 流式输出） |
-| DELETE | `/api/tasks/:id` | Bearer | 删除任务记录 |
-| **Telegram** | | | |
-| POST | `/api/webhooks/telegram` | 无（secret check） | Telegram Bot webhook |
-| GET | `/api/telegram/setup` | Bearer | Telegram Bot 状态信息 |
+| **版本** | | | |
+| GET | `/api/version` | Bearer | 返回当前 git tag 版本 |
+| GET | `/api/version/latest` | Bearer | 检查 GitHub 最新 release |
 | GET | `*` | 无 | SPA fallback → index.html |
 
 ### PTY 层（ptyMap 多实例）
@@ -106,31 +98,7 @@ function getOrCreatePty(session, windowIndex) {
 }
 ```
 
-**Resize 策略**: 多客户端时取所有连接的最小尺寸（min cols/rows），防止小屏遮挡内容。
-
-### 任务系统（runTask 统一抽象）
-
-```javascript
-function runTask(prompt, cwd, opts) {
-  // opts: { sessionName, source, tmuxSession, profile, onChunk, onDone }
-  // 1. 创建任务记录（立即写入 data/tasks.json）
-  // 2. spawn claude -p <prompt> --dangerously-skip-permissions [--profile <p>]
-  // 3. stdout/stderr → onChunk() 回调
-  // 4. close → updateTask() + onDone() 回调
-  // 返回 { taskId, kill }
-}
-```
-
-- Web 端（`POST /api/tasks`）通过 `onChunk` 推 SSE 帧
-- Telegram 端通过 `onChunk` 定时 editMessageText（每 5 秒）
-- `tasks.json` 上限 200 条（`saveTasks` 强制执行）
-
-### Telegram Bot
-
-- 支持命令：`/list`（列窗口）、`/switch <name>`（切换目标窗口）
-- 接收消息 → `runTask()` 在目标窗口 cwd 执行
-- 接收文件/图片 → 下载到 WORKSPACE_ROOT → `runTask()` 附路径执行
-- 目标窗口状态：持久化在内存 `telegramTargetWindow`（服务重启后重置）
+**Resize 策略**: 多客户端时直接使用当前客户端尺寸（而非所有客户端的最小值），避免多设备切换时尺寸混乱。
 
 ---
 
@@ -157,18 +125,18 @@ App.tsx（路由）
      ├── SessionManagerV2.tsx    ← project-channel 双层会话管理（lazy）
      ├── SessionManager.tsx      ← 旧版 session 面板（legacy，lazy）
      ├── WorkspaceSelector.tsx   ← 路径选择器（lazy）
-     ├── WorkspaceBrowser.tsx    ← 文件浏览器（排序、右键菜单、lazy）
+     ├── WorkspaceBrowser.tsx    ← 文件浏览器（嵌入式侧栏 + 全屏 overlay，lazy）
      │    └── FilePanel.tsx      ← 文件查看/编辑/Markdown 预览（lazy）
-     ├── GeneralSettings.tsx     ← 通用设置面板（lazy）
-     └── TaskPanel.tsx           ← claude -p 异步任务 + SSE 流（lazy）
+     └── GeneralSettings.tsx     ← 通用设置面板（lazy）
 ```
 
 ### 布局断点
 
 | 条件 | 布局 |
 |---|---|
-| `>= 768px` (isWidePC) | Sidebar (200px) + Terminal + Toolbar |
-| `< 768px` | TabBar (top) + Terminal + Toolbar (bottom) |
+| `>= 1024px` (isWidePC) | 嵌入式文件浏览器侧栏（可拖拽调整宽度）+ Terminal + Toolbar |
+| `>= 700px` (canEmbedBrowser) | 嵌入式文件浏览器侧栏 + Terminal + Toolbar（折叠式） |
+| `< 700px` | TabBar (top) + Terminal + Toolbar (bottom)；文件浏览器全屏 overlay |
 
 ### 状态管理
 
@@ -193,14 +161,12 @@ Effect B [token, activeWindowIndex] — 管理 WebSocket（窗口切换时重建
 | 来源 | 端点 | 间隔 | 用途 |
 |---|---|---|---|
 | Terminal.tsx | `/api/sessions/:id/output?session=` | 3s | windowOutputs → TabBar + Sidebar |
-| Terminal.tsx | `/api/tasks` | 5s | runningTaskCount → 徽标 + 标题 |
 | TabBar.tsx（fallback） | `/api/sessions/:id/output` | 5s | 仅当 Terminal 未传入 windowOutputs 时 |
-| TaskPanel.tsx | `/api/tasks` | 5s | 任务历史列表 |
 
 ### 国际化（i18n）
 
 - 使用 `i18next` + `react-i18next` + `i18next-browser-languagedetector`
-- 支持语言：中文（zh-CN）、英文（en）、日文（ja）、韩文（ko）、德文（de）、法文（fr）、西班牙文（es）、俄文（ru）
+- 支持语言：中文（zh-CN）、英文（en）
 - 翻译文件：`frontend/src/locales/<lang>/translation.json`
 - 入口：`frontend/src/i18n/index.ts`
 
@@ -211,7 +177,6 @@ Effect B [token, activeWindowIndex] — 管理 WebSocket（窗口切换时重建
 ```
 data/
 ├── toolbar-config.json    # 工具栏布局（所有设备共享）
-├── tasks.json             # 任务历史（上限 200 条）
 └── configs/
     ├── profile-a.json     # claude 启动配置 profile
     └── profile-b.json
@@ -221,7 +186,6 @@ data/
 
 **Polling**:
 - Terminal: `/api/sessions/:id/output?session=` (3s) → windowOutputs (shared to TabBar/Sidebar)
-- Tasks: `/api/tasks` (5s) → badges/title/notifications
 
 ---
 
@@ -253,9 +217,8 @@ nexus/
 | `TMUX_SESSION` | | `main` | 要 attach 的 tmux session 名 |
 | `WORKSPACE_ROOT` | | `/workspace` | 工作区根目录 |
 | `PORT` | | `59000` | 监听端口 |
-| `TELEGRAM_BOT_TOKEN` | | — | Telegram Bot token（可选） |
-| `TELEGRAM_CHAT_ID` | | — | 允许的 Telegram chat ID（可选） |
 | `CLAUDE_PROXY` | | — | HTTP/HTTPS/ALL proxy for claude CLI（可选） |
+| `GITHUB_REPO` | | — | GitHub 仓库（`owner/repo`），用于版本检查 |
 
 ---
 
@@ -264,6 +227,5 @@ nexus/
 | 位置 | 问题 | 优先级 |
 |---|---|---|
 | `server.js` | tmux 命令 cwd/name 特殊字符转义不完整 | 中 |
-| `server.js` | `telegramTargetWindow` 重启后丢失，不持久化 | 低 |
 | `Terminal.tsx` | window 切换通过 `\x02{index}` 键序列，依赖 tmux 快捷键 | 低 |
 | `toolbarDefaults.ts` | 按键序列硬编码，无运行时验证 | 低 |

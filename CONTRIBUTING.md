@@ -28,7 +28,7 @@ cd frontend && npm run dev
 
 ## Before You Submit
 
-1. **Read [NORTH-STAR.md](NORTH-STAR.md)** — three principles that must not be violated
+1. **Read [NORTH-STAR.md](docs/NORTH-STAR.md)** — three principles that must not be violated
 2. **Manual test in browser** — open the affected user flow and verify it works
 3. **One logical change per PR** — keep scope tight
 

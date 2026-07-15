@@ -6,6 +6,6 @@
 
 - [ ] Tested manually in browser (affected user flow verified)
 - [ ] No speculative features added beyond the stated goal
-- [ ] [NORTH-STAR.md](NORTH-STAR.md) principles not violated
+- [ ] [NORTH-STAR.md](docs/NORTH-STAR.md) principles not violated
 - [ ] Commit message follows standard (`type(scope): subject`)
 - [ ] `.env` not committed

@@ -30,7 +30,7 @@ claude login
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/user/nexus4cc.git
+git clone https://github.com/librae8226/nexus4cc.git
 cd nexus4cc
 
 # 2. 安装依赖
@@ -264,8 +264,7 @@ http://192.168.x.x:59000
 
 - 阅读 [ARCHITECTURE.md](ARCHITECTURE.md) 了解系统架构
 - 阅读 [NORTH-STAR.md](NORTH-STAR.md) 了解设计原则
-- 配置 Telegram Bot 实现手机异步任务（可选）
 
 ---
 
-*有问题？提交 [Issue](https://github.com/user/nexus4cc/issues) 或查看 [Troubleshooting](TROUBLESHOOTING.md)*
+*有问题？提交 [Issue](https://github.com/librae8226/nexus4cc/issues)*
