@@ -176,6 +176,7 @@ export default function SessionFAB({ onClick, windowCount, topInset = 0, bottomI
         zIndex: 350,
         userSelect: 'none',
         touchAction: 'none',
+        opacity: 0.75,
         transition,
       }}
     >

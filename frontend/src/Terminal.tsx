@@ -1931,61 +1931,47 @@ export default function Terminal({ token }: Props) {
         </div>
       ) : (
         <div className="flex flex-col flex-1 overflow-hidden min-h-0">
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
-            {/* 终端 — 始终渲染，保持 xterm DOM 稳定 */}
-            <div ref={containerRef} className="flex-1 overflow-hidden relative" />
-            {isConnecting && (
-              <div className="absolute inset-0 bg-nexus-bg flex flex-col items-center justify-center gap-3 z-10">
-                <div className="w-8 h-8 border-[3px] border-nexus-border border-t-nexus-accent rounded-full animate-spin" />
-                <span className="text-nexus-text-2 text-sm">Connecting...</span>
+          <div className="flex-1 flex flex-row min-h-0 overflow-hidden relative">
+            {/* 折叠屏文件浏览器侧边栏（≥700px）：挤开终端并排显示，而非浮层覆盖 */}
+            {canEmbedBrowser && (showFileBrowser || fileEditorOpen) && (
+              <div
+                className={
+                  showFileBrowser && !fileEditorOpen
+                    ? 'h-full flex flex-row flex-shrink-0'
+                    : showFileBrowser
+                      ? 'flex-1 h-full flex flex-row min-w-0'
+                      : 'absolute inset-0 z-[100]'
+                }
+                onClick={showFileBrowser && fileEditorOpen ? () => setShowFileBrowser(false) : undefined}
+              >
+                <Suspense fallback={null}>
+                  <WorkspaceBrowser
+                    embedded={showFileBrowser}
+                    overlay={!showFileBrowser}
+                    hideSidebar={!showFileBrowser}
+                    token={token}
+                    onClose={() => setShowFileBrowser(false)}
+                    currentSession={activeTmuxSession}
+                    onEditingChange={setFileEditorOpen}
+                  />
+                </Suspense>
               </div>
             )}
-            {isScrolledUp && (
-              <button className="absolute bottom-3 right-3 w-9 h-9 rounded-full bg-nexus-accent border-none text-white text-lg cursor-pointer z-50 flex items-center justify-center shadow-lg backdrop-blur-sm" onClick={scrollToBottom} title="滚到底部"><Icon name="arrowDown" size={16} /></button>
-            )}
-            {/* 折叠屏文件浏览器浮层（≥700px）：覆盖在终端上方，不挤压内容 */}
-            {canEmbedBrowser && (showFileBrowser || fileEditorOpen) && (
-              <>
-                {/* 仅侧边栏模式时显示半透明遮罩 */}
-                {showFileBrowser && !fileEditorOpen && (
-                  <div
-                    className="absolute inset-0 z-[99] bg-black/20"
-                    onPointerDown={(e) => {
-                      // 防止工具栏按钮触发的 open 动作被 backdrop 立即关闭：
-                      // 工具栏按钮 onPointerDown → setShowFileBrowser(true) → 重渲染
-                      // → backdrop 出现 → 用户松手时 click 落在 backdrop 上。
-                      // 记录打开时间戳，300ms 内的 backdrop 点击被忽略。
-                      if (Date.now() - browserOpenTimeRef.current < 300) return
-                      // preventDefault 阻止 pointerdown 后续的 click 事件生成，
-                      // 否则 React 重渲染移除 backdrop 后，click 会穿透到终端 xterm
-                      // 里的 WebLinksAddon 链接上，导致误导航到文件/外部 URL。
-                      e.preventDefault()
-                      e.stopPropagation()
-                      setShowFileBrowser(false)
-                    }}
-                  />
-                )}
-                <div
-                  className={`absolute top-0 bottom-0 z-[100] flex flex-row ${
-                    fileEditorOpen ? 'inset-0' : 'left-0'
-                  }`}
-                  style={fileEditorOpen ? undefined : { maxWidth: 'calc(100vw - 48px)' }}
-                >
-                  <Suspense fallback={null}>
-                    <WorkspaceBrowser
-                      overlay={fileEditorOpen}
-                      embedded={!fileEditorOpen}
-                      hideSidebar={!showFileBrowser}
-                      token={token}
-                      onClose={() => setShowFileBrowser(false)}
-                      currentSession={activeTmuxSession}
-                      onEditingChange={setFileEditorOpen}
-                    />
-                  </Suspense>
+            {/* 终端列 */}
+            <div className={`flex-1 flex flex-col min-w-0 overflow-hidden relative ${fileEditorOpen ? 'hidden' : ''}`}>
+              {/* 终端 — 始终渲染，保持 xterm DOM 稳定 */}
+              <div ref={containerRef} className="flex-1 overflow-hidden relative" />
+              {isConnecting && (
+                <div className="absolute inset-0 bg-nexus-bg flex flex-col items-center justify-center gap-3 z-10">
+                  <div className="w-8 h-8 border-[3px] border-nexus-border border-t-nexus-accent rounded-full animate-spin" />
+                  <span className="text-nexus-text-2 text-sm">Connecting...</span>
                 </div>
-              </>
-            )}
-            {/* 左侧把手：文件浏览器关闭时常驻，点击展开 */}
+              )}
+              {isScrolledUp && (
+                <button className="absolute bottom-3 right-3 w-9 h-9 rounded-full bg-nexus-accent border-none text-white text-lg cursor-pointer z-50 flex items-center justify-center shadow-lg backdrop-blur-sm" onClick={scrollToBottom} title="滚到底部"><Icon name="arrowDown" size={16} /></button>
+              )}
+            </div>
+            {/* 左侧把手：文件浏览器关闭时常驻，始终可见（置于终端列外层，编辑器全屏时不受 hidden 影响） */}
             {canEmbedBrowser && !showFileBrowser && (
               <button
                 className="absolute left-0 top-1/2 -translate-y-1/2 z-[110] w-7 h-14 bg-nexus-bg border border-nexus-border border-l-0 rounded-r-lg flex items-center justify-center cursor-pointer shadow-md text-nexus-text-2 opacity-50 hover:opacity-100 active:bg-nexus-bg-2 transition-opacity"
@@ -2001,7 +1987,7 @@ export default function Terminal({ token }: Props) {
               </button>
             )}
           </div>
-          {!fileEditorOpen && !showFileBrowser && (
+          {!fileEditorOpen && (
             <>
               <SessionFAB onClick={() => setShowSessionManagerV2(v => !v)} windowCount={windows.length} bottomInset={toolbarHeightRef.current} />
               <div ref={toolbarWrapRef}><Toolbar {...toolbarProps} /></div>

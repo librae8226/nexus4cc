@@ -332,6 +332,10 @@ const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function Work
   const [pinchStartDist, setPinchStartDist] = useState(0)
   const [pinchStartFontSize, setPinchStartFontSize] = useState(14)
 
+  // 编辑器头部紧凑模式：窄屏时隐藏按钮文本，仅显示图标，避免按钮换行挤占垂直空间
+  const [compactHeader, setCompactHeader] = useState(false)
+  const editorContainerRef = useRef<HTMLDivElement>(null)
+
   // Expose closeEditor for external components (e.g., double-click channel to close file)
   useImperativeHandle(ref, () => ({
     closeEditor: () => {
@@ -752,6 +756,17 @@ const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function Work
   useEffect(() => {
     onEditingChange?.(editingFile !== null)
   }, [editingFile, onEditingChange])
+
+  // 监听编辑器容器宽度：窄屏时隐藏按钮文本（compactHeader），避免按钮换行挤占垂直空间
+  useEffect(() => {
+    const el = editorContainerRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => {
+      setCompactHeader(el.clientWidth < 480)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [editingFile])
 
   // 双击处理：目录进入，文件在编辑器中打开
   function handleDoubleClick(entry: FileEntry) {
@@ -1399,7 +1414,7 @@ const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function Work
     </div>
     {/* 文件编辑器 — overlay: full-screen base layer; embedded: adjacent panel; default: full-screen overlay */}
     {editingFile && (
-      <div className={overlay
+      <div ref={editorContainerRef} className={overlay
         ? 'absolute inset-0 z-[1] bg-nexus-bg flex flex-col'
         : embedded
           ? 'flex-1 h-full bg-nexus-bg flex flex-col min-w-0'
@@ -1420,7 +1435,7 @@ const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function Work
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-nexus-accent hover:bg-nexus-accent/90 text-white text-xs rounded transition-colors disabled:opacity-50"
               >
                 <Icon name="save" size={14} />
-                {isSaving ? t('common.saving') : t('common.save')}
+                {!compactHeader && (isSaving ? t('common.saving') : t('common.save'))}
               </button>
               {editingFile && (
                 <button
@@ -1432,7 +1447,7 @@ const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function Work
                   }`}
                 >
                   <Icon name={isPreviewMode ? 'edit' : 'eye'} size={14} />
-                  {isPreviewMode ? t('workspace.edit') : t('workspace.preview')}
+                  {!compactHeader && (isPreviewMode ? t('workspace.edit') : t('workspace.preview'))}
                 </button>
               )}
               {editingFile && isMarkdownFile(editingFile.name) && (
@@ -1445,7 +1460,7 @@ const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function Work
                   }`}
                 >
                   <Icon name="list" size={14} />
-                  {t('workspace.toc')}
+                  {!compactHeader && t('workspace.toc')}
                 </button>
               )}
               <button
