@@ -499,7 +499,51 @@ app.post('/api/workspace/files', authMiddleware, (req, res) => {
   }
 })
 
-// GET /api/workspace/file — 读取文件内容
+// ---- Text file detection utilities ----
+// Known binary (non-text) extensions — fast pre-filter to avoid reading large binaries
+const BINARY_EXTENSIONS = new Set([
+  // Images
+  'png', 'jpg', 'jpeg', 'gif', 'bmp', 'ico', 'webp', 'tiff', 'tif', 'heic', 'heif', 'avif',
+  // Video / Audio
+  'mp4', 'webm', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'm4v', 'mpg', 'mpeg',
+  'mp3', 'wav', 'ogg', 'flac', 'aac', 'wma', 'm4a', 'opus',
+  // Archives
+  'zip', 'tar', 'gz', 'bz2', 'xz', '7z', 'rar', 'zst', 'lz4',
+  // Binaries / executables
+  'exe', 'dll', 'so', 'dylib', 'o', 'a', 'wasm', 'bin', 'dat',
+  // Documents (binary formats)
+  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'epub',
+  // Fonts
+  'ttf', 'otf', 'woff', 'woff2', 'eot',
+  // Other binary
+  'class', 'jar', 'war', 'pyc', 'pyo', 'elc', 'zwc',
+  'db', 'sqlite', 'sqlite3',
+  'psd', 'ai', 'sketch',
+  'iso', 'dmg', 'vhd', 'qcow2',
+  'pdb', 'obj', 'lib',
+  'dex', 'apk', 'ipa',
+])
+
+function isKnownBinaryExt(filePath) {
+  const name = basename(filePath).toLowerCase()
+  const dotIdx = name.lastIndexOf('.')
+  if (dotIdx <= 0) return false
+  const ext = name.slice(dotIdx + 1)
+  return BINARY_EXTENSIONS.has(ext)
+}
+
+function isBinaryContent(buffer) {
+  // Check first 8192 bytes for null bytes — reliable binary indicator
+  const maxCheck = Math.min(buffer.length, 8192)
+  for (let i = 0; i < maxCheck; i++) {
+    if (buffer[i] === 0) return true
+  }
+  return false
+}
+
+const MAX_EDITOR_FILE_SIZE = 5 * 1024 * 1024 // 5MB hard limit for text editor
+
+// GET /api/workspace/file — 读取文件内容（自动检测二进制，仅文本文件可读）
 app.get('/api/workspace/file', authMiddleware, (req, res) => {
   try {
     let p = req.query.path || ''
@@ -511,14 +555,28 @@ app.get('/api/workspace/file', authMiddleware, (req, res) => {
     if (!existsSync(p) || !statSync(p).isFile()) {
       return res.status(404).json({ error: 'not found' })
     }
-    const content = readFileSync(p, 'utf8')
+    // Fast pre-filter: known binary extension → reject immediately
+    if (isKnownBinaryExt(p)) {
+      return res.status(415).json({ error: 'binary file, cannot open in editor' })
+    }
+    // Reject files that are too large for the editor
+    const st = statSync(p)
+    if (st.size > MAX_EDITOR_FILE_SIZE) {
+      return res.status(413).json({ error: 'file too large for editor', size: st.size, max: MAX_EDITOR_FILE_SIZE })
+    }
+    // Read as buffer first to detect binary content via null bytes
+    const buf = readFileSync(p)
+    if (isBinaryContent(buf)) {
+      return res.status(415).json({ error: 'binary file detected' })
+    }
+    const content = buf.toString('utf8')
     res.json({ path: p, content })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
 })
 
-// PUT /api/workspace/file — 保存文件内容
+// PUT /api/workspace/file — 保存文件内容（自动检测二进制，仅文本文件可写）
 app.put('/api/workspace/file', authMiddleware, (req, res) => {
   try {
     let { path: filePath, content = '' } = req.body
@@ -527,6 +585,10 @@ app.put('/api/workspace/file', authMiddleware, (req, res) => {
     filePath = normalize(filePath)
     if (filePath.includes('..')) {
       return res.status(403).json({ error: 'invalid path' })
+    }
+    // Fast pre-filter: known binary extension → reject
+    if (isKnownBinaryExt(filePath)) {
+      return res.status(415).json({ error: 'binary file, cannot save via editor' })
     }
     writeFileSync(filePath, content, 'utf8')
     res.json({ ok: true, path: filePath })

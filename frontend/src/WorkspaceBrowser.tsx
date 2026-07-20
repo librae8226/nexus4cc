@@ -664,13 +664,29 @@ const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function Work
     }
   }
 
-  // 打开文件编辑器
+  // 打开文件编辑器（文本文件→编辑器；二进制文件→浏览器原生打开）
   async function openEditor(name: string) {
     if (!currentPath) return
+    // 前端预检：已知二进制后缀直接走浏览器原生打开
+    if (!isTextFile(name)) {
+      openFile(name)
+      return
+    }
     const filePath = currentPath.endsWith('/') ? `${currentPath}${name}` : `${currentPath}/${name}`
     try {
       const r = await fetch(`/api/workspace/file?path=${encodeURIComponent(filePath)}`, { headers })
-      if (!r.ok) throw new Error('Failed to load file')
+      if (!r.ok) {
+        if (r.status === 415) {
+          // 服务器检测到二进制内容 → 回退浏览器原生打开
+          openFile(name)
+          return
+        }
+        if (r.status === 413) {
+          alert(t('workspace.fileTooLarge'))
+          return
+        }
+        throw new Error('Failed to load file')
+      }
       const data = await r.json()
       setEditingFile({ name, path: filePath, content: data.content })
       setEditorContent(data.content)
@@ -768,7 +784,7 @@ const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function Work
     return () => ro.disconnect()
   }, [editingFile])
 
-  // 双击处理：目录进入，文件在编辑器中打开
+  // 双击处理：目录进入；文件→编辑器（内部自动判断文本/二进制）
   function handleDoubleClick(entry: FileEntry) {
     if (entry.type === 'dir') {
       navigateTo(entry.name)
@@ -777,11 +793,35 @@ const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function Work
     }
   }
 
-  // 判断是否为文本文件
+  // 判断文件是否可在编辑器中打开（排除已知二进制类型，其余都尝试）
   function isTextFile(name: string): boolean {
-    const ext = name.split('.').pop()?.toLowerCase() || ''
-    const textExts = ['txt', 'md', 'js', 'ts', 'jsx', 'tsx', 'json', 'yml', 'yaml', 'toml', 'css', 'html', 'htm', 'xml', 'svg', 'sh', 'bash', 'zsh', 'py', 'go', 'rs', 'java', 'c', 'cpp', 'h', 'hpp', 'log', 'env', 'dockerfile', 'gitignore']
-    return textExts.includes(ext) || !ext
+    const lower = name.toLowerCase()
+    const dotIdx = lower.lastIndexOf('.')
+    if (dotIdx <= 0) return true // 无后缀文件尝试打开，server 做最终判断
+    const ext = lower.slice(dotIdx + 1)
+    // Known binary (non-text) extensions — anything NOT in this list is treated as text
+    const binaryExts = new Set([
+      // Images
+      'png', 'jpg', 'jpeg', 'gif', 'bmp', 'ico', 'webp', 'tiff', 'tif', 'heic', 'heif', 'avif',
+      // Video / Audio
+      'mp4', 'webm', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'm4v', 'mpg', 'mpeg',
+      'mp3', 'wav', 'ogg', 'flac', 'aac', 'wma', 'm4a', 'opus',
+      // Archives
+      'zip', 'tar', 'gz', 'bz2', 'xz', '7z', 'rar', 'zst', 'lz4',
+      // Binaries / executables
+      'exe', 'dll', 'so', 'dylib', 'o', 'a', 'wasm', 'bin', 'dat',
+      // Documents (binary formats)
+      'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'epub',
+      // Fonts
+      'ttf', 'otf', 'woff', 'woff2', 'eot',
+      // Other binary
+      'class', 'jar', 'war', 'pyc', 'pyo', 'elc',
+      'db', 'sqlite', 'sqlite3',
+      'psd', 'ai',
+      'iso', 'dmg',
+      'dex', 'apk', 'ipa',
+    ])
+    return !binaryExts.has(ext)
   }
 
   // 判断是否为 Markdown 文件

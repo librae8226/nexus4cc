@@ -61,6 +61,7 @@
     "fileNamePlaceholder": "文件名 (如: readme.txt, notes.md)",
     "fileExtensionsHint": "支持 .txt, .md, .json 等任意扩展名",
     "chars": "字符",
+    "fileTooLarge": "文件过大，无法在编辑器中打开（上限 5MB）。",
     "preview": "预览",
     "toc": "目录",
     "expandAll": "展开全部",

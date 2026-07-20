@@ -61,6 +61,7 @@
     "fileNamePlaceholder": "Filename (e.g. readme.txt, notes.md)",
     "fileExtensionsHint": "Supports .txt, .md, .json and any extension",
     "chars": "chars",
+    "fileTooLarge": "File is too large to open in editor (max 5MB).",
     "preview": "Preview",
     "toc": "TOC",
     "expandAll": "Expand All",
