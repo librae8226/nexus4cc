@@ -132,11 +132,8 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
   const [drag, setDrag]               = useState<DragState | null>(null)
   const [savedFlash, setSavedFlash]   = useState(false)
   const [showQuickMenu, setShowQuickMenu] = useState(false)
-  const [showUploadMenu, setShowUploadMenu] = useState(false)
   const [menuPos, setMenuPos]         = useState({ bottom: 60, right: 8 })
-  const [uploadMenuPos, setUploadMenuPos] = useState({ bottom: 60, right: 44 })
   const menuBtnRef                    = useRef<HTMLButtonElement>(null)
-  const uploadBtnRef                  = useRef<HTMLButtonElement>(null)
   const [isPC, setIsPC]               = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const editScrollRef = useRef<HTMLDivElement>(null)
@@ -178,7 +175,12 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
     const el = rootRef.current
     if (!el) return
     const prevent = (e: TouchEvent) => {
-      if (editScrollRef.current?.contains(e.target as Node)) return
+      const target = e.target as Element | null
+      if (editScrollRef.current?.contains(target)) return
+      // 标记了 data-native-click 的图标按钮（工作区/上传/快捷菜单/折叠）依赖原生
+      // click 触发动作，跳过 preventDefault，否则 Android 的 touchstart preventDefault
+      // 会吞掉 click（onClick 不触发 / 文件选择器要点两次才弹出）。
+      if (target?.closest?.('[data-native-click]')) return
       e.preventDefault()
     }
     el.addEventListener('touchstart', prevent, { passive: false })
@@ -717,7 +719,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*,video/*"
+        accept="*/*"
         multiple
         style={hiddenFileInputStyle}
         onChange={(e) => {
@@ -804,7 +806,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
             <button
               className={iconBtnPCClass}
               onClick={() => { fileInputRef.current?.click() }}
-              title={t('toolbar.pasteUpload')}
+              title={t('files.upload')}
             ><Icon name="paperclip" size={18} /></button>
           </div>
           <div className="flex items-center gap-0.5">
@@ -813,7 +815,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
                 className={iconBtnPCClass}
                 onPointerDown={(e) => { e.preventDefault(); onOpenFiles() }}
                 title={t('toolbar.fileList')}
-              ><Icon name="image" size={18} /></button>
+              ><Icon name="history" size={18} /></button>
             )}
             {onOpenSettings && (
               <button
@@ -864,39 +866,12 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
             </button>
           )}
           <button
-            ref={uploadBtnRef}
-            className={`${iconBtnPCClass} relative`}
-            onPointerDown={(e) => {
-              e.preventDefault()
-              if (!showUploadMenu) {
-                const rect = uploadBtnRef.current?.getBoundingClientRect()
-                if (rect) {
-                  setUploadMenuPos({ bottom: window.innerHeight - rect.top + 4, right: window.innerWidth - rect.right })
-                }
-              }
-              setShowUploadMenu(v => !v)
-            }}
-            title={t('toolbar.pasteUpload')}
+            className={iconBtnPCClass}
+            onClick={() => { fileInputRef.current?.click() }}
+            title={t('files.upload')}
           >
             <Icon name="paperclip" size={18} />
           </button>
-          {showUploadMenu && createPortal(
-            <>
-              <GhostShield />
-              <div className="fixed inset-0 z-[300]" onPointerDown={() => setShowUploadMenu(false)} />
-              <div className="fixed bg-nexus-menu-bg border border-nexus-border rounded-lg py-1 min-w-[120px] z-[400] shadow-[0_4px_16px_rgba(0,0,0,0.3)]" style={{ bottom: uploadMenuPos.bottom, right: uploadMenuPos.right }}>
-                <button className={quickMenuItemClass} onClick={() => { setShowUploadMenu(false); fileInputRef.current?.click() }}>
-                  <Icon name="image" size={16} />
-                  <span>{t('toolbar.photos')}</span>
-                </button>
-                <button className={quickMenuItemClass} onClick={() => { setShowUploadMenu(false); pasteFileRef.current?.click() }}>
-                  <Icon name="folder" size={16} />
-                  <span>{t('toolbar.files')}</span>
-                </button>
-              </div>
-            </>,
-            document.body
-          )}
           {onOpenSettings && (
             <button className={iconBtnPCClass} onPointerDown={(e) => { e.preventDefault(); onOpenSettings() }} title={t('toolbar.settings')}>
               <Icon name="settings" size={18} />
@@ -941,51 +916,42 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
         {/* 上传按钮 - 显示自定义面板 */}
         {onOpenWorkspace && (
           <button
+            data-native-click
             className={iconBtnClass}
-            onPointerDown={(e) => { e.preventDefault(); onOpenWorkspace() }}
+            onClick={() => onOpenWorkspace()}
             title={t('toolbar.workspace')}
           >
             <Icon name="folder" size={18} />
           </button>
         )}
-        <button
-          className={iconBtnClass}
-          onPointerDown={(e) => {
-            e.preventDefault()
-            if (!showUploadMenu) {
-              const tbH = rootRef.current?.offsetHeight ?? 56
-              setUploadMenuPos({ bottom: tbH + 4, right: 44 })
-            }
-            setShowUploadMenu(v => !v)
-          }}
-          title={t('toolbar.pasteUpload')}
-        >
+        {/* 用 <label> 原生激活文件输入框，且跳过根元素 touchstart preventDefault，
+            保证 Android/iOS 上第一次点击就能弹出文件选择器 */}
+        <label data-native-click className={iconBtnClass} title={t('files.upload')}>
+          <input
+            type="file"
+            accept="*/*"
+            multiple
+            style={hiddenFileInputStyle}
+            onChange={(e) => {
+              const files = e.target.files
+              if (!files || files.length === 0) { e.target.value = ''; return }
+              if (onUploadFiles) {
+                onUploadFiles(files)
+              } else if (onUploadFile) {
+                for (const file of files) onUploadFile(file)
+              }
+              e.target.value = ''
+            }}
+          />
           <Icon name="paperclip" size={18} />
-        </button>
-        {showUploadMenu && createPortal(
-          <>
-            <GhostShield />
-            <div className="fixed inset-0 z-[300]" onPointerDown={() => setShowUploadMenu(false)} />
-            <div className="fixed bg-nexus-menu-bg border border-nexus-border rounded-lg py-1 min-w-[120px] z-[400] shadow-[0_-4px_16px_rgba(0,0,0,0.3)]" style={{ bottom: uploadMenuPos.bottom, right: uploadMenuPos.right }}>
-              <button className={quickMenuItemClass} onClick={() => { setShowUploadMenu(false); fileInputRef.current?.click() }}>
-                <Icon name="image" size={16} />
-                <span>{t('toolbar.photos')}</span>
-              </button>
-              <button className={quickMenuItemClass} onClick={() => { setShowUploadMenu(false); pasteFileRef.current?.click() }}>
-                <Icon name="folder" size={16} />
-                <span>{t('toolbar.files')}</span>
-              </button>
-            </div>
-          </>,
-          document.body
-        )}
+        </label>
         {/* quick menu */}
         <div className="relative">
           <button
             ref={menuBtnRef}
+            data-native-click
             className={iconBtnClass}
-            onPointerDown={(e) => {
-              e.preventDefault()
+            onClick={() => {
               if (!showQuickMenu) {
                 const tbH = rootRef.current?.offsetHeight ?? 56
                 setMenuPos({ bottom: tbH + 4, right: 4 })
@@ -1008,7 +974,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
                 </button>
                 {onOpenFiles && (
                   <button className={quickMenuItemClass} onPointerDown={(e) => { e.preventDefault(); onOpenFiles(); setShowQuickMenu(false) }}>
-                    <Icon name="image" size={16} />
+                    <Icon name="history" size={16} />
                     <span>{t('toolbar.fileList')}</span>
                   </button>
                 )}
@@ -1023,7 +989,7 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
             document.body
           )}
         </div>
-        <button className={iconBtnClass} onPointerDown={(e) => { e.preventDefault(); setCollapsed(v => { const n = !v; localStorage.setItem(COLLAPSED_KEY, String(n)); return n }) }}>
+        <button data-native-click className={iconBtnClass} onClick={() => setCollapsed(v => { const n = !v; localStorage.setItem(COLLAPSED_KEY, String(n)); return n })}>
           <Icon name={collapsed ? 'chevronUp' : 'chevronDown'} size={18} />
         </button>
       </div>

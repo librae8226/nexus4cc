@@ -1788,7 +1788,7 @@ export default function Terminal({ token }: Props) {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*,video/*"
+        accept="*/*"
         multiple
         className="fixed top-0 opacity-[0.01]"
         style={{ left: '-9999px', width: '44px', height: '44px', fontSize: '16px' }}
@@ -1889,7 +1889,7 @@ export default function Terminal({ token }: Props) {
                       className="w-12 h-10 bg-transparent border-none text-nexus-text-2 flex items-center justify-center cursor-pointer"
                       title={t('toolbar.fileList')}
                     >
-                      <Icon name="image" size={18} />
+                      <Icon name="history" size={18} />
                     </button>
 
                     <button
