@@ -120,6 +120,15 @@ echo "$MATCHES" | while IFS='|' read -r target resume_arg score pane_title; do
     *) echo "[nexus-resume] $target 已在跑 '$cur'，跳过"; continue ;;
   esac
 
+  # pane_current_command 会把「nexus-run-claude.sh(bash 包装) + claude 子进程」误报为 bash，
+  # 但 claude 才是该 pane 的前台进程。若 pane 进程树下已在跑 claude，视为「已在跑 claude」跳过，
+  # 避免把 NEXUS_RESUME_SESSION=... 打进正在运行的 claude 输入。
+  pane_pid="$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null || true)"
+  if [ -n "$pane_pid" ] && ps -o args= --ppid "$pane_pid" 2>/dev/null | grep -qE '(^|/)claude([[:space:]]|$)|nexus-run-claude'; then
+    echo "[nexus-resume] $target 进程树下已在跑 claude，跳过"
+    continue
+  fi
+
   # 安全校验：对比快照中的 window name 与当前 window name。
   # 若不同（例如用户在该 index 新建了窗口），跳过——避免把对话注入到错误的窗口。
   snap_win_name="$(grep -P "^window\t$sess\t$win\t" "$SNAP" | head -1 | awk -F'\t' '{print $4}' | sed 's/^://;s/^-//')"
