@@ -5,6 +5,7 @@ import * as pty from 'node-pty';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { createServer } from 'node:http';
+import os from 'node:os';
 import { exec, spawn, execSync, execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join, normalize, isAbsolute, basename } from 'path';
@@ -1084,6 +1085,76 @@ app.get('/api/session-cwd', authMiddleware, (req, res) => {
 
   const relative = cwd.startsWith(WORKSPACE_ROOT) ? cwd.slice(WORKSPACE_ROOT.length).replace(/^\/+/, '') : ''
   res.json({ cwd, relative })
+})
+
+// ── 会话恢复（Chrome-style restore）──
+let restoreInFlight = false
+const RESURRECT_DIR = join(process.env.HOME || '', '.tmux', 'resurrect')
+
+/** 返回最新一份「含 nexus-run-claude 频道」的快照；无则 null。与 nexus-restore-tmux.sh 选择器同规则。 */
+function findRestoreSnapshot() {
+  let files = []
+  try { files = readdirSync(RESURRECT_DIR).filter((f) => /^tmux_resurrect_.*\.txt$/.test(f)) } catch { return null }
+  if (!files.length) return null
+  files.sort((a, b) => statSync(join(RESURRECT_DIR, b)).mtimeMs - statSync(join(RESURRECT_DIR, a)).mtimeMs)
+  for (const f of files) {
+    let claude = 0
+    try {
+      for (const line of readFileSync(join(RESURRECT_DIR, f), 'utf8').split('\n')) {
+        if (!line.startsWith('pane\t')) continue
+        const cols = line.split('\t')
+        if (cols[10] && cols[10].includes('nexus-run-claude.sh')) claude++
+      }
+    } catch { continue }
+    if (claude >= 1) {
+      const st = statSync(join(RESURRECT_DIR, f))
+      return { file: f, time: new Date(st.mtime).toISOString(), claudeChannels: claude }
+    }
+  }
+  return null
+}
+
+// GET /api/restore/status — 前端决定是否亮「恢复」入口
+app.get('/api/restore/status', authMiddleware, (req, res) => {
+  const snap = findRestoreSnapshot()
+  let projects = 0
+  let channels = 0
+  try { projects = Number(execSync('tmux list-sessions 2>/dev/null | wc -l').toString().trim()) || 0 } catch {}
+  try { channels = Number(execSync('tmux list-windows -a 2>/dev/null | wc -l').toString().trim()) || 0 } catch {}
+  res.json({
+    available: !!snap,
+    snapshot: snap?.file || null,
+    snapshotTime: snap?.time || null,
+    claudeChannels: snap?.claudeChannels || 0,
+    currentProjects: projects,
+    currentChannels: channels,
+    busy: restoreInFlight,
+    freeMemMB: Math.round(os.freemem() / 1024 / 1024),
+  })
+})
+
+// POST /api/restore — 一键恢复（幂等：已存在 session/window 跳过，不覆盖在跑会话）
+app.post('/api/restore', authMiddleware, (req, res) => {
+  if (restoreInFlight) return res.status(409).json({ error: 'restore 正在进行中，请稍候' })
+  restoreInFlight = true
+  const script = join(__dirname, 'scripts', 'nexus-restore-tmux.sh')
+  exec(`bash "${script}" --manual`, { timeout: 180000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+    restoreInFlight = false
+    const ok = String(stdout).match(/^RESTORE_OK (.+)$/m)
+    if (ok) {
+      const kv = {}
+      for (const pair of ok[1].trim().split(/\s+/)) {
+        const [k, v] = pair.split('=')
+        kv[k] = Number.isNaN(Number(v)) ? v : Number(v)
+      }
+      console.log(`[restore-manual] ${ok[1]}`)
+      return res.json({ ok: true, ...kv })
+    }
+    const em = String(stdout).match(/^RESTORE_ERR (.+)$/m) || String(stderr).match(/^RESTORE_ERR (.+)$/m)
+    const msg = em ? em[1] : err ? err.message : 'restore 执行失败'
+    console.error(`[restore-manual] failed: ${msg}`)
+    res.status(500).json({ error: msg })
+  })
 })
 
 // GET /api/projects/:name/channels — 列出指定 Project 的 Channels（windows）
