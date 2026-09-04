@@ -23,6 +23,25 @@ RESUME_SCRIPT="$(cd "$(dirname "$0")" && pwd)/nexus-resume-claude.sh"
 log(){ printf '%s\n' "$*"; }
 err(){ printf '%s\n' "$*" >&2; }
 
+# ── 崩溃「待恢复」标记：boot 检测到全新 tmux 服务器（=上次崩溃/重启）时写入；
+#    全部 session 恢复完成后清除。前端据此决定「恢复会话」按钮灰/亮（严格：崩溃过才可点）。
+NEXUS_DATA="$(cd "$(dirname "$0")/../data" 2>/dev/null && pwd)"
+PENDING_FILE="$NEXUS_DATA/restore-pending.json"
+write_pending(){
+  mkdir -p "$NEXUS_DATA" 2>/dev/null || true
+  [ -n "${SNAPSHOT:-}" ] || return
+  { printf '{"pending":true,"at":"%s","snapshot":"%s"}\n' "$(date -Is 2>/dev/null)" "$(basename "$SNAPSHOT")"; } > "$PENDING_FILE" 2>/dev/null || true
+}
+clear_pending(){ rm -f "$PENDING_FILE" 2>/dev/null || true; }
+# 快照里的 session 还有多少不在当前 tmux 上（缺失=可恢复/未恢复完）
+missing_sessions(){
+  local sess missing=0
+  for sess in $(grep -E '^window\t' "$SNAPSHOT" 2>/dev/null | cut -f2 | sort -u); do
+    tmux has-session -t "$sess" 2>/dev/null || missing=$((missing+1))
+  done
+  echo "$missing"
+}
+
 # 插件未安装 → 无可恢复
 if [ ! -x "$RESURRECT_RESTORE" ]; then
   err "[nexus-restore] tmux-resurrect 未安装，跳过"
@@ -56,6 +75,9 @@ if [ "$MANUAL" = "0" ]; then
     log "[nexus-restore] 本 tmux 服务器已恢复过，跳过"
     exit 0
   fi
+  # 全新 tmux 服务器 = 上次发生过崩溃/重启 → 立即记录「待恢复」标记（即便此刻 server 未就绪，
+  # 标记也保留，用户稍后可从前端一键恢复）。全部恢复后由下方 missing==0 清除。
+  write_pending
   server_ready=false
   for i in $(seq 1 10); do
     if tmux start-server 2>/dev/null && tmux has-session 2>/dev/null; then
@@ -106,6 +128,13 @@ if [ -x "$RESUME_SCRIPT" ] || [ -f "$RESUME_SCRIPT" ]; then
   printf '%s\n' "$RESUME_OUT" >&2   # 明细进日志（stdout 保留给 RESTORE_OK）
 else
   err "[nexus-restore] 缺 nexus-resume-claude.sh"
+fi
+
+# ── 恢复完成后：快照中的 session 已全部在跑 → 清除「待恢复」标记（auto 与 manual 都适用）──
+if [ "$(missing_sessions)" = "0" ]; then
+  clear_pending
+else
+  [ "$MANUAL" = "0" ] && err "[nexus-restore] 部分 session 仍缺失，保留待恢复标记"
 fi
 
 if [ "$MANUAL" = "1" ]; then

@@ -1090,6 +1090,9 @@ app.get('/api/session-cwd', authMiddleware, (req, res) => {
 // ── 会话恢复（Chrome-style restore）──
 let restoreInFlight = false
 const RESURRECT_DIR = join(process.env.HOME || '', '.tmux', 'resurrect')
+// 崩溃「待恢复」标记：nexus-restore-tmux.sh 检测到全新 tmux 服务器（上次崩溃/重启）时写入，
+// 全部 session 恢复完成后清除。available 严格= 有待恢复标记 且 有富快照。
+const RESTORE_PENDING_FILE = join(DATA_DIR, 'restore-pending.json')
 
 /** 返回最新一份「含 nexus-run-claude 频道」的快照；无则 null。与 nexus-restore-tmux.sh 选择器同规则。 */
 function findRestoreSnapshot() {
@@ -1121,8 +1124,10 @@ app.get('/api/restore/status', authMiddleware, (req, res) => {
   let channels = 0
   try { projects = Number(execSync('tmux list-sessions 2>/dev/null | wc -l').toString().trim()) || 0 } catch {}
   try { channels = Number(execSync('tmux list-windows -a 2>/dev/null | wc -l').toString().trim()) || 0 } catch {}
+  const pending = existsSync(RESTORE_PENDING_FILE)
   res.json({
-    available: !!snap,
+    available: pending && !!snap,
+    pending,
     snapshot: snap?.file || null,
     snapshotTime: snap?.time || null,
     claudeChannels: snap?.claudeChannels || 0,
