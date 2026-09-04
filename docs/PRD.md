@@ -309,8 +309,11 @@ interface Channel {
   含频道的一份。
 - 恢复全程幂等只增：已存在 session/window 跳过，不覆盖正在运行的会话；已在跑 claude
   的频道不会被重复注入。
-- 入口：项目面板「恢复会话」按钮；项目列表为空且有富快照时的「一键恢复？」横幅。
-- 无快照/无频道时入口不可用。实现见 `docs/SESSION-PERSISTENCE.md` §11。
+- 入口：**Settings → 会话恢复**「恢复会话」按钮（带 hover/行内说明）；项目列表为空且有待
+  恢复标记时的「一键恢复？」横幅。
+- 严格 gating：boot 检测到崩溃写 `data/restore-pending.json`，恢复完成即清除；仅「崩溃过且
+  仍有缺失」时可点，平时按钮置灰（`available = pending && 有富快照`）。
+  实现见 `docs/SESSION-PERSISTENCE.md` §11。
 
 ## Success Metrics
 
