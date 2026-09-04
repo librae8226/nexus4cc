@@ -299,6 +299,19 @@ interface Channel {
 
 ---
 
+## Feature Detail: 会话一键恢复（Chrome-style）
+
+宕机/崩溃后（tmux server 或 Nexus 进程死亡）：
+
+- Nexus 启动时**自动恢复**上次快照的所有 projects/channels，并 resume 每个 channel 的
+  claude 对话；启动竞态失败时，前端可**一键手动恢复**。
+- 快照选择器拒绝崩溃后的近空快照（无 claude 频道的快照不参与恢复），自动回退到最新
+  含频道的一份。
+- 恢复全程幂等只增：已存在 session/window 跳过，不覆盖正在运行的会话；已在跑 claude
+  的频道不会被重复注入。
+- 入口：项目面板「恢复会话」按钮；项目列表为空且有富快照时的「一键恢复？」横幅。
+- 无快照/无频道时入口不可用。实现见 `docs/SESSION-PERSISTENCE.md` §11。
+
 ## Success Metrics
 
 | Metric | Target |

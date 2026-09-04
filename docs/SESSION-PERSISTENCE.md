@@ -239,3 +239,20 @@ cwd 与 profile。
 **教训**：① 不要在启动路径中静默吞掉 server 创建失败；② `tmux start-server` 成功 ≠
 server 能稳定服务后续命令，需用 `tmux info` 等验证就绪；③ `last` 链接被 POST-故障快照
 覆盖是一个设计弱点——理想情况应在恢复成功后才更新 `last`（或保留最近 N 个快照的硬链接）。
+
+## 11. 手动/一键恢复（Chrome-style）— 2026-09-04
+
+Nexus 启动时自动恢复（§4.4）在 WSL2 启动竞态下可能失败（2026-09-03 事故即如此），
+且 continuum 会把 `last` 覆盖为崩溃后的近空快照。为此新增：
+
+- **快照选择器**：`nexus-restore-tmux.sh` 不再盲信 `last`，改为挑「最新一份含
+  `nexus-run-claude.sh` 频道」的快照（近空快照被拒绝），并把它指为 `last` 再恢复。
+- **手动触发**：`nexus-restore-tmux.sh --manual` 绕过 fresh-server 标记门，可在活服务器上
+  随时幂等恢复（已存在 session/window 跳过、不覆盖在跑进程），打印 `RESTORE_OK` 结果行。
+- **API**：`GET /api/restore/status`（快照可用性/丰富度、当前会话数、busy、freeMem，供前端
+  决定是否亮「恢复」入口）、`POST /api/restore`（一键恢复，in-flight 锁，返回恢复计数）。
+- **前端**：SessionManagerV2 项目面板提供「恢复会话」按钮；项目列表为空且存在富快照时，
+  显示 Chrome 式横幅「检测到上次会话，一键恢复？」。
+- 对话接续仍由 `nexus-resume-claude.sh` 完成（pane 标题 ↔ `~/.claude/projects/*.jsonl` 模糊匹配）。
+
+设计见 `docs/superpowers/specs/2026-09-04-nexus-restore-design.md`（gitignored 工作文档）。
