@@ -132,6 +132,21 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
   const [sidebarChannelMenu, setSidebarChannelMenu] = useState<{ channel: Channel; x: number; y: number } | null>(null)
   const [sidebarProjectMenu, setSidebarProjectMenu] = useState<{ project: Project; x: number; y: number } | null>(null)
 
+  // 会话恢复（Chrome-style restore）
+  const [restoreStatus, setRestoreStatus] = useState<{
+    available: boolean
+    snapshot?: string
+    snapshotTime?: string
+    claudeChannels?: number
+    currentProjects?: number
+    currentChannels?: number
+    busy?: boolean
+    freeMemMB?: number
+  } | null>(null)
+  const [restoring, setRestoring] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  const fmtTime = (iso?: string) => (iso ? new Date(iso).toLocaleString() : '')
+
   const headers = { Authorization: `Bearer ${token}` }
 
   // --- Data fetching ---
@@ -172,6 +187,36 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
     fetchProjects()
     if (currentProject) fetchChannels(currentProject)
   }, [fetchProjects, fetchChannels, currentProject])
+
+  const fetchRestoreStatus = useCallback(async () => {
+    try {
+      const r = await fetch('/api/restore/status', { headers })
+      if (r.ok) setRestoreStatus(await r.json())
+    } catch { /* 无恢复能力时不阻塞 UI */ }
+  }, [token])
+
+  useEffect(() => { fetchRestoreStatus() }, [fetchRestoreStatus])
+
+  const handleRestore = useCallback(async () => {
+    if (restoring || restoreStatus?.busy) return
+    setRestoring(true); setError(null); setNotice(null)
+    try {
+      const r = await fetch('/api/restore', { method: 'POST', headers })
+      const data = (await r.json().catch(() => ({}))) as { restored_sessions?: number; channels?: number; resumed?: number; error?: string }
+      if (r.status === 409) { setNotice(t('sessionMgr.restoreBusy')); return }
+      if (!r.ok) {
+        setError(data?.error || (await parseApiError(r, t('sessionMgr.restoreErr'))) || t('sessionMgr.restoreErr', { msg: r.status }))
+        return
+      }
+      setNotice(t('sessionMgr.restoreDone', { s: data.restored_sessions ?? 0, c: data.channels ?? 0, r: data.resumed ?? 0 }))
+      handleRefresh()
+      fetchRestoreStatus()
+    } catch (e: unknown) {
+      setError(parseNetworkError(e))
+    } finally {
+      setRestoring(false)
+    }
+  }, [restoring, restoreStatus?.busy, t, handleRefresh, fetchRestoreStatus, token])
 
   useImperativeHandle(ref, () => ({ refresh: handleRefresh }), [handleRefresh])
 
@@ -400,6 +445,15 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
         </div>
       )}
 
+      {notice && (
+        <div className="bg-blue-500/10 text-nexus-text px-4 py-2.5 text-sm flex items-center justify-between border-b border-nexus-border">
+          {notice}
+          <button className="bg-transparent border-none text-nexus-text-2 cursor-pointer p-0.5" onPointerDown={() => setNotice(null)}>
+            <Icon name="x" size={14} />
+          </button>
+        </div>
+      )}
+
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
         {/* Project 列表 */}
         <div className="flex-1 py-2 flex flex-col min-h-0" >
@@ -409,15 +463,25 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
                 <span className="text-sm">📁</span>
                 {t('sessionMgr.projects')}
               </div>
-              {isSidebar && (
+              <div className="flex items-center gap-0.5">
                 <button
-                  className="bg-transparent border-none text-nexus-text-2 cursor-pointer p-1 flex items-center justify-center opacity-70 hover:opacity-100 transition-opacity"
-                  onClick={handleRefresh}
-                  title={t('sessionMgr.refresh') || 'Refresh'}
+                  className="bg-transparent border-none text-nexus-text-2 cursor-pointer p-1 flex items-center justify-center opacity-70 hover:opacity-100 transition-opacity disabled:opacity-30"
+                  onClick={handleRestore}
+                  disabled={restoring || !!restoreStatus?.busy}
+                  title={t('sessionMgr.restore')}
                 >
-                  <Icon name="refresh" size={14} />
+                  <Icon name="history" size={14} />
                 </button>
-              )}
+                {isSidebar && (
+                  <button
+                    className="bg-transparent border-none text-nexus-text-2 cursor-pointer p-1 flex items-center justify-center opacity-70 hover:opacity-100 transition-opacity"
+                    onClick={handleRefresh}
+                    title={t('sessionMgr.refresh') || 'Refresh'}
+                  >
+                    <Icon name="refresh" size={14} />
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
@@ -429,7 +493,22 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
             ) : projects.length === 0 ? (
               <div className="flex flex-col items-center justify-center px-3 py-4 text-nexus-muted">
                 <div className="text-[28px] mb-1.5 opacity-50">📁</div>
-                <div className="text-sm">{t('sessionMgr.noProjects')}</div>
+                <div className="text-sm mb-2">{t('sessionMgr.noProjects')}</div>
+                {restoreStatus?.available && !restoreStatus.busy && (
+                  <button
+                    className="flex items-center gap-1.5 px-3 py-1.5 border border-nexus-border rounded text-sm text-nexus-text cursor-pointer bg-blue-500/15 hover:bg-blue-500/25 transition-colors disabled:opacity-40"
+                    onClick={handleRestore}
+                    disabled={restoring}
+                  >
+                    <Icon name="history" size={14} />
+                    {restoring
+                      ? t('sessionMgr.restoring')
+                      : t('sessionMgr.restoreBanner', {
+                          n: restoreStatus.claudeChannels ?? 0,
+                          time: fmtTime(restoreStatus.snapshotTime),
+                        })}
+                  </button>
+                )}
               </div>
             ) : projects.map(project => {
               const isActive = project.name === currentProject
