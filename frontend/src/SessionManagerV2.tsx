@@ -463,25 +463,15 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
                 <span className="text-sm">📁</span>
                 {t('sessionMgr.projects')}
               </div>
-              <div className="flex items-center gap-0.5">
+              {isSidebar && (
                 <button
-                  className="bg-transparent border-none text-nexus-text-2 cursor-pointer p-1 flex items-center justify-center opacity-70 hover:opacity-100 transition-opacity disabled:opacity-30"
-                  onClick={handleRestore}
-                  disabled={restoring || !!restoreStatus?.busy}
-                  title={t('sessionMgr.restore')}
+                  className="bg-transparent border-none text-nexus-text-2 cursor-pointer p-1 flex items-center justify-center opacity-70 hover:opacity-100 transition-opacity"
+                  onClick={handleRefresh}
+                  title={t('sessionMgr.refresh') || 'Refresh'}
                 >
-                  <Icon name="history" size={14} />
+                  <Icon name="refresh" size={14} />
                 </button>
-                {isSidebar && (
-                  <button
-                    className="bg-transparent border-none text-nexus-text-2 cursor-pointer p-1 flex items-center justify-center opacity-70 hover:opacity-100 transition-opacity"
-                    onClick={handleRefresh}
-                    title={t('sessionMgr.refresh') || 'Refresh'}
-                  >
-                    <Icon name="refresh" size={14} />
-                  </button>
-                )}
-              </div>
+              )}
             </div>
           </div>
 

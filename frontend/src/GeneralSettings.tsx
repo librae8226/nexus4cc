@@ -28,12 +28,43 @@ export default function GeneralSettings({ token, themeMode, onToggleTheme, onClo
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle')
   const [copied, setCopied] = useState(false)
 
+  // 会话恢复（Chrome-style restore）
+  const [restoreStatus, setRestoreStatus] = useState<{ available: boolean; pending?: boolean; claudeChannels?: number; snapshotTime?: string; busy?: boolean } | null>(null)
+  const [restoring, setRestoring] = useState(false)
+  const [restoreMsg, setRestoreMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+  const fmtTime = (iso?: string) => (iso ? new Date(iso).toLocaleString() : '')
+
   useEffect(() => {
     fetch('/api/version', { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : null)
       .then(data => { if (data?.current) setCurrentVersion(data.current) })
       .catch(() => {})
   }, [token])
+
+  const loadRestoreStatus = async () => {
+    try {
+      const r = await fetch('/api/restore/status', { headers: { Authorization: `Bearer ${token}` } })
+      if (r.ok) setRestoreStatus(await r.json())
+    } catch { /* 拿不到状态则按钮保持灰 */ }
+  }
+  useEffect(() => { loadRestoreStatus() }, [token]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleRestore() {
+    if (restoring || restoreStatus?.busy) return
+    setRestoring(true); setRestoreMsg(null)
+    try {
+      const r = await fetch('/api/restore', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+      const data = (await r.json().catch(() => ({}))) as { restored_sessions?: number; channels?: number; resumed?: number; error?: string }
+      if (r.status === 409) { setRestoreMsg({ kind: 'err', text: t('settings.restoreBusy') }); return }
+      if (!r.ok) { setRestoreMsg({ kind: 'err', text: data?.error || t('settings.restoreErr', { msg: r.status }) }); return }
+      setRestoreMsg({ kind: 'ok', text: t('settings.restoreDone', { s: data.restored_sessions ?? 0, c: data.channels ?? 0, r: data.resumed ?? 0 }) })
+      await loadRestoreStatus()
+    } catch {
+      setRestoreMsg({ kind: 'err', text: t('settings.restoreErr', { msg: 'network' }) })
+    } finally {
+      setRestoring(false)
+    }
+  }
 
   async function handleCheckUpdate() {
     setUpdateStatus('checking')
@@ -142,6 +173,37 @@ export default function GeneralSettings({ token, themeMode, onToggleTheme, onClo
               <span>{t('settings.manageProfiles')}</span>
               <Icon name="arrowRight" size={14} />
             </button>
+          </div>
+
+          {/* Session Recovery */}
+          <div className="border-t border-nexus-border pt-4">
+            <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-3">
+              {t('settings.restoreSection')}
+            </div>
+            <button
+              className="flex items-center gap-1.5 bg-transparent border border-nexus-border rounded-md text-nexus-text text-sm px-3 py-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+              onPointerDown={restoreStatus?.available ? handleRestore : undefined}
+              disabled={!restoreStatus?.available || restoring || !!restoreStatus?.busy}
+              title={restoreStatus?.available ? t('settings.restore') : t('settings.restoreNormalHint')}
+            >
+              <Icon name="history" size={14} />
+              <span>{restoring ? t('settings.restoring') : t('settings.restore')}</span>
+            </button>
+            <p className="text-sm text-nexus-text-2 mt-2 leading-relaxed">
+              {restoring
+                ? t('settings.restoring')
+                : restoreStatus?.available
+                  ? t('settings.restoreAvailableHint', {
+                      n: restoreStatus.claudeChannels ?? 0,
+                      time: fmtTime(restoreStatus.snapshotTime),
+                    })
+                  : t('settings.restoreNormalHint')}
+            </p>
+            {restoreMsg && (
+              <p className={`text-sm mt-1.5 ${restoreMsg.kind === 'ok' ? 'text-green-500' : 'text-red-400'}`}>
+                {restoreMsg.text}
+              </p>
+            )}
           </div>
 
           {/* About section */}
