@@ -30,7 +30,8 @@ PENDING_FILE="$NEXUS_DATA/restore-pending.json"
 write_pending(){
   mkdir -p "$NEXUS_DATA" 2>/dev/null || true
   [ -n "${SNAPSHOT:-}" ] || return
-  { printf '{"pending":true,"at":"%s","snapshot":"%s"}\n' "$(date -Is 2>/dev/null)" "$(basename "$SNAPSHOT")"; } > "$PENDING_FILE" 2>/dev/null || true
+  # `date -Is` is GNU-only; BSD date (macOS) has no -I and writes an empty field.
+  { printf '{"pending":true,"at":"%s","snapshot":"%s"}\n' "$(date +%Y-%m-%dT%H:%M:%S%z 2>/dev/null)" "$(basename "$SNAPSHOT")"; } > "$PENDING_FILE" 2>/dev/null || true
 }
 clear_pending(){ rm -f "$PENDING_FILE" 2>/dev/null || true; }
 # 快照里的 session 还有多少不在当前 tmux 上（缺失=可恢复/未恢复完）
