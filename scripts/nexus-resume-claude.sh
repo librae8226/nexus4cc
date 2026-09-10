@@ -124,14 +124,18 @@ echo "$MATCHES" | while IFS='|' read -r target resume_arg score pane_title; do
   # 但 claude 才是该 pane 的前台进程。若 pane 进程树下已在跑 claude，视为「已在跑 claude」跳过，
   # 避免把 NEXUS_RESUME_SESSION=... 打进正在运行的 claude 输入。
   pane_pid="$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null || true)"
-  if [ -n "$pane_pid" ] && ps -o args= --ppid "$pane_pid" 2>/dev/null | grep -qE '(^|/)claude([[:space:]]|$)|nexus-run-claude'; then
+  # `ps --ppid` is a GNU extension; BSD ps (macOS) rejects the whole invocation.
+  # Scan `ppid,args` for the pane's children instead — portable across GNU/BSD.
+  if [ -n "$pane_pid" ] && ps -Ao ppid=,args= 2>/dev/null | awk -v p="$pane_pid" '$1==p' | grep -qE '(^|/)claude([[:space:]]|$)|nexus-run-claude'; then
     echo "[nexus-resume] $target 进程树下已在跑 claude，跳过"
     continue
   fi
 
   # 安全校验：对比快照中的 window name 与当前 window name。
   # 若不同（例如用户在该 index 新建了窗口），跳过——避免把对话注入到错误的窗口。
-  snap_win_name="$(grep -P "^window\t$sess\t$win\t" "$SNAP" | head -1 | awk -F'\t' '{print $4}' | sed 's/^://;s/^-//')"
+  # awk field match instead of `grep -P`: BSD grep (macOS) has no -P, which made
+  # this return empty and silently skip the window-name safety check.
+  snap_win_name="$(awk -F'\t' -v s="$sess" -v w="$win" '$1=="window" && $2==s && $3==w {print $4; exit}' "$SNAP" | sed 's/^://;s/^-//')"
   cur_win_name="$(tmux display-message -p -t "$sess:$win" '#{window_name}' 2>/dev/null)"
   if [ -n "$snap_win_name" ] && [ -n "$cur_win_name" ] && [ "$snap_win_name" != "$cur_win_name" ]; then
     echo "[nexus-resume] $target window 名不匹配（快照='$snap_win_name' 当前='$cur_win_name'），跳过"
@@ -139,7 +143,7 @@ echo "$MATCHES" | while IFS='|' read -r target resume_arg score pane_title; do
   fi
 
   # 从快照提取该 pane 的完整启动命令
-  pfull="$(grep -P "^pane\t$sess\t$win\t" "$SNAP" | head -1 | awk -F'\t' '{print $11}' | sed 's/^://')"
+  pfull="$(awk -F'\t' -v s="$sess" -v w="$win" '$1=="pane" && $2==s && $3==w {print $11; exit}' "$SNAP" | sed 's/^://')"
   if [ -z "$pfull" ]; then
     echo "[nexus-resume] 未找到 $target 的启动命令，跳过"
     continue

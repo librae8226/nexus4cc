@@ -5,7 +5,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "setup": "node scripts/setup.js"
+    "setup": "node scripts/setup.js",
+    "test": "bash scripts/tests/test-nexus-resume-claude.sh"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
