@@ -20,10 +20,44 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
-# 用 python3 读取 JSON 配置（python3 已在 cc:nexus 中安装）
+# ── 依赖定位 ──────────────────────────────────────────────────────────────
+# 用 node 读 JSON，而不是 python3：nexus 本身就是 node 应用，node 一定在；
+# 而 python3 在 macOS（自 Mojave 起不再自带）和最小化 Debian 上都没有。
+# NEXUS_NODE_BIN 由 server.js 用 process.execPath 注入，确保用的就是跑 nexus 的那个 node。
+NODE_BIN="${NEXUS_NODE_BIN:-$(command -v node 2>/dev/null || true)}"
+if [ -z "$NODE_BIN" ] || [ ! -x "$NODE_BIN" ]; then
+    echo "[Nexus] 未找到 node，无法读取 profile 配置：${CONFIG_FILE}"
+    exit 1
+fi
+
 cfg() {
-    python3 -c "import json; d=json.load(open('${CONFIG_FILE}')); print(d.get('$1',''))"
+    CFG_KEY="$1" CFG_FILE="$CONFIG_FILE" "$NODE_BIN" -e \
+        'const fs=require("fs");const d=JSON.parse(fs.readFileSync(process.env.CFG_FILE,"utf8"));const v=d[process.env.CFG_KEY];process.stdout.write(v==null?"":String(v))'
 }
+
+# claude 装在哪取决于安装方式（官方 install.sh → ~/.local/bin；npm -g 走 nvm/fnm/volta
+# → node 版本目录；Homebrew → /opt/homebrew/bin），写死路径必然踩空，所以按优先级探测。
+# 可用 CLAUDE_BIN=/path/to/claude 显式覆盖。
+resolve_claude() {
+    local found
+    if [ -n "${CLAUDE_BIN:-}" ] && [ -x "${CLAUDE_BIN}" ]; then
+        printf '%s' "${CLAUDE_BIN}"; return 0
+    fi
+    found="$(command -v claude 2>/dev/null || true)"
+    if [ -n "$found" ] && [ -x "$found" ]; then
+        printf '%s' "$found"; return 0
+    fi
+    for found in "$HOME/.local/bin/claude" /usr/local/bin/claude /opt/homebrew/bin/claude; do
+        if [ -x "$found" ]; then printf '%s' "$found"; return 0; fi
+    done
+    return 1
+}
+
+CLAUDE_BIN="$(resolve_claude || true)"
+if [ -z "$CLAUDE_BIN" ]; then
+    echo "[Nexus] 未找到 claude CLI。请安装 Claude Code，或用 CLAUDE_BIN=/path/to/claude 指定。"
+    exit 1
+fi
 
 BASE_URL=$(cfg BASE_URL)
 AUTH_TOKEN=$(cfg AUTH_TOKEN)
@@ -120,7 +154,7 @@ elif [ -n "${NEXUS_RESUME:-}" ] && [[ "$BASE_URL" != *kimi* ]]; then
     echo "[Nexus] 宕机恢复：接续最近对话 (claude --continue)"
 fi
 while true; do
-    $HOME/.local/bin/claude $_resume_arg --dangerously-skip-permissions || true
+    "$CLAUDE_BIN" $_resume_arg --dangerously-skip-permissions || true
     _resume_arg=""   # 仅首次接续，手动重启(r)为全新会话
     echo ""
     echo "[Nexus] Claude exited.  r=restart  b=shell  q=quit window"

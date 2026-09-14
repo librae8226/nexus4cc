@@ -29,68 +29,21 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# ── Phase 1: Python 模糊匹配 pane 标题 → conversation session ID ──
-# 输出格式（每行）: session:window.pane|resume_arg
+# ── Phase 1: 模糊匹配 pane 标题 → conversation session ID ──
+# 匹配逻辑在 scripts/nexus-match-panes.js（node），不再内联 python3：
+# macOS 自 Mojave 起不再自带 python3，最小化 Debian 也没有，而 node 一定在。
+# 输出格式（每行）: session:window.pane|resume_arg|score|title
 #   resume_arg = <session-uuid>  → 精确匹配，用 --resume <id>
 #   resume_arg = CONTINUE        → 无匹配，回退 --continue
-MATCHES=$(python3 -c "
-import json, os, glob, re, sys
+NODE_BIN="${NEXUS_NODE_BIN:-$(command -v node 2>/dev/null || true)}"
+if [ -z "$NODE_BIN" ] || [ ! -x "$NODE_BIN" ]; then
+  echo "[nexus-resume] 未找到 node，跳过（解析快照需要 node）"
+  exit 0
+fi
 
-SNAP = '$SNAP'
-
-# collect panes from snapshot
-panes = []
-with open(SNAP) as f:
-    for line in f:
-        if not line.startswith('pane\t'): continue
-        p = line.strip().split('\t')
-        sess, win, pidx, title = p[1], p[2], p[5], p[6]
-        cwd = p[7][1:] if p[7].startswith(':') else p[7]
-        pfull = p[10][1:] if p[10].startswith(':') else p[10]
-        if 'nexus-run-claude.sh' not in pfull: continue
-        title = re.sub(r'^[✳⠐⏵⚡✅❌⚠️🔍📝🔄 ]+', '', title).strip()
-        panes.append((f'{sess}:{win}.{pidx}', title, cwd.rstrip('/')))
-
-def unigram_jaccard(a, b):
-    sa, sb = set(a.lower()), set(b.lower())
-    for noise in ' ,.。，、：:（）()@/#!！?？\n\r\t':
-        sa.discard(noise); sb.discard(noise)
-    if not sa or not sb: return 0
-    return len(sa & sb) / len(sa | sb)
-
-def contains_score(short, long):
-    ss = set(short) - set(' ,.。，、：:（）()@/#!！?？\n\r\t')
-    if not ss: return 0
-    return len(ss & set(long)) / len(ss)
-
-for target, title, cwd in panes:
-    pd = os.path.expanduser(f'~/.claude/projects/{cwd.replace(\"/\", \"-\")}')
-    best_score, best_sid = 0, ''
-    for f in sorted(glob.glob(f'{pd}/*.jsonl'), key=os.path.getmtime, reverse=True):
-        sid = os.path.basename(f)[:-6]
-        all_texts = []
-        try:
-            with open(f) as fh:
-                for line in fh:
-                    d = json.loads(line)
-                    if d.get('type') == 'user' and d.get('message',{}).get('role') == 'user':
-                        content = d['message'].get('content','')
-                        if isinstance(content, list):
-                            text = ' '.join(p.get('text','') for p in content if p.get('type')=='text')
-                        else: text = str(content)
-                        if text.startswith('<') or text.startswith('Base directory'): continue
-                        all_texts.append(text)
-        except: pass
-        for text in all_texts:
-            score = 0.5 * unigram_jaccard(title, text[:300]) + 0.5 * contains_score(title, text[:300])
-            if score > best_score:
-                best_score, best_sid = score, sid
-
-    if best_score > 0.15:
-        print(f'{target}|{best_sid}|{best_score:.2f}|{title[:60]}')
-    else:
-        print(f'{target}|CONTINUE|{best_score:.2f}|{title[:60]}')
-" 2>&1)
+# 不把 stderr 并进 MATCHES：匹配器报错时安静回落到「无可接续的 pane」，
+# 而不是让错误文本被当成匹配结果解析。
+MATCHES=$("$NODE_BIN" "$SCRIPT_DIR/nexus-match-panes.js" "$SNAP")
 
 if [ -z "$MATCHES" ]; then
   echo "[nexus-resume] 无可接续的 pane"
@@ -124,14 +77,14 @@ echo "$MATCHES" | while IFS='|' read -r target resume_arg score pane_title; do
   # 但 claude 才是该 pane 的前台进程。若 pane 进程树下已在跑 claude，视为「已在跑 claude」跳过，
   # 避免把 NEXUS_RESUME_SESSION=... 打进正在运行的 claude 输入。
   pane_pid="$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null || true)"
-  if [ -n "$pane_pid" ] && ps -o args= --ppid "$pane_pid" 2>/dev/null | grep -qE '(^|/)claude([[:space:]]|$)|nexus-run-claude'; then
+  if [ -n "$pane_pid" ] && ps -ax -o ppid=,args= 2>/dev/null | awk -v p="$pane_pid" '$1 == p' | grep -qE '(^|/)claude([[:space:]]|$)|nexus-run-claude'; then
     echo "[nexus-resume] $target 进程树下已在跑 claude，跳过"
     continue
   fi
 
   # 安全校验：对比快照中的 window name 与当前 window name。
   # 若不同（例如用户在该 index 新建了窗口），跳过——避免把对话注入到错误的窗口。
-  snap_win_name="$(grep -P "^window\t$sess\t$win\t" "$SNAP" | head -1 | awk -F'\t' '{print $4}' | sed 's/^://;s/^-//')"
+  snap_win_name="$(awk -F'\t' -v s="$sess" -v w="$win" '$1=="window" && $2==s && $3==w {print $4; exit}' "$SNAP" | sed 's/^://;s/^-//')"
   cur_win_name="$(tmux display-message -p -t "$sess:$win" '#{window_name}' 2>/dev/null)"
   if [ -n "$snap_win_name" ] && [ -n "$cur_win_name" ] && [ "$snap_win_name" != "$cur_win_name" ]; then
     echo "[nexus-resume] $target window 名不匹配（快照='$snap_win_name' 当前='$cur_win_name'），跳过"
@@ -139,7 +92,7 @@ echo "$MATCHES" | while IFS='|' read -r target resume_arg score pane_title; do
   fi
 
   # 从快照提取该 pane 的完整启动命令
-  pfull="$(grep -P "^pane\t$sess\t$win\t" "$SNAP" | head -1 | awk -F'\t' '{print $11}' | sed 's/^://')"
+  pfull="$(awk -F'\t' -v s="$sess" -v w="$win" '$1=="pane" && $2==s && $3==w {print $11; exit}' "$SNAP" | sed 's/^://')"
   if [ -z "$pfull" ]; then
     echo "[nexus-resume] 未找到 $target 的启动命令，跳过"
     continue

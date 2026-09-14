@@ -101,8 +101,9 @@ Expose securely without port forwarding via [Cloudflare Tunnel](https://develope
 |---|---|---|
 | Node.js | 20+ | |
 | tmux | any recent | |
+| Claude Code CLI | any recent | 自动探测安装位置；特殊装法可用 `CLAUDE_BIN` 指定 |
 | PM2 | any recent | auto-installed by `setup.js` |
-| OS | Linux / WSL2 | |
+| OS | Linux / macOS / WSL2 | 不再依赖 `python3`（macOS 与最小化 Debian 都没有） |
 
 ---
 

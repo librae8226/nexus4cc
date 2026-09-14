@@ -98,10 +98,12 @@ npm install -g @anthropic-ai/claude-code@latest
 ```bash
 # 检查是否有多份安装
 whereis claude
-readlink -f $(which claude)
+# 解析真实路径。注意别用 `readlink -f`：macOS/BSD 的 readlink 没有 -f。
+# 用 node 解析（本项目一定有 node），跨 Linux/macOS 都一致。
+node -e 'console.log(require("fs").realpathSync(process.argv[1]))' "$(command -v claude)"
 
 # 正常情况：只有一个安装点，symlink 直接指向 fnm
-ls -la /home/librae/.local/bin/claude
+ls -la "$(command -v claude)"
 # → .../fnm/.../v<version>/installation/bin/claude
 
 # 如果 ~/.local/lib/node_modules/@anthropic-ai 仍然存在，删除它
