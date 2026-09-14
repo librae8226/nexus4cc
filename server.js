@@ -79,7 +79,9 @@ const {
   TMUX_SESSION = '~',
   WORKSPACE_ROOT = '/workspace',
   PORT = '3000',
+  HOST = '0.0.0.0',
   CLAUDE_PROXY = '',
+  CLAUDE_BIN: CLAUDE_BIN_ENV = '',
   GITHUB_REPO = 'librae8226/nexus4cc',
 } = process.env;
 
@@ -102,6 +104,75 @@ const INTERACTIVE_SHELL_CMD = `exec ${INTERACTIVE_SHELL} -i`;
 
 function buildInteractiveShellCmd(prefix = '') {
   return `${prefix}${INTERACTIVE_SHELL_CMD}`;
+}
+
+// ── claude CLI 定位 ────────────────────────────────────────────────────────
+// claude 装在哪取决于安装方式，写死一个路径必然踩空：
+//   官方 install.sh          → ~/.local/bin/claude
+//   npm -g（nvm/fnm/volta）  → <node 版本目录>/bin/claude
+//   npm -g（系统 node）      → /usr/local/bin/claude
+//   Homebrew（macOS）        → /opt/homebrew/bin/claude
+// 所以按优先级探测，并允许用 CLAUDE_BIN 显式覆盖。
+function resolveClaudeBin() {
+  let fromPath = '';
+  try {
+    fromPath = execSync('command -v claude 2>/dev/null').toString().trim();
+  } catch { /* 不在 PATH 上 */ }
+
+  const candidates = [
+    CLAUDE_BIN_ENV,
+    fromPath,
+    join(os.homedir(), '.local', 'bin', 'claude'),
+    '/usr/local/bin/claude',
+    '/opt/homebrew/bin/claude',
+  ].filter(Boolean);
+
+  for (const c of candidates) {
+    try { if (existsSync(c)) return c; } catch { /* 忽略不可读的候选 */ }
+  }
+  return '';
+}
+
+const CLAUDE_BIN = resolveClaudeBin();
+// shellCmd 是交给 tmux 的 shell 字符串，路径可能含空格，统一加引号。
+// 探测不到时退回裸 `claude`，交给运行时的 PATH 再试一次，而不是拼出一条必然报错的命令。
+const CLAUDE_CMD = CLAUDE_BIN ? `"${CLAUDE_BIN}"` : 'claude';
+
+if (!CLAUDE_BIN) {
+  console.warn('[Nexus] 未在常见位置找到 claude CLI —— Claude 会话可能无法启动。');
+  console.warn('[Nexus] 请安装 https://docs.claude.com/en/docs/claude-code，或用 CLAUDE_BIN=/path/to/claude 指定。');
+}
+
+// ── tmux 会话环境 ──────────────────────────────────────────────────────────
+// tmux 新窗口继承 session 级环境。把 claude 所在目录前置进 PATH：
+// npm/nvm/homebrew 装的 claude 是个 JS 启动器，shebang 为 `#!/usr/bin/env node`，
+// 只有 claude 自己的目录在 PATH 上时才能顺带找到同目录的 node。
+function buildLaunchEnv() {
+  const proxyVars = {
+    ...(process.env.HTTP_PROXY  ? { HTTP_PROXY:  process.env.HTTP_PROXY  } : {}),
+    ...(process.env.HTTPS_PROXY ? { HTTPS_PROXY: process.env.HTTPS_PROXY } : {}),
+    ...(process.env.ALL_PROXY   ? { ALL_PROXY:   process.env.ALL_PROXY   } : {}),
+    ...(process.env.http_proxy  ? { http_proxy:  process.env.http_proxy  } : {}),
+    ...(process.env.https_proxy ? { https_proxy: process.env.https_proxy } : {}),
+    ...(CLAUDE_PROXY ? { ALL_PROXY: CLAUDE_PROXY, HTTPS_PROXY: CLAUDE_PROXY, HTTP_PROXY: CLAUDE_PROXY, NEXUS_PROXY: CLAUDE_PROXY } : {}),
+  };
+
+  if (CLAUDE_BIN) {
+    const dir = dirname(CLAUDE_BIN);
+    const current = process.env.PATH || '';
+    if (!current.split(':').includes(dir)) {
+      proxyVars.PATH = `${dir}:${current}`;
+    }
+  }
+
+  // 让 nexus-run-claude.sh 复用正在跑 nexus 的这个 node：
+  // tmux 会话的 PATH 未必包含 node（非交互 shell 不读 ~/.zshrc 是常见原因）。
+  if (process.execPath) {
+    proxyVars.NEXUS_NODE_BIN = process.execPath;
+  }
+
+  const proxyExports = Object.entries(proxyVars).map(([k, v]) => `export ${k}='${v}'`).join('; ');
+  return { proxyVars, proxyPrefix: proxyExports ? `${proxyExports}; ` : '' };
 }
 
 // 静态文件：frontend/dist 和 public
@@ -167,16 +238,7 @@ app.post('/api/windows', authMiddleware, (req, res) => {
   const name = cwd.replace(/^\/+|\/+$/g, '').replace(/\//g, '-') || 'window';
 
   // 构建 shell 命令
-  const proxyVars = {
-    ...(process.env.HTTP_PROXY  ? { HTTP_PROXY:  process.env.HTTP_PROXY  } : {}),
-    ...(process.env.HTTPS_PROXY ? { HTTPS_PROXY: process.env.HTTPS_PROXY } : {}),
-    ...(process.env.ALL_PROXY   ? { ALL_PROXY:   process.env.ALL_PROXY   } : {}),
-    ...(process.env.http_proxy  ? { http_proxy:  process.env.http_proxy  } : {}),
-    ...(process.env.https_proxy ? { https_proxy: process.env.https_proxy } : {}),
-    ...(CLAUDE_PROXY ? { ALL_PROXY: CLAUDE_PROXY, HTTPS_PROXY: CLAUDE_PROXY, HTTP_PROXY: CLAUDE_PROXY, NEXUS_PROXY: CLAUDE_PROXY } : {}),
-  };
-  const proxyExports = Object.entries(proxyVars).map(([k, v]) => `export ${k}='${v}'`).join('; ');
-  const proxyPrefix = proxyExports ? `${proxyExports}; ` : '';
+  const { proxyVars, proxyPrefix } = buildLaunchEnv();
 
   let shellCmd;
   if (shell_type === 'bash') {
@@ -186,7 +248,7 @@ app.post('/api/windows', authMiddleware, (req, res) => {
       const runScript = join(__dirname, 'nexus-run-claude.sh');
       shellCmd = `${proxyPrefix}bash "${runScript}" ${profile} ${cwd}`;
     } else {
-      shellCmd = `${proxyPrefix}$HOME/.local/bin/claude --dangerously-skip-permissions; ${INTERACTIVE_SHELL_CMD}`;
+      shellCmd = `${proxyPrefix}${CLAUDE_CMD} --dangerously-skip-permissions; ${INTERACTIVE_SHELL_CMD}`;
     }
   }
 
@@ -222,17 +284,7 @@ app.post('/api/sessions', authMiddleware, (req, res) => {
   const name = cwd.replace(/^\/+|\/+$/g, '').replace(/\//g, '-') || 'session';
 
   // 收集代理变量（宿主机环境 + CLAUDE_PROXY 覆盖）
-  const proxyVars = {
-    ...(process.env.HTTP_PROXY  ? { HTTP_PROXY:  process.env.HTTP_PROXY  } : {}),
-    ...(process.env.HTTPS_PROXY ? { HTTPS_PROXY: process.env.HTTPS_PROXY } : {}),
-    ...(process.env.ALL_PROXY   ? { ALL_PROXY:   process.env.ALL_PROXY   } : {}),
-    ...(process.env.http_proxy  ? { http_proxy:  process.env.http_proxy  } : {}),
-    ...(process.env.https_proxy ? { https_proxy: process.env.https_proxy } : {}),
-    ...(CLAUDE_PROXY ? { ALL_PROXY: CLAUDE_PROXY, HTTPS_PROXY: CLAUDE_PROXY, HTTP_PROXY: CLAUDE_PROXY, NEXUS_PROXY: CLAUDE_PROXY } : {}),
-  };
-
-  const proxyExports = Object.entries(proxyVars).map(([k, v]) => `export ${k}='${v}'`).join('; ');
-  const proxyPrefix = proxyExports ? `${proxyExports}; ` : '';
+  const { proxyVars, proxyPrefix } = buildLaunchEnv();
 
   let shellCmd;
   if (shell_type === 'bash') {
@@ -242,7 +294,7 @@ app.post('/api/sessions', authMiddleware, (req, res) => {
       const runScript = join(__dirname, 'nexus-run-claude.sh');
       shellCmd = `${proxyPrefix}bash "${runScript}" ${profile} ${cwd}`;
     } else {
-      shellCmd = `${proxyPrefix}$HOME/.local/bin/claude --dangerously-skip-permissions; ${INTERACTIVE_SHELL_CMD}`;
+      shellCmd = `${proxyPrefix}${CLAUDE_CMD} --dangerously-skip-permissions; ${INTERACTIVE_SHELL_CMD}`;
     }
   }
 
@@ -1221,16 +1273,7 @@ app.post('/api/projects', authMiddleware, (req, res) => {
   } catch {}
 
   // 构建 shell 命令
-  const proxyVars = {
-    ...(process.env.HTTP_PROXY  ? { HTTP_PROXY:  process.env.HTTP_PROXY  } : {}),
-    ...(process.env.HTTPS_PROXY ? { HTTPS_PROXY: process.env.HTTPS_PROXY } : {}),
-    ...(process.env.ALL_PROXY   ? { ALL_PROXY:   process.env.ALL_PROXY   } : {}),
-    ...(process.env.http_proxy  ? { http_proxy:  process.env.http_proxy  } : {}),
-    ...(process.env.https_proxy ? { https_proxy: process.env.https_proxy } : {}),
-    ...(CLAUDE_PROXY ? { ALL_PROXY: CLAUDE_PROXY, HTTPS_PROXY: CLAUDE_PROXY, HTTP_PROXY: CLAUDE_PROXY, NEXUS_PROXY: CLAUDE_PROXY } : {}),
-  }
-  const proxyExports = Object.entries(proxyVars).map(([k, v]) => `export ${k}='${v}'`).join('; ')
-  const proxyPrefix = proxyExports ? `${proxyExports}; ` : ''
+  const { proxyVars, proxyPrefix } = buildLaunchEnv()
 
   let shellCmd
   if (shell_type === 'bash') {
@@ -1242,7 +1285,7 @@ app.post('/api/projects', authMiddleware, (req, res) => {
       // 注意：提示文本里不能有 `"`；用单引号避免与 execFileSync 的参数边界冲突
       shellCmd = `${proxyPrefix}bash '${runScript}' ${profile} '${cwd}' || echo; echo '[Nexus] claude 退出或启动失败，fallback 到 ${INTERACTIVE_SHELL}（可直接输入 claude 重试）'; ${INTERACTIVE_SHELL_CMD}`
     } else {
-      shellCmd = `${proxyPrefix}$HOME/.local/bin/claude --dangerously-skip-permissions || echo; echo '[Nexus] claude 退出或启动失败，请确认已 claude login 或配置 API key'; ${INTERACTIVE_SHELL_CMD}`
+      shellCmd = `${proxyPrefix}${CLAUDE_CMD} --dangerously-skip-permissions || echo; echo '[Nexus] claude 退出或启动失败，请确认已 claude login 或配置 API key'; ${INTERACTIVE_SHELL_CMD}`
     }
   }
 
@@ -1307,16 +1350,7 @@ app.post('/api/projects/:name/channels', authMiddleware, (req, res) => {
   } catch {}
 
   // 构建 shell 命令
-  const proxyVars = {
-    ...(process.env.HTTP_PROXY  ? { HTTP_PROXY:  process.env.HTTP_PROXY  } : {}),
-    ...(process.env.HTTPS_PROXY ? { HTTPS_PROXY: process.env.HTTPS_PROXY } : {}),
-    ...(process.env.ALL_PROXY   ? { ALL_PROXY:   process.env.ALL_PROXY   } : {}),
-    ...(process.env.http_proxy  ? { http_proxy:  process.env.http_proxy  } : {}),
-    ...(process.env.https_proxy ? { https_proxy: process.env.https_proxy } : {}),
-    ...(CLAUDE_PROXY ? { ALL_PROXY: CLAUDE_PROXY, HTTPS_PROXY: CLAUDE_PROXY, HTTP_PROXY: CLAUDE_PROXY, NEXUS_PROXY: CLAUDE_PROXY } : {}),
-  }
-  const proxyExports = Object.entries(proxyVars).map(([k, v]) => `export ${k}='${v}'`).join('; ')
-  const proxyPrefix = proxyExports ? `${proxyExports}; ` : ''
+  const { proxyVars, proxyPrefix } = buildLaunchEnv()
 
   let shellCmd
   if (shell_type === 'bash') {
@@ -1326,7 +1360,7 @@ app.post('/api/projects/:name/channels', authMiddleware, (req, res) => {
       const runScript = join(__dirname, 'nexus-run-claude.sh')
       shellCmd = `${proxyPrefix}bash '${runScript}' ${profile} '${cwd}' || echo; echo '[Nexus] claude 退出或启动失败，fallback 到 ${INTERACTIVE_SHELL}（可直接输入 claude 重试）'; ${INTERACTIVE_SHELL_CMD}`
     } else {
-      shellCmd = `${proxyPrefix}$HOME/.local/bin/claude --dangerously-skip-permissions || echo; echo '[Nexus] claude 退出或启动失败，请确认已 claude login 或配置 API key'; ${INTERACTIVE_SHELL_CMD}`
+      shellCmd = `${proxyPrefix}${CLAUDE_CMD} --dangerously-skip-permissions || echo; echo '[Nexus] claude 退出或启动失败，请确认已 claude login 或配置 API key'; ${INTERACTIVE_SHELL_CMD}`
     }
   }
 
@@ -1693,10 +1727,11 @@ const heartbeatInterval = setInterval(() => {
 
 wss.on('close', () => clearInterval(heartbeatInterval));
 
-server.listen(Number(PORT), '0.0.0.0', () => {
-  console.log(`Nexus listening on :${PORT}`);
+server.listen(Number(PORT), HOST, () => {
+  console.log(`Nexus listening on ${HOST}:${PORT}`);
   console.log(`tmux session: ${TMUX_SESSION}`);
   console.log(`workspace: ${WORKSPACE_ROOT}`);
+  console.log(`claude: ${CLAUDE_BIN || '(未找到，回退到 PATH 上的 claude)'}`);
   // 宕机恢复：若是全新 tmux 服务器（宿主机重启后），先恢复上次会话快照，再做默认 bootstrap。
   // 脚本自带幂等与 NEXUS_RESTORED 标记保护，Nexus 普通重启不会覆盖在跑的会话。
   // 详见 docs/SESSION-PERSISTENCE.md。

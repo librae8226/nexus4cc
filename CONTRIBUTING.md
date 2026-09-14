@@ -6,7 +6,7 @@ Thanks for taking the time to contribute. Whether it's a bug fix, new feature, o
 
 ## Local Development
 
-**Prerequisites:** Node.js 20+, tmux, Linux / WSL2
+**Prerequisites:** Node.js 20+, tmux, Linux / macOS / WSL2
 
 ```bash
 # Clone
