@@ -46,6 +46,23 @@ export function shouldSkipInput(opts: {
 }
 
 /**
+ * Whether a keydown with this keyCode can make xterm's CompositionHelper flush
+ * the in-progress composition synchronously (see the xterm double-commit bug).
+ *
+ * xterm's CompositionHelper.keydown ignores keyCode 229 — the key most IME
+ * keystrokes arrive with — plus the bare modifiers; every *other* key pressed
+ * while composing triggers `_finalizeComposition(false)`, which sends the
+ * provisional composition text immediately. The following `compositionend`
+ * then sends the IME's rewritten text, so the terminal shows two copies.
+ *
+ * Mirrors xterm 5.5.0's condition exactly so the guard is only armed when a
+ * flush can actually happen — normal CJK typing (229s) never arms it.
+ */
+export function canFlushComposition(keyCode: number): boolean {
+  return keyCode !== 229 && keyCode !== 16 && keyCode !== 17 && keyCode !== 18
+}
+
+/**
  * Map a keyboard event's key to a terminal escape sequence, or return null
  * if the key should NOT be intercepted (printable chars, Unidentified, etc.).
  *

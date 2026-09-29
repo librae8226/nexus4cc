@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useState, lazy, Suspense } from 'react'
 import type { SessionManagerV2Handle } from './SessionManagerV2'
 import type { WorkspaceBrowserHandle } from './WorkspaceBrowser'
 import { useTranslation } from 'react-i18next'
-import { mapSpecialKey, shouldSkipInput } from './mobileInput'
+import { mapSpecialKey, shouldSkipInput, canFlushComposition } from './mobileInput'
 import { Terminal as XTerm, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -1187,8 +1187,51 @@ export default function Terminal({ token }: Props) {
       return true
     })
 
+    // xterm 5.5.0 的 CompositionHelper 在组合期间遇到「非 229 且非修饰键」的 keydown 时，
+    // 会同步调用 _finalizeComposition(false)，把当时的**临时稿**冲刷到 onData；
+    // 紧接着 compositionend 又把 IME 改写后的**终稿**发第二遍 → 终端里出现两份文字。
+    // 微信输入法的语音输入正是这条路径（先出识别初稿，理解后整段替换）。
+    // 上游没有去重：_dataAlreadySent 只在 _handleAnyTextareaChanges 里被赋值，
+    // _finalizeComposition 自身的两次调用之间不共享任何状态（6.0.0 仍未修）。
+    let compositionActive = false
+    let dropFlushedComposition = false
+
+    const onCompositionStart = () => { compositionActive = true }
+    const onCompositionEnd = () => { compositionActive = false }
+    // 必须挂在 window 的捕获阶段：它先于 xterm textarea 自己的 keydown 监听执行，
+    // 这样在冲刷发生之前标记就已经立好。
+    const onFlushKeyDown = (e: KeyboardEvent) => {
+      // 仅限 PC 宽屏：缺陷只在 xterm 原生输入路径上（该路径在窄屏下被禁用）。
+      // 移动端的组合发生在隐藏 textarea 上，但本监听挂在 window 捕获阶段，
+      // 窄屏下也会收到它的 keydown —— 若不设这道闸，移动端会误arm 并
+      // 丢掉一份无关的 onData 数据。与 onGlobalKeyDown /
+      // attachCustomKeyEventHandler 的宽屏判断保持一致。
+      if (window.innerWidth < 1024) return
+      if (!e.isComposing && !compositionActive) return
+      if (!canFlushComposition(e.keyCode)) return
+      dropFlushedComposition = true
+      // 解除必须晚于冲刷、又仍在**同一次派发内**。
+      // 冲刷是同步发生在 textarea 的捕获阶段；而真实浏览器事件下，JS 栈在每个
+      // 监听器返回后就是空的，浏览器会在两个监听器之间排空微任务队列 ——
+      // 所以 queueMicrotask 会在冲刷之前就把守卫解除掉（实测确认过）。
+      // 冒泡回到 window 是本次派发的最后一站，必然晚于 textarea 的捕获监听器。
+      // 守卫本身是"消费即清除"的一次性设计，即使这里没触发也只会误吞一次。
+      window.addEventListener('keydown', () => { dropFlushedComposition = false }, { once: true })
+    }
+
+    xtermTextarea?.addEventListener('compositionstart', onCompositionStart, true)
+    xtermTextarea?.addEventListener('compositionend', onCompositionEnd, true)
+    window.addEventListener('keydown', onFlushKeyDown, true)
+
     // 键盘输入 → 发送到当前 WebSocket
-    term.onData((data) => wsRef.current?.send(data))
+    term.onData((data) => {
+      // 丢掉被 keydown 提前冲刷出来的临时稿，只保留 compositionend 的终稿
+      if (dropFlushedComposition) {
+        dropFlushedComposition = false
+        return
+      }
+      wsRef.current?.send(data)
+    })
 
     // 滚动位置追踪 → 浮动回底部按钮
     term.onScroll(() => {
@@ -1410,6 +1453,9 @@ export default function Terminal({ token }: Props) {
 
     return () => {
       window.removeEventListener('keydown', onGlobalKeyDown, true)
+      window.removeEventListener('keydown', onFlushKeyDown, true)
+      xtermTextarea?.removeEventListener('compositionstart', onCompositionStart, true)
+      xtermTextarea?.removeEventListener('compositionend', onCompositionEnd, true)
       window.removeEventListener('orientationchange', onOrientationChange)
       document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('pageshow', sendResize)

@@ -5,7 +5,7 @@
  *   (or inside frontend/:  npx tsx mobileInput.test.ts)
  */
 import assert from 'node:assert/strict'
-import { mapSpecialKey, shouldSkipInput } from './src/mobileInput'
+import { mapSpecialKey, shouldSkipInput, canFlushComposition } from './src/mobileInput'
 
 let passed = 0
 let failed = 0
@@ -158,6 +158,39 @@ test('shouldSkipInput: undefined inputType treated as non-composition → do NOT
 
 test('shouldSkipInput: all three signals true → skip (triple guard)', () => {
   assert.equal(shouldSkipInput({ isComposing: true, inputType: 'insertCompositionText', refFlag: true }), true)
+})
+
+// --- canFlushComposition ---
+//
+// Regression guard for the xterm double-commit bug: a keydown during composition
+// with a keyCode xterm does NOT ignore makes CompositionHelper flush the
+// provisional composition text, which compositionend then sends again.
+//
+// Confirmed against live xterm 5.5.0 (Windows Chrome):
+//   Enter (13) mid-composition -> ["RAW", "\r", "POLISHED"]   two different texts
+//   letter (65) mid-composition -> ["RAW", "a", "POLISHED"]
+//   pinyin 229s mid-composition -> ["CLEAN"]                  single send, correct
+
+test('canFlushComposition: 229 (IME keystroke) → do NOT arm — keeps normal CJK typing single-send', () => {
+  assert.equal(canFlushComposition(229), false)
+})
+
+test('canFlushComposition: 16/17/18 (Shift/Ctrl/Alt) → do NOT arm — xterm ignores these too', () => {
+  assert.equal(canFlushComposition(16), false)
+  assert.equal(canFlushComposition(17), false)
+  assert.equal(canFlushComposition(18), false)
+})
+
+test('canFlushComposition: 13 (Enter) → arm — reproduces the duplicate provisional send', () => {
+  assert.equal(canFlushComposition(13), true)
+})
+
+test('canFlushComposition: 65 (letter) → arm — any printable key flushes mid-composition', () => {
+  assert.equal(canFlushComposition(65), true)
+})
+
+test('canFlushComposition: 0/undefined-ish keyCode → arm (xterm only spares 229 + modifiers)', () => {
+  assert.equal(canFlushComposition(0), true)
 })
 
 // --- Summary ---
