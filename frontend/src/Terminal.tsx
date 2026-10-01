@@ -1975,6 +1975,18 @@ export default function Terminal({ token }: Props) {
                       <Icon name="paperclip" size={18} />
                     </button>
 
+                    {/* 服务器切换。≥1024px 走的是这一列（Toolbar 的 isPC 分支在侧边栏
+                        折叠时不渲染），不在这里再放一个的话，折叠屏一展开按钮就消失。 */}
+                    {showServer && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setShowServerPanel(true); }}
+                        className="w-12 h-10 bg-transparent border-none text-nexus-text-2 flex items-center justify-center cursor-pointer"
+                        title={t('server.menuEntry')}
+                      >
+                        <Icon name="globe" size={18} />
+                      </button>
+                    )}
+
                     <div className="flex-1" />
 
                     <button

@@ -876,6 +876,13 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
           >
             <Icon name="paperclip" size={18} />
           </button>
+          {/* 宽屏同样要放出来：折叠屏展开时会在两种布局间切换，
+              只给手机布局加的话，展开后按钮会凭空消失。 */}
+          {onOpenServerSwitch && (
+            <button className={iconBtnPCClass} onPointerDown={(e) => { e.preventDefault(); onOpenServerSwitch() }} title={t('server.menuEntry')}>
+              <Icon name="globe" size={18} />
+            </button>
+          )}
           {(onOpenGearMenu || onOpenSettings) && (
             <button className={iconBtnPCClass} onPointerDown={(e) => { e.preventDefault(); (onOpenGearMenu || onOpenSettings)!() }} title={t('toolbar.settings')}>
               <Icon name="settings" size={18} />
@@ -949,6 +956,20 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
           />
           <Icon name="paperclip" size={18} />
         </label>
+        {/* 服务器切换。放在明面上而不是收进 ⋯ 菜单 —— 切局域网/Tailscale 是高频操作，
+            藏一层就多一次点击。仅在有「服务器」概念时出现（浏览器里不渲染）。
+            注意这一行是**常驻**的（只有下面的按键格受 collapsed 影响），
+            所以折叠/展开都够得着。 */}
+        {onOpenServerSwitch && (
+          <button
+            data-native-click
+            className={iconBtnClass}
+            onClick={() => onOpenServerSwitch()}
+            title={t('server.menuEntry')}
+          >
+            <Icon name="globe" size={18} />
+          </button>
+        )}
         {/* quick menu */}
         <div className="relative">
           <button
@@ -988,14 +1009,8 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
                     <span>{t('toolbar.settings')}</span>
                   </button>
                 )}
-                {/* 「服务器」和「设置」并列。这里不再套一层菜单 —— 快捷菜单本身
-                    就是菜单，再套一层就成了「⋯ → 设置 → 设置」。 */}
-                {onOpenServerSwitch && (
-                  <button className={quickMenuItemClass} onPointerDown={(e) => { e.preventDefault(); onOpenServerSwitch(); setShowQuickMenu(false) }}>
-                    <Icon name="globe" size={16} />
-                    <span>{t('server.menuEntry')}</span>
-                  </button>
-                )}
+                {/* 「服务器」不在这里 —— 它已经被提到工具栏那一行，和文件夹/附件/齿轮并列。
+                    切换服务器是高频操作，收进这层菜单等于多一次点击。 */}
               </div>
             </>,
             document.body
