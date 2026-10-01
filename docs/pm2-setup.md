@@ -6,7 +6,7 @@ module.exports = {
   apps: [{
     name: 'nexus',
     script: './server.js',
-    cwd: '/mnt/c/Users/libra/work/nexus',
+    cwd: '/home/librae/work/nexus',
     instances: 1,
     exec_mode: 'fork',
     env: {

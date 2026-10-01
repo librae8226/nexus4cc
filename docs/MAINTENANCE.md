@@ -156,7 +156,7 @@ git push && git push --tags
 /nexus-redeploy
 
 # 方式 B：手动执行
-cd /mnt/c/Users/libra/work/nexus
+cd /home/librae/work/nexus
 cd frontend && npm run build && cd ..
 pm2 restart nexus
 ```
@@ -164,7 +164,7 @@ pm2 restart nexus
 ### 4.2 完整部署（从零开始或重建）
 
 ```bash
-cd /mnt/c/Users/libra/work/nexus
+cd /home/librae/work/nexus
 
 # 1. 安装后端依赖
 npm install
@@ -315,7 +315,7 @@ tmux list-sessions
 ### 7.1 后端依赖
 
 ```bash
-cd /mnt/c/Users/libra/work/nexus
+cd /home/librae/work/nexus
 npm update              # 在 semver 范围内更新
 npm outdated            # 查看可更新的包
 npm install <pkg>@latest  # 更新特定包
@@ -324,7 +324,7 @@ npm install <pkg>@latest  # 更新特定包
 ### 7.2 前端依赖
 
 ```bash
-cd /mnt/c/Users/libra/work/nexus/frontend
+cd /home/librae/work/nexus/frontend
 npm update
 npm outdated
 npm install <pkg>@latest
