@@ -13,7 +13,27 @@ if (versionParts.size() < 3 || versionParts.any { !(it ==~ /\d+/) }) {
 }
 def (verMajor, verMinor, verPatch) = versionParts.collect { it as int }
 
+// ── release 签名 ────────────────────────────────────────────────────────
+// keystore.properties 不进版本库（已 gitignore），文件不在时就跳过 —— 这样
+// 新克隆的仓库/CI 仍能构建 debug 包，不需要把签名密钥塞进 CI secrets。
+def keystorePropsFile = rootProject.file('keystore.properties')
+def hasReleaseSigning = keystorePropsFile.exists()
+def keystoreProps = new Properties()
+if (hasReleaseSigning) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+
 android {
+    signingConfigs {
+        if (hasReleaseSigning) {
+            release {
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
     namespace = "com.librae.nexus"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
@@ -31,6 +51,15 @@ android {
     }
     buildTypes {
         release {
+            // 没签名配置时不静默产出未签名包 —— 那种包装上会失败，且报错离原因很远。
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            } else {
+                throw new GradleException("缺少 android/keystore.properties，无法签名 release 包。见 docs/ANDROID-APP.md §6.9")
+            }
+            // 不开 R8：包体的大头是 frontend/dist（Vite 已经压过），Java 侧只剩
+            // Capacitor 桥和几行 MainActivity，混淆省不下什么，却可能把运行时反射
+            // 用到的东西裁掉 —— 换来的是难以定位的崩溃，不值。
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

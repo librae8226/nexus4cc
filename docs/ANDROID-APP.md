@@ -393,8 +393,15 @@ android/app/src/main/res/xml/network_security_config.xml
 - 仓库是开源的（`librae8226/nexus4cc`），因此：CI 只构建 **debug APK** 作为 artifact；**release APK 由维护者本地签名**后传到 GitHub Release，签名密钥不进 CI secrets。
 - 目前 `.github/` 下没有任何 workflow，需要新建。
 
-**签名**（续）
-- 生成 `android/keystore/nexus-release.jks`，口令放 `android/keystore.properties`，**两者都进 `.gitignore`**；`android/app/build.gradle` 在文件存在时加载并配 `signingConfig`。密钥丢了就再也无法更新已安装的 App，必须仓外备份。
+**签名**（已实施，2026-10-02）
+- `android/keystore/nexus-release.jks`（RSA 4096，有效期 10000 天 → 2054）+ `android/keystore.properties`（0600），两者均 0600 且已 gitignore（`.gitignore:37-38`）。
+- `android/app/build.gradle` 在 `keystore.properties` **存在时**才注册 `signingConfig`；不存在时 release 任务**直接抛错**，不静默产出未签名包（那种包装不上，且报错离原因很远）。新克隆的仓库因此仍能构建 debug 包，CI 不需要签名密钥。
+- 签名方案：**仅 v2**。minSdk 24 = Android 7.0 起支持 v2，v1（JAR）无必要；未启 v3（密钥轮换）—— 侧载场景不需要。
+- **WebView 远程调试在 release 包里自动关闭**：Capacitor 的 `android.webContentsDebuggingEnabled` 默认跟随 `FLAG_DEBUGGABLE`（`CapConfig.java:286`），无需额外配置。debug 包照常可以 `chrome://inspect`。
+- **不开 R8/minify**：包体大头是 `frontend/dist`（Vite 已压过），Java 侧只剩 Capacitor 桥和几行 `MainActivity`，混淆省不下多少，却可能裁掉反射用到的东西。
+- 体积：release **3.40 MB** vs debug 4.39 MB。
+- ⚠️ **密钥必须仓外备份**（keystore + properties 两者缺一不可）。丢了就再也无法更新已安装的 App —— 不是"重新签一个"能解决的。
+- ⚠️ **release 与 debug 签名不同**，覆盖安装会被系统拒绝；装 release 必须先卸载 debug 包，**App 数据（服务器 profile、登录态）会一并清空**。
 - `.gitignore` 追加：`android/.gradle/`、`android/build/`、`android/app/build/`、`android/app/release/`、`android/local.properties`、`android/keystore/`、`android/keystore.properties`、`**/*.jks`、`**/*.keystore`。
 
 **版本同步**（现有规则：git tag 是唯一事实源，`package.json` + `frontend/package.json` 必须同步）
