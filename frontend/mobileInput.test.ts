@@ -3,9 +3,18 @@
  *
  * Run from project root:  npx tsx frontend/mobileInput.test.ts
  *   (or inside frontend/:  npx tsx mobileInput.test.ts)
+ * Or, without tsx — Node ≥22.18 strips types natively (the .ts import specifier
+ * below is what makes this work; tsconfig sets allowImportingTsExtensions):
+ *                          node mobileInput.test.ts
  */
 import assert from 'node:assert/strict'
-import { mapSpecialKey, shouldSkipInput, canFlushComposition } from './src/mobileInput'
+import {
+  mapSpecialKey,
+  shouldSkipInput,
+  canFlushComposition,
+  shouldHandleKeyNatively,
+  type KeyHandlerInput,
+} from './src/mobileInput.ts'
 
 let passed = 0
 let failed = 0
@@ -191,6 +200,70 @@ test('canFlushComposition: 65 (letter) → arm — any printable key flushes mid
 
 test('canFlushComposition: 0/undefined-ish keyCode → arm (xterm only spares 229 + modifiers)', () => {
   assert.equal(canFlushComposition(0), true)
+})
+
+// --- shouldHandleKeyNatively ---
+//
+// The desktop (≥1024px) branch of xterm's attachCustomKeyEventHandler.
+//
+// REGRESSION (Debian/Linux + fcitx5-vinput): IME commits that carry NO
+// composition events arrive as `keydown keyCode 229 ("Process")` followed by
+// `input insertText` with composed=true. xterm's _keyDown sets _keyDownSeen=true
+// then bails early when this handler returns false, so _compositionHelper.keydown()
+// → _handleAnyTextareaChanges() never runs. The main _inputEvent path is blocked
+// too (composed=true + _keyDownSeen=true), leaving the text with no escape route —
+// it was silently dropped and nothing reached the terminal.
+//
+// Verified against live xterm 5.5.0 (Linux Chrome, CDP-simulated IME events):
+//   handler returns false for 229 -> onData never fires   (text swallowed)
+//   handler returns true  for 229 -> onData "…"           (text delivered)
+//
+// Composition-based IMEs (Windows/macOS/iOS/Android) report isComposing=true for
+// the whole composition and already returned true before this fix, so their
+// behaviour is unchanged.
+
+const key = (o: Partial<KeyHandlerInput>): KeyHandlerInput => ({
+  isComposing: false, keyCode: 0, key: '', ctrlKey: false, altKey: false, metaKey: false, ...o,
+})
+
+test('shouldHandleKeyNatively: keyCode 229 (IME commit, no composition) → native — the vinput fix', () => {
+  assert.equal(shouldHandleKeyNatively(key({ keyCode: 229, key: 'Process' })), true)
+})
+
+test('shouldHandleKeyNatively: 229 while composing → native', () => {
+  assert.equal(shouldHandleKeyNatively(key({ keyCode: 229, key: 'Process', isComposing: true })), true)
+})
+
+test('shouldHandleKeyNatively: any key while composing → native (unchanged)', () => {
+  assert.equal(shouldHandleKeyNatively(key({ keyCode: 13, key: 'Enter', isComposing: true })), true)
+})
+
+test('shouldHandleKeyNatively: printable char → native (xterm textarea → onData)', () => {
+  assert.equal(shouldHandleKeyNatively(key({ keyCode: 65, key: 'a' })), true)
+})
+
+test('shouldHandleKeyNatively: Ctrl+V paste → native', () => {
+  assert.equal(shouldHandleKeyNatively(key({ keyCode: 86, key: 'v', ctrlKey: true })), true)
+})
+
+test('shouldHandleKeyNatively: Cmd+V paste → native', () => {
+  assert.equal(shouldHandleKeyNatively(key({ keyCode: 86, key: 'v', metaKey: true })), true)
+})
+
+test('shouldHandleKeyNatively: Alt+letter is not a plain printable → global handler', () => {
+  assert.equal(shouldHandleKeyNatively(key({ keyCode: 65, key: 'a', altKey: true })), false)
+})
+
+test('shouldHandleKeyNatively: Enter → global handler', () => {
+  assert.equal(shouldHandleKeyNatively(key({ keyCode: 13, key: 'Enter' })), false)
+})
+
+test('shouldHandleKeyNatively: arrows → global handler', () => {
+  assert.equal(shouldHandleKeyNatively(key({ keyCode: 38, key: 'ArrowUp' })), false)
+})
+
+test('shouldHandleKeyNatively: Ctrl+C → global handler (copy/SIGINT logic lives there)', () => {
+  assert.equal(shouldHandleKeyNatively(key({ keyCode: 67, key: 'c', ctrlKey: true })), false)
 })
 
 // --- Summary ---

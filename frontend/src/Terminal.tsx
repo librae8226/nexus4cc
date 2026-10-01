@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useState, lazy, Suspense } from 'react'
 import type { SessionManagerV2Handle } from './SessionManagerV2'
 import type { WorkspaceBrowserHandle } from './WorkspaceBrowser'
 import { useTranslation } from 'react-i18next'
-import { mapSpecialKey, shouldSkipInput, canFlushComposition } from './mobileInput'
+import { mapSpecialKey, shouldSkipInput, canFlushComposition, shouldHandleKeyNatively } from './mobileInput'
 import { Terminal as XTerm, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -1169,15 +1169,15 @@ export default function Terminal({ token }: Props) {
 
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
       if (window.innerWidth >= 1024) {
-        // IME 组合期间：让 xterm 原生处理
-        if (e.isComposing) return true
-        // 可打印字符（无修饰键）：让 xterm 处理 → textarea → onData
-        // 这样浏览器 IME 才能正常工作
-        if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) return true
-        // 剪贴板粘贴：让浏览器原生 paste 事件触发，xterm 的 onData 负责发送到 WS
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') return true
-        // 特殊键（箭头、Enter、Tab 等）和快捷键：让全局 handler 处理
-        return false
+        // PC 宽屏：判定逻辑抽到 mobileInput.shouldHandleKeyNatively，便于单测
+        return shouldHandleKeyNatively({
+          isComposing: e.isComposing,
+          keyCode: e.keyCode,
+          key: e.key,
+          ctrlKey: e.ctrlKey,
+          altKey: e.altKey,
+          metaKey: e.metaKey,
+        })
       }
       // 移动端保持原有逻辑
       if (e.ctrlKey && ['w', 't', 'n', 'l', 'r'].includes(e.key.toLowerCase())) {
