@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import Terminal from './Terminal'
 import ServerSettings from './ServerSettings'
-import { getApiBase, isNative } from './baseUrl'
+import { getApiBase, getProfiles, isNative } from './baseUrl'
 
 const STORAGE_KEY = 'nexus_token'
 
@@ -12,6 +12,9 @@ export default function App() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  // 一次性判定即可：登录页存活期间不会有人往里加 profile（加了也只能从这个
+  // 组件加，而它没渲染就没有入口）。
+  const [showServer] = useState(() => isNative() || getProfiles().length > 0)
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -62,8 +65,10 @@ export default function App() {
         </form>
         {/* 登录请求本身就要发给某个服务器地址，所以地址配置必须先于登录可达。
             APK 首次启动（native 且无 profile）时直接展开，别让人对着必然失败的
-            登录框猜。浏览器里默认折叠，无 profile 时行为与改造前一致。 */}
-        <ServerSettings defaultOpen={isNative() && !getApiBase()} />
+            登录框猜。
+            浏览器里只在**已经配置过** profile 时才渲染 —— 默认状态下登录页与
+            改造前逐像素一致，不给现有用户增加一行无关的 UI。 */}
+        {showServer && <ServerSettings defaultOpen={!getApiBase()} />}
       </div>
     </div>
   )
