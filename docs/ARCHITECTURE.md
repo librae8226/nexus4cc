@@ -68,7 +68,7 @@ tmux attach-session -t <session>:<window>
 | POST | `/api/workspace/move` | Bearer | 移动条目 |
 | **文件上传** | | | |
 | POST | `/api/upload` | Bearer | 图片/文档上传（终端粘贴用） |
-| POST | `/api/files/upload` | Bearer | 文件上传到工作区 |
+| POST | `/api/files/upload` | Bearer | 文件上传到当前 session 的工作目录 |
 | GET | `/api/files` | Bearer | 列出已上传文件 |
 | DELETE | `/api/files/content` | Bearer | 删除单个上传文件（`?path=`） |
 | DELETE | `/api/files/all` | Bearer | 清空所有上传文件 |
