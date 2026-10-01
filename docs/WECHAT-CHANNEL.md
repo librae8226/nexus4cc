@@ -18,6 +18,27 @@
 | 对话日志 | `data/channels/wechat.log`（5MB 轮转，供 tmux `tail -F` 观看） |
 | 媒体落盘 | `data/channels/inbox/<日期>/`（**暂无清理策略**） |
 
+### 看实时活动：tmux 窗口 `home-librae:wechat`
+
+窗口里跑 `tail -n 200 -F data/channels/wechat.log`，在 Nexus UI 里直接可见：
+收到的消息、agent 的每次工具调用、回复正文、耗时与费用。**消息有没有送达、
+agent 在干什么，看这个窗口即可。**
+
+**worker 不放进 tmux，只留 PM2 监督。** 反过来做的话，机器重启后
+`scripts/nexus-match-panes.js` 只认标题含 `nexus-run-claude.sh` 的 pane，
+worker 不会被拉起。tmux 只负责「看」，PM2 负责「活」。
+
+该窗口能被 `tmux-resurrect` 自动恢复，因为它满足两个条件：进程名是 `tail`
+（在 resurrect 的默认恢复列表里），且命令来自 pane 的子进程 —— 所以**必须
+先开 shell 再 `send-keys` 输入命令**，不能把命令直接交给 `tmux new-window`
+（那样 pane 进程就是 `tail` 本身，没有子进程，保存下来命令是空的，恢复时只开个空 shell）。
+误关了就这样重建：
+
+```sh
+tmux new-window -t home-librae -n wechat -c ~/work/nexus
+tmux send-keys -t home-librae:wechat "tail -n 200 -F ~/work/nexus/data/channels/wechat.log" Enter
+```
+
 ## 支持的消息类型
 
 入站 5 类**全部支持**，2026-10-01 均以真实微信消息实测通过：
