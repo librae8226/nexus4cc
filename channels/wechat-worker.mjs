@@ -709,6 +709,15 @@ async function main() {
 
   const seen = new Set(state.seenMessageIds ?? [])
   const sessionsByPeer = { ...(state.sessionsByPeer ?? {}) }
+  // cwd 换了 = Claude Code 的 session 池换了，旧 sessionId 在新池子里不存在，
+  // `--resume` 会直接报「找不到会话」。所以 workdir 一变就丢掉续聊指针，
+  // 让它重开一个新窗口，而不是把通道弄坏。
+  if (state.workdir && state.workdir !== WORKDIR) {
+    const n = Object.keys(sessionsByPeer).length
+    for (const k of Object.keys(sessionsByPeer)) delete sessionsByPeer[k]
+    emit(`⚠️ workdir 变更（${state.workdir} → ${WORKDIR}），已丢弃 ${n} 个续聊会话`)
+  }
+  saveState({ workdir: WORKDIR, sessionsByPeer })
   // peer → 上一条入站文本。故意只放内存：重启后清空，宁可漏判也不要误判。
   const lastInbound = new Map()
   let buf = state.getUpdatesBuf ?? ''

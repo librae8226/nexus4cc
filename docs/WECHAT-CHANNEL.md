@@ -32,8 +32,12 @@ session 池与 memory**：
 - 通道专属规则随之落在 `~/work/wechat-agent/CLAUDE.md`；`~/AGENTS.md` 退回
   全局通用（人格/口吻/硬要求/目录地图），只留一句指路。
 
-**改这个值 = 换池子**：老会话和 memory 都不会跟过来，要手动搬 `memory/`，
-并让 worker 清空 `sessionsByPeer`（写一次 `data/channels/handoff.json` 即可）。
+**改这个值 = 换池子**：老会话和 memory 都不会跟过来。要手动做的只有一件事——
+把旧 slug 目录下的 `memory/` 搬过去。
+
+续聊指针（`sessionsByPeer`）不用管：state 里记了 `workdir`，worker 启动时发现
+对不上就自动丢弃（否则 `--resume` 会报「找不到会话」）。入站媒体也不用搬，
+新目录会重建（旧目录里的历史文件自己挪）。
 
 ### 看实时活动：tmux 窗口 `home-librae:wechat`
 
