@@ -24,6 +24,7 @@
     "entry": "Server",
     "sectionTitle": "Server address",
     "sectionDesc": "Address of the Nexus backend. In a browser it is this page's own origin, so there is nothing to configure.",
+    "settingsDesc": "Address of the Nexus backend. Switching reconnects the app; you stay logged in.",
     "empty": "No server configured",
     "namePlaceholder": "Name (e.g. Home LAN)",
     "urlPlaceholder": "Address (e.g. 192.168.3.21:59000)",

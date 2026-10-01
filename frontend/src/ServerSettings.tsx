@@ -26,13 +26,33 @@ import {
 interface Props {
   /** 没有可用 profile 时强制展开（APK 首次启动） */
   defaultOpen?: boolean
+  /**
+   * 折叠形态（登录页用，默认）还是常展开的分区（设置面板用）。
+   * 两处共用同一个组件是因为逻辑完全相同，只是外壳不同 —— 分成两个组件
+   * 意味着 profile 的增删改要在两处各实现一遍。
+   */
+  collapsible?: boolean
+  /**
+   * 激活的服务器发生变化时回调。登录页不需要（此时没有任何已建立的连接
+   * 状态要重置，下一次请求自动用新地址）；设置面板需要 —— 终端 WS、
+   * 会话列表都是旧服务器的，必须整页重载才干净。
+   */
+  onSwitch?: () => void
 }
 
-export default function ServerSettings({ defaultOpen = false }: Props) {
+export default function ServerSettings({ defaultOpen = false, collapsible = true, onSwitch }: Props) {
   const { t } = useTranslation()
   const [profiles, setProfiles] = useState<ServerProfile[]>(() => getProfiles())
   const [activeId, setActiveId] = useState<string | null>(() => getActiveProfile()?.id ?? null)
   const [open, setOpen] = useState(defaultOpen)
+
+  /** 切到某个 profile；同一个就不动（避免无谓的重载） */
+  function activate(id: string) {
+    if (id === activeId) return
+    setActiveProfileId(id)
+    setActiveId(id)
+    onSwitch?.()
+  }
   const [editingId, setEditingId] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [url, setUrl] = useState('')
@@ -77,9 +97,12 @@ export default function ServerSettings({ defaultOpen = false }: Props) {
     const id = editingId || newProfileId()
     upsertProfile({ id, name: name.trim() || normalized, url: normalized })
     // 刚保存的这套直接切过去 —— 新增地址的意图就是要用它
+    const changed = id !== activeId
     setActiveProfileId(id)
+    setActiveId(id)
     setEditingId(null)
     setError('')
+    if (changed) onSwitch?.()
   }
 
   function del(p: ServerProfile) {
@@ -91,27 +114,37 @@ export default function ServerSettings({ defaultOpen = false }: Props) {
   const inputCls =
     'bg-nexus-bg border border-nexus-border rounded-lg text-nexus-text text-sm py-2 px-3 outline-none w-full'
 
-  return (
-    <div className="border-t border-nexus-border pt-4 mt-4">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-center justify-between w-full bg-transparent border-none text-nexus-text-2 text-sm cursor-pointer p-0"
-      >
-        <span>
-          {t('server.sectionTitle')}
-          {activeId && (
-            <span className="text-nexus-text ml-2">
-              {profiles.find((p) => p.id === activeId)?.url}
-            </span>
-          )}
-        </span>
-        <span className="text-nexus-text-2">{open ? '▾' : '▸'}</span>
-      </button>
+  const expanded = collapsible ? open : true
 
-      {open && (
-        <div className="flex flex-col gap-2 mt-3">
-          <p className="text-nexus-text-2 text-xs m-0">{t('server.sectionDesc')}</p>
+  return (
+    <div className={collapsible ? 'border-t border-nexus-border pt-4 mt-4' : ''}>
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex items-center justify-between w-full bg-transparent border-none text-nexus-text-2 text-sm cursor-pointer p-0"
+        >
+          <span>
+            {t('server.sectionTitle')}
+            {activeId && (
+              <span className="text-nexus-text ml-2">
+                {profiles.find((p) => p.id === activeId)?.url}
+              </span>
+            )}
+          </span>
+          <span className="text-nexus-text-2">{open ? '▾' : '▸'}</span>
+        </button>
+      ) : (
+        <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-3">
+          {t('server.sectionTitle')}
+        </div>
+      )}
+
+      {expanded && (
+        <div className={`flex flex-col gap-2 ${collapsible ? 'mt-3' : ''}`}>
+          <p className="text-nexus-text-2 text-xs m-0">
+            {collapsible ? t('server.sectionDesc') : t('server.settingsDesc')}
+          </p>
 
           {profiles.length === 0 && editingId === null && (
             <p className="text-nexus-text-2 text-xs m-0">{t('server.empty')}</p>
@@ -146,7 +179,7 @@ export default function ServerSettings({ defaultOpen = false }: Props) {
                 className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${
                   active ? 'border-nexus-accent' : 'border-nexus-border'
                 }`}>
-                <button type="button" onClick={() => setActiveProfileId(p.id)}
+                <button type="button" onClick={() => activate(p.id)}
                   className="flex-1 text-left bg-transparent border-none cursor-pointer p-0 min-w-0">
                   <div className="text-nexus-text text-sm truncate">{p.name}</div>
                   <div className="text-nexus-text-2 text-xs truncate">

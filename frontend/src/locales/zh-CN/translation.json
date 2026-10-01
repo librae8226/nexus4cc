@@ -24,6 +24,7 @@
     "entry": "服务器",
     "sectionTitle": "服务端地址",
     "sectionDesc": "Nexus 后端的地址。浏览器里与本页同源，无需配置。",
+    "settingsDesc": "Nexus 后端的地址。切换后 App 会重新连接（登录状态保留）。",
     "empty": "尚未配置服务器",
     "namePlaceholder": "名称（如「家里局域网」）",
     "urlPlaceholder": "地址（如 192.168.3.21:59000）",

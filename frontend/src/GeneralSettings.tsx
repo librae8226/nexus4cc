@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import GhostShield from './GhostShield'
 import { Icon } from './icons'
+import ServerSettings from './ServerSettings'
+import { getProfiles, isNative } from './baseUrl'
 
 interface Props {
   token: string
@@ -33,6 +35,21 @@ export default function GeneralSettings({ token, themeMode, onToggleTheme, onClo
   const [restoring, setRestoring] = useState(false)
   const [restoreMsg, setRestoreMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const fmtTime = (iso?: string) => (iso ? new Date(iso).toLocaleString() : '')
+
+  // 浏览器里没有 profile 这个概念（同源），不显示这一段。与 App.tsx 登录页
+  // 用同一条判定规则。
+  const [showServer] = useState(() => isNative() || getProfiles().length > 0)
+
+  /**
+   * 切服务器 = 整页重载。
+   * 只换 base URL 不够：终端 WS、会话/窗口列表、当前滚动位置全都来自旧服务器，
+   * 而 fetch 改写是逐次读 getApiBase() 的，会出现"新请求打到新地址、旧连接还挂在
+   * 老地址"的混合状态。重载让一切从新地址重建。
+   * profile 和 token 都在 localStorage，所以重载后仍是已登录状态，不用重新输密码。
+   */
+  function handleServerSwitch() {
+    location.reload()
+  }
 
   useEffect(() => {
     fetch('/api/version', { headers: { Authorization: `Bearer ${token}` } })
@@ -118,6 +135,11 @@ export default function GeneralSettings({ token, themeMode, onToggleTheme, onClo
         </div>
 
         <div className="px-4 py-4 flex flex-col gap-5">
+          {/* Server section —— 放在最前。它是决定 App 能否工作的那一项：
+              连不上时用户第一个要找的就是它，藏在中段等于找不到（这正是
+              M0 真机测试时发生的事）。浏览器里无 profile，这一段是空的。 */}
+          {showServer && <ServerSettings collapsible={false} onSwitch={handleServerSwitch} />}
+
           {/* Appearance section */}
           <div>
             <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-3">

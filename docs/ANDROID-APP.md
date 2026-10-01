@@ -255,7 +255,10 @@ Nexus 的移动端今天是 **PWA**：`public/manifest.json` + `public/sw.js`，
 - **非 fetch 的 URL 拼装要单独处理**：`WorkspaceBrowser.tsx:603` 把 `/workspace?…` 塞进 `<a href>`，走的是浏览器导航而非 fetch，改写覆盖不到，必须显式过 `apiUrl()`。
 - **浏览器/PWA 路径零影响**：无激活 profile 时 `getApiBase()` 返回 `''`，`apiUrl` 是恒等函数，行为与今天完全一致——**一个 bundle 同时服务浏览器和 App**。
 - 权衡：包 `window.fetch` 是 monkey-patch，不如显式 `apiFetch()` 干净，但它把 30 处改动压到 1 处；这是刻意的取舍，需要在 `baseUrl.ts` 顶部注释说明原因。
-- 地址设置界面**必须先于登录可达**（登录请求本身就是 profile 定向的）：`App.tsx` 登录页加一个服务器入口；native 且无 profile 时直接显示编辑器而不是登录表单。主编辑器放进 `GeneralSettings.tsx`（Restore 与 About 之间），含增删改、**测试连通性**（请求 `${url}/api/version`，401=可达，200=已认证）、切换。
+- 地址设置界面**必须先于登录可达**（登录请求本身就是 profile 定向的）：`App.tsx` 登录页加一个服务器入口；native 且无 profile 时直接显示编辑器而不是登录表单。
+- 登录后的切换入口放进 `GeneralSettings.tsx`，且放在**最前一段**而非文档初稿写的「Restore 与 About 之间」——M0 真机测试时实际发生的就是"登录进去后找不到在哪切"，把它压在中段等于重蹈覆辙。切换 = 改激活 profile + **整页重载**（只换 base URL 会出现"新请求打新地址、旧 WS 还挂在老地址"的混合态）。
+- 两个入口复用同一个 `ServerSettings` 组件（`collapsible` 决定外壳形态），避免 profile 的增删改在两处各实现一遍。
+- 尚未做：**测试连通性**按钮（请求 `${url}/api/version`，401=可达、200=已认证）。原计划放在这里，实测发现终端本身就是最直接的连通性指示，暂缓到 M2。
 - 顺带：30 天 JWT 无刷新、无过期 UI，长时间在后台的 App 迟早会静默 401。在 shim 里加一个最小的 401 处理（清 token、回登录）——直接由"应用常驻"这个新场景导致，见 §6.3 的同类判断。
 
 **改动 B — Service Worker 在 APK 里必须停用**
