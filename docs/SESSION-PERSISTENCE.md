@@ -76,12 +76,18 @@ set -g @resurrect-dir '~/.tmux/resurrect'
 set -g @resurrect-capture-pane-contents 'on'   # 还原每个 pane 的可见滚动文字
 set -g @continuum-save-interval '5'            # 每 5 分钟自动快照一次
 set -g @continuum-restore 'off'                # 关闭 continuum 自动恢复，改由 Nexus 确定性触发（见 §4.4 / §6.1）
+set -g history-limit 10000                     # 回滚历史行数（tmux 默认仅 2000）；只对新窗口生效，见下
 run-shell ~/.tmux/plugins/tmux-resurrect/resurrect.tmux   # 必须先于 continuum
 run-shell ~/.tmux/plugins/tmux-continuum/continuum.tmux
 ```
 
 该配置在**下次 tmux 服务器启动时**生效。注意 `@continuum-restore` 设为 `off`——
 恢复不走 continuum 的开机自动恢复（在本环境不可靠，见 §6.1），而由 Nexus 启动时确定性触发（§4.4）。
+
+`history-limit` 的语义与上面各项**不同**（man tmux：*applies only to new windows — existing
+window histories are not resized*）：**已存在的窗口不会扩容**，必须重建窗口才拿得到新上限；
+对旧窗口显式 `set-option -w history-limit` 同样无效（2026-10-01 实测：灌 3000 行后仍封顶 ~2000）。
+本机该值由 tmux 内置默认 2000 提升到 10000。
 
 ### 4.3 线上运行中服务器的即时激活（安全处理）
 
@@ -92,6 +98,10 @@ run-shell ~/.tmux/plugins/tmux-continuum/continuum.tmux
 - 手动注入 continuum 的定时保存钩子到 `status-right`（因为热加载时 continuum 的「多客户端」
   启发式误判，跳过了自动注入）。已端到端验证：时间戳每个保存周期自行推进。
 - 全程**未对线上服务器执行任何 kill / restart**，5 个 session 始终在线。
+- **2026-10-01**：写入全局选项 `set -g history-limit 10000`。属**纯选项写入**——未 kill、
+  未重建任何 session / window / pane，无进程受影响，与本文件一贯的"不碰活着的会话"原则一致。
+  但同样只对**此后新建**的窗口生效：当时在线的 14 个 pane 仍保持 2000，需各自重建才拿到新上限
+  （语义与实测见 §4.2）。内存开销实测约 1.5MB / 灌满 1 万行的 pane。
 
 ### 4.4 确定性恢复触发器（Nexus 启动时，已实施）
 
