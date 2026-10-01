@@ -89,6 +89,8 @@ function saveState(patch) {
 const INBOX_DIR = path.join(DATA_DIR, 'inbox')
 /** 媒体 CDN 根；full_url 缺失时用它 + encrypt_query_param 拼下载地址 */
 const CDN_BASE = 'https://novac2c.cdn.weixin.qq.com/c2c'
+/** 微信语音默认采样率（官方包 silk-transcode.ts 取值），消息未带 sample_rate 时用 */
+const SILK_DEFAULT_RATE = 24_000
 
 /** media.aes_key 是 base64(32 位 hex 字符串)；image_item.aeskey 是同一串明文 */
 function decodeAesKey(aesKey) {
@@ -108,7 +110,13 @@ function sniffExt(b) {
   if (b.subarray(0, 3).equals(JPEG_MAGIC)) return '.jpg'
   if (b.subarray(0, 4).equals(PNG_MAGIC)) return '.png'
   if (b.subarray(0, 4).toString('latin1') === 'GIF8') return '.gif'
-  if (b.subarray(0, 4).equals(Buffer.from([0x52, 0x49, 0x46, 0x46]))) return '.webp'
+  // RIFF 家族靠第 8 字节区分：WAVE / WEBP / AVI
+  if (b.subarray(0, 4).toString('latin1') === 'RIFF') {
+    const form = b.subarray(8, 12).toString('latin1')
+    if (form === 'WAVE') return '.wav'
+    if (form === 'WEBP') return '.webp'
+    if (form === 'AVI ') return '.avi'
+  }
   if (b.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]))) return '.zip'
   if (b.subarray(0, 12).toString('latin1').includes('ftyp')) return '.mp4'
   if (b.subarray(0, 9).toString('latin1').includes('SILK')) return '.silk'
@@ -143,6 +151,35 @@ function decryptMedia(enc, key, verify) {
   throw new Error(`解密失败（${tried.join('; ')}）`)
 }
 
+/** 裸 PCM(s16le, 单声道) 套 WAV 容器 */
+function pcmToWav(pcm, sampleRate) {
+  const h = Buffer.alloc(44)
+  h.write('RIFF', 0)
+  h.writeUInt32LE(36 + pcm.length, 4)
+  h.write('WAVE', 8)
+  h.write('fmt ', 12)
+  h.writeUInt32LE(16, 16)          // fmt chunk 大小
+  h.writeUInt16LE(1, 20)           // PCM
+  h.writeUInt16LE(1, 22)           // 单声道
+  h.writeUInt32LE(sampleRate, 24)
+  h.writeUInt32LE(sampleRate * 2, 28)
+  h.writeUInt16LE(2, 32)           // block align
+  h.writeUInt16LE(16, 34)          // 位深
+  h.write('data', 36)
+  h.writeUInt32LE(pcm.length, 40)
+  return Buffer.concat([h, pcm])
+}
+
+/**
+ * SILK → WAV。ffmpeg 无 SILK 解码器（实测确认），必须用 silk-wasm（腾讯官方插件同款）。
+ * 采样率优先用消息自带的 voice_item.sample_rate，缺失时退 24000（官方包默认值）。
+ */
+async function silkToWav(silkBuf, sampleRate) {
+  const { decode } = await import('silk-wasm')
+  const { data } = await decode(silkBuf, sampleRate)
+  return pcmToWav(Buffer.from(data), sampleRate)
+}
+
 /** 同名文件不覆盖，追加 -1/-2… */
 function uniquePath(dir, name) {
   const base = path.basename(String(name || 'file')).replace(/[\/\\\0]/g, '_').replace(/^\.+/, '_').slice(0, 120)
@@ -155,7 +192,7 @@ function uniquePath(dir, name) {
 }
 
 /** 下载 → 解密 → 落盘。返回 { path } 或 { note } 说明失败原因 */
-async function saveMedia(media, { name, md5, kind, mid, aeskey }) {
+async function saveMedia(media, { name, md5, kind, mid, aeskey, transcode, sampleRate }) {
   // 官方实现优先用 image_item.aeskey（明文 hex），其次 media.aes_key（base64）
   const url = media?.full_url || (media?.encrypt_query_param
     ? `${CDN_BASE}/download?encrypted_query_param=${media.encrypt_query_param}`
@@ -192,13 +229,24 @@ async function saveMedia(media, { name, md5, kind, mid, aeskey }) {
   }
   if (verify && !verify(out)) return { path: null, note: `落盘前校验失败，已放弃` }
 
+  // 可选转码：目前只有 SILK→WAV。失败不致命，保留原始文件并如实说明。
+  let extraNote = ''
+  if (transcode === 'silk2wav') {
+    try {
+      out = await silkToWav(out, sampleRate || SILK_DEFAULT_RATE)
+      extraNote = '，已转 WAV'
+    } catch (e) {
+      extraNote = `，silk2wav 失败(${e.message})，保留原始 SILK`
+    }
+  }
+
   const dir = path.join(INBOX_DIR, new Date().toISOString().slice(0, 10))
   fs.mkdirSync(dir, { recursive: true })
   // 调用方给的名字已带扩展名就照用（文件类）；否则按内容嗅探，嗅不出就不加
   const base = name || `${kind}-${mid}`
   const file = uniquePath(dir, path.extname(base) ? base : `${base}${sniffExt(out) ?? ''}`)
   fs.writeFileSync(file, out)
-  return { path: file, note: `${out.length} 字节，${mode}` }
+  return { path: file, note: `${out.length} 字节，${mode}${extraNote}` }
 }
 
 /**
@@ -215,9 +263,12 @@ async function describeItems(items, { mid }) {
         const v = it.voice_item ?? {}
         const secs = v.playtime ? (v.playtime / 1000).toFixed(1) : '?'
         if (v.text) { parts.push(`[语音 ${secs}s] ${v.text}`); continue }
-        const saved = await saveMedia(v.media, { name: `voice-${mid}`, kind: 'voice', mid })
+        const saved = await saveMedia(v.media, {
+          name: `voice-${mid}`, kind: 'voice', mid,
+          transcode: 'silk2wav', sampleRate: v.sample_rate,
+        })
         parts.push(saved.path
-          ? `[语音 ${secs}s] 微信未给出转写文本；音频已保存到 ${saved.path}（SILK 编码，需转码才能直接播放）`
+          ? `[语音 ${secs}s] 微信未给出转写文本；音频已保存到 ${saved.path}`
           : `[语音 ${secs}s] 读取失败：${saved.note}`)
       } else if (it.type === 4) {
         const f = it.file_item ?? {}
