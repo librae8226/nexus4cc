@@ -16,7 +16,24 @@
 | 开机自启 | `pm2-librae.service`（systemd，已 `enabled`）+ `~/.pm2/dump.pm2` 含本应用 |
 | 凭证 | `data/channels/wechat.json`（0600，`data/*` 已在 `.gitignore`） |
 | 对话日志 | `data/channels/wechat.log`（5MB 轮转，供 tmux `tail -F` 观看） |
-| 媒体落盘 | `data/channels/inbox/<日期>/`（**暂无清理策略**） |
+| 媒体落盘 | `~/work/wechat-agent/inbox/<日期>/`（= agent 的 CWD 下，**暂无清理策略**） |
+| agent CWD | `~/work/wechat-agent/`（`WECHAT_WORKDIR`），规则见该目录 `CLAUDE.md` |
+
+### 为什么 agent 的 CWD 是专属目录（2026-10-01 起）
+
+`WECHAT_WORKDIR=~/work/wechat-agent`，**不要改回 `~/work`**。原因不在隔离权限
+（`WECHAT_PERMISSION=full` 时它本来就不是沙箱），而在 **Claude Code 按 cwd 划分
+session 池与 memory**：
+
+- cwd `~/work` → `~/.claude/projects/-home-librae-work/`，与任何手动开的
+  `~/work` 会话共用 session 与 memory，通道专属规则（三段式、记忆四层、收口信号）
+  会污染别人，别人的记忆也会串进来。
+- cwd `~/work/wechat-agent` → `-home-librae-work-wechat-agent/`，**独立池**。
+- 通道专属规则随之落在 `~/work/wechat-agent/CLAUDE.md`；`~/AGENTS.md` 退回
+  全局通用（人格/口吻/硬要求/目录地图），只留一句指路。
+
+**改这个值 = 换池子**：老会话和 memory 都不会跟过来，要手动搬 `memory/`，
+并让 worker 清空 `sessionsByPeer`（写一次 `data/channels/handoff.json` 即可）。
 
 ### 看实时活动：tmux 窗口 `home-librae:wechat`
 

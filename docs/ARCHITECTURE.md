@@ -218,7 +218,7 @@ Effect B [token, activeWindowIndex] — 管理 WebSocket（窗口切换时重建
   autorestart: true, max_restarts: 10, restart_delay: 5000,
   env: {
     WECHAT_PROFILE: 'deepseek',
-    WECHAT_WORKDIR: process.env.HOME + '/work',
+    WECHAT_WORKDIR: process.env.HOME + '/work/wechat-agent',
     WECHAT_PERMISSION: 'full'   // full | safe
   },
   error_file: './logs/nexus-wechat-error.log',

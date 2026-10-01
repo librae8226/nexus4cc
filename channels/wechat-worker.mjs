@@ -14,7 +14,9 @@
  *
  * 环境变量：
  *   WECHAT_PROFILE      使用的 profile id（data/configs/<id>.json），默认 deepseek
- *   WECHAT_WORKDIR      agent 的工作目录（决定其文件访问范围与人格上下文），默认 ~/work
+ *   WECHAT_WORKDIR      agent 的工作目录（决定 session 池、memory 与人格上下文），
+ *                       默认 ~/work；部署值见 ecosystem.config.cjs。
+ *                       入站媒体也落在这里（WORKDIR/inbox/<日期>/）
  *   WECHAT_ALLOW_FROM   白名单，覆盖配置文件里的 allowFrom（逗号分隔）
  *   WECHAT_PERMISSION   完整权限开关：full（默认，对齐现有 claude 窗口）| safe（只读+检索）
  *   CLAUDE_BIN          claude 可执行文件路径，默认从 PATH 解析
@@ -105,7 +107,9 @@ function saveState(patch) {
 // ─── 微信媒体（图片/语音/文件/视频）─────────────────────────────────────
 // 入站媒体一律是「CDN 直链 + AES key」两段式，落盘前要下载并解密。
 // 官方无文档，模式/IV 靠实测候选 + md5 校验确定，见 decryptMedia。
-const INBOX_DIR = path.join(DATA_DIR, 'inbox')
+// 入站媒体统一落在 agent 的 CWD 下（WORKDIR/inbox/<日期>/），而不是仓库的 data/：
+// 它们是给 agent 读的文件，跟着 cwd 走才符合「一个 agent 一个目录」的模型。
+const INBOX_DIR = path.join(WORKDIR, 'inbox')
 /** 媒体 CDN 根；full_url 缺失时用它 + encrypt_query_param 拼下载地址 */
 const CDN_BASE = 'https://novac2c.cdn.weixin.qq.com/c2c'
 /** 微信语音默认采样率（官方包 silk-transcode.ts 取值），消息未带 sample_rate 时用 */

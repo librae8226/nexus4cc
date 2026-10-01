@@ -54,7 +54,7 @@
 
 | ID | Feature | 验收标准 |
 |---|---|---|
-| **F-22** | **微信通道（iLink / ClawBot）** | 独立进程 `channels/wechat-worker.mjs`，PM2 监督（`nexus-wechat`）。微信私聊 → headless `claude -p --output-format stream-json` → 回复回微信。**入站支持全部 5 种 item 类型**（1 文本 / 2 图片 / 3 语音 / 4 文件 / 5 视频）：媒体走 CDN 直链下载 + AES-128-ECB 解密（校验 `md5`/`video_md5`），落盘 `data/channels/inbox/<日期>/`，路径作为消息内容交给 agent；语音优先取微信自带转写 `voice_item.text`，无转写时用 `silk-wasm` 把 SILK 解成 WAV（ffmpeg 全线无 SILK 解码器）。凭证落 `data/channels/wechat.json`（0600）。`allow_from` 白名单为空则拒绝启动。对话写入 `data/channels/wechat.log`，供 tmux window `tail -F` 在 Nexus UI 内观看。**不引入非 PTY 会话类型**——显示层复用现有 PTY/WS 通路 |
+| **F-22** | **微信通道（iLink / ClawBot）** | 独立进程 `channels/wechat-worker.mjs`，PM2 监督（`nexus-wechat`）。微信私聊 → headless `claude -p --output-format stream-json` → 回复回微信。**入站支持全部 5 种 item 类型**（1 文本 / 2 图片 / 3 语音 / 4 文件 / 5 视频）：媒体走 CDN 直链下载 + AES-128-ECB 解密（校验 `md5`/`video_md5`），落盘 agent CWD 下的 `inbox/<日期>/`（`WECHAT_WORKDIR`，现为 `~/work/wechat-agent`），路径作为消息内容交给 agent；语音优先取微信自带转写 `voice_item.text`，无转写时用 `silk-wasm` 把 SILK 解成 WAV（ffmpeg 全线无 SILK 解码器）。凭证落 `data/channels/wechat.json`（0600）。`allow_from` 白名单为空则拒绝启动。对话写入 `data/channels/wechat.log`，供 tmux window `tail -F` 在 Nexus UI 内观看。**不引入非 PTY 会话类型**——显示层复用现有 PTY/WS 通路 |
 
 ### Done（原 Nice/v4 — 已提前完成）
 
