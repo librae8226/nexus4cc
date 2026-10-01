@@ -56,7 +56,7 @@ Nexus 的移动端今天是 **PWA**：`public/manifest.json` + `public/sw.js`，
 | G2 | 服务器地址可配置且可多套切换（局域网 / Tailscale / 隧道） | 三套 profile 各连一次 |
 | G3 | App 切后台后，Agent 跑完能收到通知 | 锁屏 5 分钟后收到通知，点击回到对应窗口 |
 | G4 | 能拍照/选图/分享文件给 AI，能在终端里说人话 | 各能力真机验证 |
-| G5 | 启动需指纹解锁；JWT 不再明文落盘 | 见 §8 |
+| G5 | 启动需指纹/人脸解锁，无凭据不可进入 | 见 §8 |
 | G6 | 折叠屏展开/合上不丢连接、不重排错乱 | vivo X Fold6 反复开合 |
 
 ### 2.2 非目标（明确不做）
@@ -101,7 +101,7 @@ Nexus 的移动端今天是 **PWA**：`public/manifest.json` + `public/sw.js`，
 | **F-23.3** | 语音输入 | 工具栏麦克风按钮 → 原生语音识别 → 文字注入终端；识别中显示状态 | 中文识别可用，文字不重复不丢字 |
 | **F-23.4** | 相机 / 相册输入 | 拍照或选图 → 上传到服务端 → 终端自动填入路径 | 从拍照到路径出现在终端 ≤ 5s |
 | **F-23.5** | 文件 SAF 与系统分享接入 | (a) 终端产物可保存到手机下载目录；(b) 注册 `ACTION_SEND`，其他 App 分享文本/图片进来可直接送给 AI | 从相册「分享到 Nexus」可用；终端文件能存到 Download |
-| **F-23.6** | 生物识别 + 安全存储 | 冷启动/回前台需指纹或人脸解锁；JWT 存入 Keystore 加密存储，不再用 `localStorage` | 关闭指纹则无法进入；本地文件里搜不到明文 JWT |
+| **F-23.6** | 生物识别门禁 | 冷启动/回前台需指纹或人脸解锁（允许设备 PIN 回退）；JWT 仍由 WebView 沙箱承载，**v1 不做 Keystore 迁移**（理由见 §10） | 关闭指纹则无法进入；多任务卡片里不泄漏终端内容 |
 | **F-23.7** | 桌面快捷方式 | 长按图标直达指定项目/频道 | 生成的快捷方式点击直达 |
 | **F-23.8** | 安全区与折叠屏适配 | `viewport-fit=cover` + 安全区内边距；展开/合上不重建 Activity、不丢 WS | 刘海/挖孔不挡内容；Fold6 开合 10 次连接不断 |
 
@@ -146,7 +146,7 @@ Nexus 的移动端今天是 **PWA**：`public/manifest.json` + `public/sw.js`，
 
 - **CORS**：服务端当前**完全没有 CORS 配置**（`server.js` 无 `cors` 包、无 ACAO 头）。WebView 有独立 origin，跨源请求必须放行。按项目规范「生产必须列白名单，不许通配符」，用环境变量 `CORS_ORIGINS` 显式列举。
 - **明文流量**：局域网/Tailscale profile 是 `http://`，需要 Android 网络安全配置放行明文。这是个人自托管 App 的已知取舍，**在设置界面显式提示**"该地址未加密"。
-- **Token**：从 `localStorage` 迁到 Keystore 加密存储；`docs` 里已知的"JWT 走 query string 可能进代理日志"问题在 APK 场景不变，但可用生物识别降低设备侧风险。
+- **Token**：v1 加**生物识别门禁**（App 层面锁住），但不做 Keystore 加密存储迁移——见 §10 的理由。已知的"JWT 走 query string 可能进代理日志"问题在 APK 场景不变，属于服务端侧，不在本方案范围。
 - **网络暴露**：§5.1 的多 profile 设计**不改变**服务端暴露面。公网路径仍由现有 Cloudflare Tunnel / Tailscale 承担，Nexus 自身依旧不终止 TLS。
 
 ---
@@ -207,26 +207,37 @@ Nexus 的移动端今天是 **PWA**：`public/manifest.json` + `public/sw.js`，
 - 注意 SPA 兜底 `app.get('*')`（`server.js:1551`）只吃 GET，不干扰 OPTIONS；但中间件仍要注册在静态资源之前。
 - 同步更新 `.env.example`，并在 commit body 里说明新增变量（项目规范要求）。
 
-**改动 2 — `/ws/monitor` 结构化事件流**
+**改动 2 — `/ws/monitor` 结构化事件流（采样 tmux，不碰 PTY 层）**
 
 这是通知能力的**关键设计决策**，先说为什么不能走别的路：
 
 | 备选 | 问题 |
 |---|---|
-| 原生侧轮询现有 `/api/sessions/:id/output` | 该接口返回 `idleMs = now - lastActivity`。**Agent 思考 3 分钟和干完 3 分钟在这个信号上完全一样**，必然误报。而且要先知道窗口列表，轮询成本高、延迟大。 |
-| 原生侧在客户端解析终端字节流猜 | 脆、脏、无法区分「等待输入」和「正在输出」。 |
-| **`/ws/monitor`（选定）** | 服务端本来就持有每个 PTY 的 `clients` 集合和 `lastActivity`（`server.js:1559-1629`）。把结构化事件推给 monitor 订阅者是**几十行**的事，且浏览器端也能受益（可替掉 `TabBar.tsx:52` / `Terminal.tsx:478` 的 3s 轮询）。 |
+| 原生侧轮询现有 `/api/sessions/:id/output` | **该接口在没人附着时直接返回 `{connected:false, output:''}`**（读数来自 `ptyMap`，`server.js:1017-1029`），而 PTY 在最后一个客户端断开 5 分钟后被回收（`server.js:1730-1736`）。手机进后台正是"没人附着"的场景——也就是唯一需要它的场景，接口失效。且 `idleMs = now - lastActivity`，**Agent 思考 3 分钟和干完 3 分钟在这个信号上无法区分**。 |
+| 原生侧解析终端字节流猜 | 脆、脏，且 Kotlin 侧要复刻一套启发式规则，规则改进得跟着发版。 |
+| 在 `ptyMap` 上挂 `monitors` 集合并阻止回收 | 可行但更重：每个被监控的窗口都要永久养一个 `tmux attach` 客户端，且把监控耦合进了 PTY 生命周期（本该无关）。 |
+| **`/ws/monitor` 服务端采样 tmux（选定）** | 服务端在**有 monitor 订阅者时**按 ~2s 周期跑 `tmux list-windows` + 每窗口 `tmux capture-pane -p -S -40`，把结构化状态推给订阅者。**完全不碰 `ptyMap`**，与 PTY 生命周期解耦，且对**从未在 Nexus 里打开过的窗口**同样有效。 |
 
-协议（服务端 → 客户端，JSON，只推事件不推内容）：
+采样版的具体好处：一条连接覆盖所有窗口（功耗 = 一个 keepalive，不是 N 个轮询）；判定逻辑留在服务端，**改启发式不用发 APK**；复用前端已有的 `frontend/src/windowStatus.ts` 规则，不重复造。
 
-| 事件 | 载荷 | 触发点 |
-|---|---|---|
-| `activity` | `{session, window, ts}` | 该窗口有输出字节。按窗口节流（≤1 次 / 250ms） |
-| `idle` | `{session, window, idleMs}` | 该窗口由活动转为静默超过阈值（默认 45s），**每段活动只发一次** |
-| `exit` | `{session, window, reason}` | 窗口关闭 / PTY 退出 |
+协议（服务端 → 客户端，JSON，只推状态不推内容）：
 
-**必须同时解决的一个坑**：PTY 在最后一个客户端断开 5 分钟后会被回收（`server.js:1701-1725`）。如果手机是唯一客户端、进了后台，PTY 死掉就没有输出可观测，通知能力失效。
-→ 解法：monitor 订阅计入一个**独立的 `monitors` 集合**，它 (a) 接收事件、(b) **阻止 PTY 回收**、(c) **不参与尺寸协商**（绝不发 resize，不影响 `clientSizes` 的 last-writer-wins 逻辑）。只监控用户订阅的窗口（默认 = 当前项目的频道），避免为几十个窗口白养 tmux 客户端。
+```json
+{"type":"state","session":"main","window":2,"name":"api",
+ "state":"running|needs_input|finished|shell|exited",
+ "reason":"prompt_detected|quiet|hook|process_exit",
+ "idleMs":9000,"since":1699999999000,"tail":"…最后若干非空行…"}
+```
+
+`reason` 字段从第一天就要留出来：Claude Code 有 `Stop` / `Notification` hooks，而 `nexus-run-claude.sh` 本来就包裹了每个 agent，将来可以注入生成的 `--settings` 让 hook 直接 `tmux set-option -w @nexus_state …`，把启发式升级成**精确信号**（v1.1，不作为 v1 依赖）。
+
+**误报是这里的核心难点**，缓解手段按可信度排序：
+
+1. **滞回 + 更长的静默阈值**。`QUIET_MS` 默认 10s（不是前端那套 4s），静默后才分类。
+2. **内容匹配**：pane 尾部以 `>` / `?` 结尾 → `needs_input`（高置信）；以 `$` / `#` 结尾 → `shell`（任务结束）；其余静默 → `finished`（**低置信**）。
+3. **只对高置信转移发通知**：`needs_input` 立即发；`finished` 需静默超过长阈值（如 120s）才发。这是抗误报最有效的一根杠杆。
+
+延迟与功耗的取舍：2s 采样 + 静默阈值 ⇒ `needs_input` 最坏约 12s 送达。若要亚秒级，后面可换 `tmux -C` 控制模式（单进程流式事件，无轮询），但那是优化路径，不作为起点。
 
 **改动 3 — 无。** 终端 WS 协议、`/api/*` 全部不动。
 
@@ -236,10 +247,15 @@ Nexus 的移动端今天是 **PWA**：`public/manifest.json` + `public/sw.js`，
 
 现状是**没有任何"服务器地址"概念**：约 30 处相对路径 `fetch('/api/...')`，WebSocket 由 `location.host` 拼出（`Terminal.tsx:1485-1507`）。WebView 有自己的 origin，一装上就连不上。
 
-- 新增 `frontend/src/serverBase.ts`：导出 `apiUrl(path)` / `wsUrl(params)` / `getServerBase()` / `setServerBase()`，地址存 `localStorage`。
-- **收敛点而不是逐个改 30 处**：优先在 `fetch` 的调用层做统一包装（新增一个 `apiFetch` 并替换调用点），WS 只改 `Terminal.tsx:1507` 一处构造 + `1485` 的 protocol 推导。
-- **浏览器/PWA 路径零影响**：`getServerBase()` 在无配置时返回 `''`，相对路径行为与今天完全一致。
-- 地址设置界面放在登录页之前（地址必须先于登录存在），复用 `GeneralSettings.tsx` 的样式。
+**好消息：改动面比看上去小得多。** 已核实全前端**只有一个 `new WebSocket`**（`Terminal.tsx:1507`），且约 30 处 `fetch` **全是相对路径字符串**（无 `Request` 对象、无非 `/api` 的相对请求）。因此不需要手改 30 处：
+
+- 新增 `frontend/src/baseUrl.ts`，导出 `apiUrl()` / `wsUrl()` / `getApiBase()` / `getActiveProfile()` / `isNative()`，profile 列表存 `localStorage`（`nexus_profiles` / `nexus_active_profile`）。
+- **零调用点改动**：`installFetchRewrite()` 在 bootstrap 时包一层 `window.fetch`，只对匹配 `^\/(api|workspace)(\/|$|\?)` 的请求前缀 base URL；其余（打包资源等）原样放行。在 `main.tsx` 里于 `createRoot()` **之前**调用。
+- WS 只改一处：`Terminal.tsx:1485,1507` 换成 `wsUrl('/ws?token=…&window=…&session=…')`。
+- **浏览器/PWA 路径零影响**：无激活 profile 时 `getApiBase()` 返回 `''`，`apiUrl` 是恒等函数，行为与今天完全一致——**一个 bundle 同时服务浏览器和 App**。
+- 权衡：包 `window.fetch` 是 monkey-patch，不如显式 `apiFetch()` 干净，但它把 30 处改动压到 1 处；这是刻意的取舍，需要在 `baseUrl.ts` 顶部注释说明原因。
+- 地址设置界面**必须先于登录可达**（登录请求本身就是 profile 定向的）：`App.tsx` 登录页加一个服务器入口；native 且无 profile 时直接显示编辑器而不是登录表单。主编辑器放进 `GeneralSettings.tsx`（Restore 与 About 之间），含增删改、**测试连通性**（请求 `${url}/api/version`，401=可达，200=已认证）、切换。
+- 顺带：30 天 JWT 无刷新、无过期 UI，长时间在后台的 App 迟早会静默 401。在 shim 里加一个最小的 401 处理（清 token、回登录）——直接由"应用常驻"这个新场景导致，见 §6.3 的同类判断。
 
 **改动 B — Service Worker 在 APK 里必须停用**
 
@@ -263,7 +279,7 @@ WebView origin 是安全上下文，`sw.js` 会真的跑起来。它的 cache-fi
 
 | 配置 | 取值 | 理由 |
 |---|---|---|
-| `server.androidScheme` | **`http`** | 默认是 `https`（→ origin `https://localhost`），而 `allowMixedContent` 默认 `false`。**https 页面无法请求 `http://192.168.x.x` / `http://100.x.x.x` 的 profile**——直接判死刑。改成 `http` 后壳 origin 是 `http://localhost`：与 http profile 同 scheme 无混内容问题，同时 `localhost` 仍是安全上下文（clipboard 等可用），且 http 页面请求 https 隧道地址也合法。**这一个配置同时满足三套 profile。** |
+| `server.androidScheme` | **待 M0 现场决策**（见下方专节） | 默认 `https`（→ origin `https://localhost`），此时请求 `http://192.168.x.x` / `http://100.x.x.x` 属混内容，需 `allowMixedContent: true`；改 `http`（→ `http://localhost`）则与 http profile 同 scheme，无混内容问题，且 `localhost` 两种 scheme 都是安全上下文 |
 | `webContentsDebuggingEnabled` | debug 构建开，release 关 | `chrome://inspect` 调试 WebView 的唯一途径 |
 | `configChanges` | 必须含 `orientation\|screenSize\|smallestScreenSize\|screenLayout\|density\|keyboardHidden\|uiMode` | **折叠屏开合 / 软键盘弹出 / 深浅色切换都不能重建 Activity**——重建就等于 WebSocket 断开、终端重排。这是 F-23.8 的技术根因。 |
 | cleartext | 通过 `network_security_config.xml` 放行 | Capacitor 自带的 `cleartext` 选项文档明说"不用于生产"，因此不用它，改走标准网络安全配置 |
@@ -271,39 +287,70 @@ WebView origin 是安全上下文，`sw.js` 会真的跑起来。它的 cache-fi
 | `minSdk` | Capacitor 默认 | 两台测试机远超 |
 | ABI | `arm64-v8a` 单 ABI（release） | 体积减半。debug 额外保留 `x86_64` 以便本机模拟器 |
 
+**M0 必测：混内容与 `ws://`（本方案最大的单一未知）**
+
+`androidScheme` 不是纸面选型，必须真机定夺，因为**两条路各有风险**：
+
+| 路线 | 壳 origin | 优点 | 风险 |
+|---|---|---|---|
+| A. 默认 `https` + `allowMixedContent: true` | `https://localhost` | 用 Capacitor 默认值，不动 storage/cookie 行为 | `allowMixedContent` 文档标注"不用于生产"；且 **`ws://` 是否也被 MIXED_CONTENT_ALWAYS_ALLOW 放行，各 Chromium 版本处理不一致，未经验证** |
+| B. `androidScheme: 'http'` | `http://localhost` | 与局域网/Tailscale 明文 profile 同 scheme，**根本没有混内容问题**；http 页请求 https 隧道地址也合法 | Capacitor 文档不推荐（可能影响 storage/cookie 语义）；未在这两台 ROM 上实测 |
+
+**B 反而是主力场景（明文局域网/VPN）更稳的那条**，因为 `ws://` 从 https 页面发起属于混内容降级，历史上 Chromium 对它比对 `http://` XHR 更严——而混内容规则管的正是 XHR/WebSocket，不是页面里的绝对 URL。
+
+**M0 的验收动作**：两条路线各跑一次「三套 profile 全连 + 终端可交互」，看 `chrome://inspect` 控制台的混内容报错。裁决顺序：
+
+1. B 通 → 用 B。
+2. B 不通 → A。
+3. A/B 都不通（即 `ws://` 被硬拦）→ 退到「所有 profile 必须 TLS」：Tailscale 用 `tailscale serve`、隧道本来就 https、局域网自签证书。**这是唯一会让"局域网明文直连"这个便利性消失的结局，必须早发现。**
+
 ### 6.6 原生能力 → 实现路径
 
 | 能力 | 方案 | 说明 |
 |---|---|---|
-| 前台服务 | **自研 Kotlin** | 用 `specialUse` 类型（Android 16 上 `dataSync` 受 6h/24h 配额限制，`specialUse` **无时限**；App 侧载，不涉及 Play 审核）。持有 monitor WS，收到 `idle` 事件发通知 |
-| 通知 | `@capacitor/local-notifications` + 自研通道 | 需要自建通知渠道、点击意图携带 `session/window` 以便跳转 |
-| 语音识别 | `@capacitor-community/speech-recognition`（候选） | 走原生 `SpeechRecognizer`，**绕开 IME composition**，从根上避开已知的 xterm 双提交缺陷 |
-| 相机 / 相册 | `@capacitor/camera` | 输出上传到现有 `POST /api/files/upload`（multipart → `data/uploads/日期/`），把返回路径注入终端。**复用现有接口，服务端零改动** |
-| 文件保存到手机 | 自研 Kotlin（SAF）或 `@capacitor/filesystem` | Android 11+ 分存储作用域下，写公共下载目录需要 SAF 的 `ACTION_CREATE_DOCUMENT` |
-| 接收系统分享 | 自研 Kotlin | 需在 manifest 注册 `ACTION_SEND`（`text/plain` + `image/*`）的 intent-filter，再桥接给 WebView |
-| 生物识别 | 自研 Kotlin（`BiometricPrompt`） | 倾向自研而非社区插件，因为要和应用解锁状态、Keystore 存储联动 |
-| 安全存储 | Keystore 加密存储 | 替换 `localStorage['nexus_token']` |
-| 桌面快捷方式 | 自研 Kotlin（`ShortcutManagerCompat` + 静态 `shortcuts.xml`） | 无成熟 Capacitor 插件 |
-| 返回键 / 外链 / 剪贴板 | `@capacitor/app` + 自研 | 外链必须出到系统浏览器（`WebLinksAddon` 现在强制 `window.open`，`Terminal.tsx:1012-1016`） |
+| 前台服务 | **自研 Kotlin** `NexusMonitorService` + `NexusMonitorPlugin` | 没有任何插件提供"持有 WS + 跑状态机 + 发通知"这件事。参考壳：`@capawesome-team/capacitor-android-foreground-service` 8.1.0，它只管理服务与常驻通知，socket 仍要自己写。用 `specialUse` 类型（Android 16 上 `dataSync` 受 6h/24h 配额限制且不能从 `BOOT_COMPLETED` 启动；`specialUse` **无时限**；App 侧载，不涉及 Play 审核） |
+| 通知 | `@capacitor/local-notifications` 8.x + 自研渠道 | 需要自建渠道、点击意图携带 `session/window` 以便跳转 |
+| 语音识别 | ⚠ `@capacitor-community/speech-recognition` 7.0.1 **或** 自研 `RecognizerIntent` 插件 | 前者走 Android `SpeechRecognizer`；**但国产 ROM 常常没有 Google 语音引擎，`available()` 可能直接为 false**。自研版调 `RecognizerIntent.ACTION_RECOGNIZE_SPEECH`（系统选择器，用 OEM 自带 ASR）更可移植。**预期自研版才是最终答案，M4 真机定** |
+| 相机 / 相册 | `@capacitor/camera` 8.2.4（官方） | 输出直接喂给 `Terminal.tsx:875` 附近的**现有上传队列** `enqueueFiles`，它已经在调 `POST /api/files/upload`。**复用现有通路，服务端零改动**。优先 `CameraSource.Photos`（系统选择器，免 `CAMERA`/`READ_MEDIA_IMAGES` 权限），仅拍照时申请 `CAMERA` |
+| 文件选择 | `@capawesome/capacitor-file-picker` 8.1.0 | 返回 content URI + base64/dataUrl，同样进现有上传队列 |
+| 文件保存到手机 | **自研 Kotlin** `NexusSafPlugin`（`ACTION_CREATE_DOCUMENT` / `CreateDocument`） | `@capacitor/filesystem` 走的是 app 作用域/legacy 路径，在 Android 11+ 分存储下**不是真 SAF**，写公共目录要 `MANAGE_EXTERNAL_STORAGE`（更糟）。既然 P0 写的是 SAF，就用文档选择器做对 |
+| 接收系统分享 | **自研 Kotlin** `NexusSharePlugin` | 没有在维护的 share-receive 插件（`@capawesome/capacitor-share-target` 在 npm 上 404）。需 `ACTION_SEND` / `ACTION_SEND_MULTIPLE` intent-filter + 自定义 `MainActivity.onNewIntent` |
+| 生物识别 | `@aparajita/capacitor-biometric-auth` 10.0.0 | `verifyIdentity()` 支持设备凭据回退；`@capacitor-community/biometric-auth` 在 npm 上不存在。用一个 React 覆盖层挡在整棵树前面，通过后才渲染 |
+| 安全存储 | **v1 不做**，仍用 `localStorage['nexus_token']` | WebView 的存储本来就沙箱在 app 内；`@capacitor/preferences` **不加密**，等于白搬。真加密要走 Keystore（`EncryptedSharedPreferences`）自研插件 + 认证流程重构。**M0-M3 先靠生物识别门禁，M4 视工时决定是否拆分**，见 §10 |
+| 桌面快捷方式 | `@capawesome/capacitor-app-shortcuts` 8.0.2 | （`android-shortcuts` 已改名，现役包是 `app-shortcuts`）。登录后按项目注册动态快捷方式，`nexus://open?project=…`，用 `@capacitor/app` 的 `appUrlOpen` 接收 |
+| 返回键 / 外链 / 剪贴板 | `@capacitor/app` + 自研 | 外链必须出到系统浏览器（`WebLinksAddon` 现在强制 `window.open`，`Terminal.tsx:1012-1016`），否则会在 WebView 里打开或静默失败 |
 
-> 插件包名为候选，实施时逐个核对与 Capacitor 8 / AGP 版本的兼容性；不兼容的直接降级为自研 Kotlin，路径已在表中给出。
+> 包名与版本号已在 2026-10-02 对过 npm。**Capacitor 各包必须锁在同一 major**——注意 `speech-recognition` 还在 7.x 而 core 是 8.x，这类错位要在各自里程碑里冒烟测一遍。不兼容的直接降级为自研 Kotlin，路径已在表中给出。
+
+自研插件的落点（新建文件）：
+
+```
+android/app/src/main/java/<appId>/
+  NexusMonitorPlugin.kt    // @CapacitorPlugin(name="NexusMonitor"): start({baseUrl,token}) / stop() / getSnapshot()
+  NexusMonitorService.kt   // 前台服务 + OkHttp WebSocket → /ws/monitor + 状态机 + 通知
+  NexusSafPlugin.kt        // saveAs({filename,mime,dataBase64}) → ACTION_CREATE_DOCUMENT
+  NexusSharePlugin.kt      // getPendingShare() / notifyListeners("shareReceived", …)
+  MainActivity.kt          // onCreate / onNewIntent，把 ACTION_SEND 转给 NexusSharePlugin
+  NotificationChannels.kt
+android/app/src/main/res/xml/network_security_config.xml
+```
 
 ### 6.7 通知判定与防打扰
 
-静默判定必须能区分「思考中」和「干完了」。仅靠 `idleMs` 做不到，因此判据是**状态机**：
+判定逻辑在**服务端**（§6.3），Kotlin 侧只做"收到状态转移 → 决定是否通知"，不重复实现启发式。
 
-```
-窗口有输出          → BUSY
-BUSY 且静默 > 45s   → IDLE  → 发通知（每段活动只发一次）
-IDLE 又有输出       → BUSY  （重新武装）
-```
+**必须是边沿触发，不是电平触发**：只在**进入** `needs_input`（高置信，立即发）或 `finished`（需静默超过长阈值，默认 120s）或 `exited` 时通知，**绝不对 `running` 发**。
 
-叠加的抑制规则（避免通知刷屏）：
+抑制规则（防刷屏）：
 
-1. 只对**用户订阅的窗口**发（默认当前项目的频道）。
-2. App 正在前台且该窗口就是当前窗口 → 不发。
-3. 同一窗口距上次通知 < 5 分钟 → 不发。
-4. 阈值 45s 可在设置里调（30s / 45s / 2min）。
+1. 该窗口需先 `running` 满 N 秒才具备 `finished` 通知资格——避免 `ls` 跑 2 秒也弹通知。
+2. 只对**用户订阅的窗口**发（默认当前项目的频道）。
+3. 同窗口冷却：距上次通知 < 5 分钟不发。
+4. **App 在前台时全部抑制**（用 `ProcessLifecycleOwner` 判断）——UI 上已经能看到同样的状态，弹通知是噪音。
+5. 多窗口同时触发 → 合并成一条摘要通知（"2 个 Agent 需要输入"）。
+6. 主开关 + 单窗口静音。
+
+通知内容：项目/窗口名 + 最后一行非空输出摘要；点击经 `nexus://open?project=…&window=…` 深链直达（与桌面快捷方式共用一套管线）。渠道分两条：`nexus_agent`（默认重要性，可被用户静音）与 `nexus_service`（低/最低，前台服务常驻通知）——**用户静音前者不会杀掉后者**。
 
 ### 6.8 国产 ROM 保活
 
@@ -337,26 +384,40 @@ IDLE 又有输出       → BUSY  （重新武装）
 - 仓库是开源的（`librae8226/nexus4cc`），因此：CI 只构建 **debug APK** 作为 artifact；**release APK 由维护者本地签名**后传到 GitHub Release，签名密钥不进 CI secrets。
 - 目前 `.github/` 下没有任何 workflow，需要新建。
 
-**版本同步**（现有规则要求 `package.json` + `frontend/package.json` + git tag 三处一致）
-- 不手工维护第四处：在 `android/app/build.gradle` 里**读 `../package.json` 的 version 生成 `versionName`**，`versionCode` 取 `git rev-list --count HEAD`（单调递增）。
-- 这样 `android/` 无需人工改动，现有发布流程（`docs/CLAUDE.md` 版本管理节）保持不变，只需在文档表格里补一行说明"Android 自动跟随"。
+**签名**（续）
+- 生成 `android/keystore/nexus-release.jks`，口令放 `android/keystore.properties`，**两者都进 `.gitignore`**；`android/app/build.gradle` 在文件存在时加载并配 `signingConfig`。密钥丢了就再也无法更新已安装的 App，必须仓外备份。
+- `.gitignore` 追加：`android/.gradle/`、`android/build/`、`android/app/build/`、`android/app/release/`、`android/local.properties`、`android/keystore/`、`android/keystore.properties`、`**/*.jks`、`**/*.keystore`。
+
+**版本同步**（现有规则：git tag 是唯一事实源，`package.json` + `frontend/package.json` 必须同步）
+- **Android 不做第四处手工维护，而是派生消费**。`android/app/build.gradle`：
+  ```gradle
+  def pkg = new groovy.json.JsonSlurper().parseText(file('../../package.json').text)
+  def (maj, min, pat) = pkg.version.tokenize('.').collect { it as int }
+  android { defaultConfig {
+    versionName pkg.version
+    versionCode maj * 10000 + min * 100 + pat   // 4.8.6 -> 40806
+  } }
+  ```
+- 于是现有发布流程（改两个 `package.json` → commit → tag）**自动产出正确版本的 APK**，不新增手工步骤。⚠ 预发布后缀（`4.9.0-rc1`）会让 `as int` 抛错，若将来要用需加保护。
+- `CLAUDE.md` 的版本管理表补一行说明「Android 自动派生」，`docs/PRD.md` / `docs/ROADMAP.md` 补新交付渠道。
 
 ---
 
 ## 7. 里程碑
 
-**排序原则：先退掉最大的未知。** M0 就打通「WebView + CORS + base-URL」这条全链路——它要是走不通，后面所有原生能力都是空中楼阁。
+**排序原则：先退掉最大的未知，再谈功能。** 两个未知最贵——混内容/`ws://` 能否走通（决定整个网络方案），以及国产 ROM 是否允许前台服务存活（决定通知功能存不存在）。两者都用最小成本先测，测完再投入。
 
 | 里程碑 | 内容 | 真机可演示的产物 |
 |---|---|---|
-| **M0 骨架** ⭐ | Docker 构建环境；`npx cap add android`；base-URL 抽象 + profile 设置页；服务端 CORS；SW 停用；`androidScheme: 'http'` | **能装、能登录、能连、终端可交互的 debug APK**。风险最大，价值也最大 |
-| **M1 适配** | 安全区；返回键；外链出浏览器；剪贴板；折叠屏 `configChanges`；`matchMedia` 收敛；两台真机各跑一遍 | 体验上"像个正常 App"的 APK |
-| **M2 通知** | 服务端 `/ws/monitor` + `monitors` 集合；原生前台服务；通知渠道；点击跳转；设置项 | **锁屏收通知**——App 存在的核心理由 |
-| **M3 输入** | 语音识别；相机/相册；SAF 保存；`ACTION_SEND` 接收 | 走路/拍照/分享三条链路可用 |
-| **M4 安全** | 生物识别解锁；Keystore 加密存储；桌面快捷方式 | token 不再明文落盘 |
-| **M5 发布** | 签名；版本自动同步；CI debug 构建；README/QUICKSTART/ROM 引导页；GitHub Release | 可交付的 v1 APK |
+| **M0 全链路裁决** ⭐ | Docker SDK 镜像；`cap init` + `cap add android`；服务端 CORS 中间件；SW 停用；profile 先硬编码；**三套 profile × 两种 `androidScheme` 实测**（§6.5） | **能登录、能看到 tmux 终端、能敲键**的 debug APK。**本方案风险最高的一步** |
+| **M1 保活风险探针** ⭐ | 一个最小 `NexusMonitorService`：持有长连接，每 10 分钟发一条哑通知。跑一遍 §8 的杀后台矩阵 | 是否需要"省电模式"、以及 FGS 到底能不能活下来**的实测答案**。**在写监控逻辑之前先知道这个** |
+| **M2 多 profile + 适配** | `baseUrl.ts` shim；登录页服务器入口；`GeneralSettings` 编辑器；安全区 + `viewport-fit: cover`；返回键/外链/剪贴板；折叠屏 `configChanges` 实测 | 不重新构建就能在局域网↔Tailscale↔隧道之间切；折叠屏开合不断连 |
+| **M3 原生 I/O** | 相机/相册 → 现有上传队列；SAF 保存；`ACTION_SEND` 接收 | 从系统相册「分享到 Nexus」→ 上传 → 路径出现在终端 |
+| **M4 语音 / 门禁 / 入口** | 语音识别（先试社区插件，不行就自研）；生物识别覆盖层；桌面快捷方式 | 说一句话进终端；没指纹进不去；长按图标直达项目 |
+| **M5 监控与真通知** | 服务端 `/ws/monitor` tmux 采样 + 状态机；通知渠道；防刷屏；深链 | 切后台跑任务，**在需要输入时收到通知**并点击直达 |
+| **M6 保活引导 + 发布** | ROM 引导页与 intent 跳转；签名；版本派生；CI debug 构建；README/QUICKSTART；GitHub Release | 两机过夜存活 + 从 tag 可复现地产出签名 APK |
 
-每个里程碑独立提交、独立可演示，不攒大版本。
+每个里程碑独立提交、独立可演示。M1 是刻意插在 M2 之前的"廉价探针"——它不含任何产品功能，但它的结论会决定 M5 怎么做。
 
 ---
 
@@ -379,7 +440,7 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 | F-23.3 语音 | 中文口述含标点的句子，检查终端内容无重复字（对照已知的 xterm 双提交缺陷） |
 | F-23.4 相机 | 拍照 → 计时直到路径出现在终端；服务端确认 `data/uploads/今天/` 有文件 |
 | F-23.5 分享/SAF | 从相册「分享到 Nexus」；在终端 `ls` 一个大文件后保存到 Download |
-| F-23.6 生物识别 | 关闭指纹验证进不去；`adb shell run-as <pkg> grep -r "eyJ" .` 应搜不到 JWT 明文 |
+| F-23.6 生物识别 | 关闭指纹验证进不去；指纹与 PIN 回退两条路都试；验证覆盖层不能一闪而过（要挡住首帧内容） |
 | F-23.7 快捷方式 | 长按图标 → 点快捷方式 → 直达指定项目 |
 | F-23.8 折叠屏 | X Fold6 开合 10 次，全程 WS 不断（`adb logcat` 确认无 Activity 重建）；刘海区域无遮挡 |
 
@@ -395,13 +456,20 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 
 | # | 风险 | 概率 | 影响 | 对策 |
 |---|---|---|---|---|
-| R1 | **国产 ROM 保活失败**，通知不可靠 | 高 | 高（核心价值受损） | 代码层做满 + 引导页 + 微信通道兜底（§6.8） |
-| R2 | `androidScheme: 'http'` 或 CORS 组合在某台机器上不通 | 中 | 高（阻断 M0） | **M0 第一个验证**，不通过则回退 `https` 壳 + 要求所有 profile 走 TLS |
-| R3 | WebView 里 xterm 的 IME / 语音行为与 Chrome 有差异 | 中 | 中 | 已有 `mobileInput.ts` 三重守卫；语音改走原生识别，绕开 IME 通路 |
-| R4 | Capacitor 8 与某些插件版本不兼容 | 中 | 中 | 不兼容即降级为自研 Kotlin（§6.6 已给路径），不影响架构 |
-| R5 | 折叠屏开合重建 Activity 丢连接 | 中 | 中 | `configChanges` 显式声明 + 真机开合测试作为验收项 |
-| R6 | 构建工具链进不去（无 SDK/Gradle） | 低 | 中 | Docker 镜像化，M0 第一件事就是把它跑通 |
-| R7 | 后台常驻功耗超预期 | 低 | 中 | 单连接 + 事件驱动，无轮询；`dumpsys batterystats` 实测 |
+| R1 | **`ws://` 明文 WebSocket 被混内容策略拦住** | 中 | 高（可能逼所有 profile 上 TLS） | **M0 用两种 `androidScheme` 各测一次**（§6.5）。退路：`androidScheme:'http'` → 全 profile TLS（Tailscale `tailscale serve` / 隧道 / 自签）|
+| R2 | **国产 ROM 保活失败**，通知不可靠 | 高 | 高（核心价值受损） | **M1 独立探针先测**，不留到 M5；代码层做满 + 引导页 + 微信通道兜底（§6.8） |
+| R3 | **vivo/OPPO 无 Google 语音引擎**，社区插件直接不可用 | 高 | 中 | 预期自研 `RecognizerIntent` 插件才是最终形态（§6.6）；终极兜底是键盘自带的语音听写，它本来就能通过隐藏 textarea 工作 |
+| R4 | WebView 里 xterm 的 IME 行为与 Chrome 有差异 | 中 | 中 | 已有 `mobileInput.ts` 三重守卫，且双提交守卫被 `innerWidth >= 1024` 限死、手机上不生效；语音改走原生识别绕开 IME 通路 |
+| R5 | 折叠屏开合重建 Activity 丢连接 | 中 | 中 | `cap add android` 后**核对**生成的 `configChanges` 是否含 `screenSize\|smallestScreenSize\|screenLayout\|keyboardHidden\|keyboard`，缺则补；真机开合 10 次作为验收项 |
+| R6 | Capacitor 各包版本错位（core 8.x vs speech 7.x 等） | 中 | 中 | 锁同一 major；每个插件在所属里程碑冒烟测；不兼容即降级自研 Kotlin（§6.6 已给路径） |
+| R7 | 服务端启发式误报（把"思考中"当"干完了"） | 中 | 中 | 滞回 + 内容匹配 + **只对高置信转移通知**；`reason` 字段预留，v1.1 接 Claude Code hooks 拿精确信号（§6.3） |
+| R8 | 构建工具链进不去（无 SDK/Gradle/adb） | 低 | 中 | Docker 镜像化，M0 第一件事；主机只留 `android-tools-adb` |
+| R9 | 后台常驻功耗超预期 | 低 | 中 | 单连接 + 服务端采样（无 N 路轮询）；提供"省电模式"降级为 30-60s 间隔拉取；`dumpsys batterystats` 实测 |
+
+**两个诚实的边界**（写进文档，别让未来的自己以为是 bug）：
+
+- `am force-stop` / 「强制停止」之后，**任何 App 都无法自启**，这不是缺陷。
+- 息屏深度 Doze 下 FGS 的网络是否受限，未在 OriginOS 6 / ColorOS 16 实测——列为 M1/M6 的测量项，不是假设。
 
 **退路**：若 Capacitor 在某处硬伤且无法绕过，**换壳成本可控**——`frontend/dist` 产物和 base-URL 抽象层完全复用，只需用裸 Kotlin + WebView 重写桥接层。这是选 Capacitor 时保留的期权。
 
@@ -417,6 +485,10 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 - FCM 推送、OTA 自更新
 - 平板/横屏专属布局
 - 传感器、定位、NFC、短信
+- **Keystore 加密存储迁移**。WebView 的存储本来就沙箱在 app 私有目录内；`@capacitor/preferences` 不加密等于白搬，真加密要走 `EncryptedSharedPreferences` 自研插件 + 认证流程重构。**收益是「拿到已 root/已解锁设备的人更难提取 token」，成本是一个插件加一轮认证改造**。v1 用生物识别门禁挡住绝大多数场景，这条留到 M4 视工时决定是否拆出。
+- **把遗留的 `window.resize` 监听改成 `matchMedia`**（`SessionManager.tsx`、`WorkspaceSelector.tsx`、`Toolbar.tsx`、`SessionFAB.tsx`）。`Terminal.tsx` 已经用 `matchMedia` 规避了折叠屏 resize 不可靠的问题，这几个是 lazy 加载的遗留面板——**只在折叠屏实测确实出问题时才改**，否则是无谓改动。
+- **Claude Code hooks 精确状态**（§6.3 的 `reason: "hook"`）。协议字段现在就留，实现放 v1.1。
+- **401 / token 刷新 UX**。v1 复用现有的重连失败提示即可。
 
 ---
 
@@ -428,5 +500,8 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 | 2026-10-02 | 壳框架 | Capacitor（Android only），否决 Tauri / 裸 Kotlin / Flutter / TWA |
 | 2026-10-02 | 网络路径 | 多 profile 可切换，覆盖局域网 / Tailscale / Cloudflare Tunnel |
 | 2026-10-02 | v1 能力范围 | 四类全要：后台常驻+通知、语音、相机/相册+SAF+分享、生物识别+快捷方式 |
-| 2026-10-02 | 通知实现 | 新增 `/ws/monitor` 事件流 + 原生前台服务；否决客户端轮询与字节流猜测 |
-| 2026-10-02 | Android 工程位置 | 本仓 `android/`，版本号读 `package.json` 自动跟随 git tag |
+| 2026-10-02 | 通知实现 | 新增 `/ws/monitor`，**服务端采样 tmux**（非挂 `ptyMap`）+ 原生前台服务；否决客户端轮询 `/api/sessions/:id/output`（无人附着时该接口失效）与客户端字节流猜测 |
+| 2026-10-02 | `androidScheme` | **不在文档里拍板**，M0 两种方案真机裁决（`ws://` 混内容行为未经验证） |
+| 2026-10-02 | Token 安全 | v1 做生物识别门禁，**不做 Keystore 存储迁移**（§10） |
+| 2026-10-02 | Android 工程位置 | 本仓 `android/`，`versionName`/`versionCode` 从 `package.json` 派生，无需手工维护 |
+| 2026-10-02 | 里程碑排序 | M0 全链路裁决 → **M1 前台服务保活探针**（先于一切功能）→ M2…M6 |
