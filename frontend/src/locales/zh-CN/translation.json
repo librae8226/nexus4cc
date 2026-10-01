@@ -19,6 +19,23 @@
     "yesterday": "昨天",
     "noData": "暂无数据"
   },
+  "server": {
+    "title": "服务器",
+    "entry": "服务器",
+    "sectionTitle": "服务端地址",
+    "sectionDesc": "Nexus 后端的地址。浏览器里与本页同源，无需配置。",
+    "empty": "尚未配置服务器",
+    "namePlaceholder": "名称（如「家里局域网」）",
+    "urlPlaceholder": "地址（如 192.168.3.21:59000）",
+    "add": "添加服务器",
+    "save": "保存",
+    "use": "使用",
+    "active": "使用中",
+    "invalidUrl": "地址无效",
+    "plaintext": "未加密",
+    "plaintextHint": "该地址使用 http 明文传输，仅在局域网 / VPN 内使用",
+    "deleteConfirm": "删除这个服务器地址？"
+  },
   "login": {
     "title": "Nexus",
     "subtitle": "AI Agent 终端面板",

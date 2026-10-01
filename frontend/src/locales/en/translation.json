@@ -19,6 +19,23 @@
     "yesterday": "Yesterday",
     "noData": "No data"
   },
+  "server": {
+    "title": "Server",
+    "entry": "Server",
+    "sectionTitle": "Server address",
+    "sectionDesc": "Address of the Nexus backend. In a browser it is this page's own origin, so there is nothing to configure.",
+    "empty": "No server configured",
+    "namePlaceholder": "Name (e.g. Home LAN)",
+    "urlPlaceholder": "Address (e.g. 192.168.3.21:59000)",
+    "add": "Add server",
+    "save": "Save",
+    "use": "Use",
+    "active": "In use",
+    "invalidUrl": "Invalid address",
+    "plaintext": "Unencrypted",
+    "plaintextHint": "This address uses plaintext http — only reachable over LAN / VPN",
+    "deleteConfirm": "Delete this server address?"
+  },
   "login": {
     "title": "Nexus",
     "subtitle": "AI Agent Terminal Panel",

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { Icon } from './icons'
+import { apiUrl } from './baseUrl'
 
 interface FileEntry {
   name: string
@@ -599,8 +600,10 @@ const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function Work
     if (!currentPath || !workspaceRoot) return ''
 
     const filePath = currentPath.endsWith('/') ? `${currentPath}${name}` : `${currentPath}/${name}`
-    // 统一使用 /workspace?path=xxx 格式，避免不同路径格式问题
-    return `/workspace?path=${encodeURIComponent(filePath)}&token=${encodeURIComponent(token)}`
+    // 统一使用 /workspace?path=xxx 格式，避免不同路径格式问题。
+    // 这个值会进 <a href>，不是 fetch，所以 window.fetch 的改写覆盖不到它 ——
+    // 必须显式过 apiUrl()，否则在 APK 里会解析成 http://localhost/workspace?…
+    return apiUrl(`/workspace?path=${encodeURIComponent(filePath)}&token=${encodeURIComponent(token)}`)
   }
 
   // 打开文件（查看）

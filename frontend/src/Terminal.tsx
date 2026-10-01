@@ -12,6 +12,7 @@ import SessionFAB from './SessionFAB'
 import GhostShield from './GhostShield'
 import { Icon } from './icons'
 import { getWindowStatus, STATUS_DOT_COLOR, STATUS_DOT_TITLE } from './windowStatus'
+import { wsUrl } from './baseUrl'
 
 // ANSI 256-color palette (0-15 standard, 16-231 6x6x6 cube, 232-255 grayscale)
 const ANSI256: string[] = (() => {
@@ -1482,8 +1483,6 @@ export default function Terminal({ token }: Props) {
     userScrolledRef.current = hasSavedScroll
     hasConnectedRef.current = false
 
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-
     // 延迟显示 loading，避免快速连接时的闪烁
     const loadingTimer = setTimeout(() => {
       if (!hasConnectedRef.current) setIsConnecting(true)
@@ -1504,7 +1503,10 @@ export default function Terminal({ token }: Props) {
     function createWs(isReconnect = false) {
       const s = activeTmuxSessionRef.current
       const wi = activeWindowIndexRef.current
-      const newWs = new WebSocket(`${protocol}//${location.host}/ws?token=${encodeURIComponent(token)}&window=${wi}&session=${encodeURIComponent(s)}`)
+      // 全前端唯一一处 WebSocket 构造。wsUrl() 在浏览器里等价于
+      // `${protocol}//${location.host}${path}`，在 APK 里换成 profile 指向的
+      // 服务端（http→ws / https→wss）。
+      const newWs = new WebSocket(wsUrl(`/ws?token=${encodeURIComponent(token)}&window=${wi}&session=${encodeURIComponent(s)}`))
       wsRef.current = newWs
 
       newWs.onopen = () => {

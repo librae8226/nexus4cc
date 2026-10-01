@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import Terminal from './Terminal'
+import ServerSettings from './ServerSettings'
+import { getApiBase, isNative } from './baseUrl'
 
 const STORAGE_KEY = 'nexus_token'
 
@@ -10,13 +12,6 @@ export default function App() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    // 注册 Service Worker
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {})
-    }
-  }, [])
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -65,6 +60,10 @@ export default function App() {
             {loading ? t('login.loggingIn') : t('login.loginButton')}
           </button>
         </form>
+        {/* 登录请求本身就要发给某个服务器地址，所以地址配置必须先于登录可达。
+            APK 首次启动（native 且无 profile）时直接展开，别让人对着必然失败的
+            登录框猜。浏览器里默认折叠，无 profile 时行为与改造前一致。 */}
+        <ServerSettings defaultOpen={isNative() && !getApiBase()} />
       </div>
     </div>
   )
