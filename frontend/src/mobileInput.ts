@@ -98,3 +98,51 @@ export function mapSpecialKey(
   // Let them flow to onChange → handleInputChange (guarded by isComposingRef).
   return null
 }
+
+/**
+ * The KeyboardEvent fields shouldHandleKeyNatively needs. Structural rather than
+ * a DOM type so the decision stays testable outside a browser.
+ */
+export interface KeyHandlerInput {
+  isComposing: boolean
+  keyCode: number
+  key: string
+  ctrlKey: boolean
+  altKey: boolean
+  metaKey: boolean
+}
+
+/**
+ * Desktop (viewport ≥1024px) decision for xterm's attachCustomKeyEventHandler.
+ *
+ * true  → let xterm handle it natively (hidden textarea → term.onData)
+ * false → leave it to Nexus's global keydown handler (special keys, Ctrl combos)
+ *
+ * Order matters: each early `true` keeps that key on xterm's native path.
+ */
+export function shouldHandleKeyNatively(e: KeyHandlerInput): boolean {
+  // Composition in progress — xterm's CompositionHelper owns the whole sequence.
+  if (e.isComposing) return true
+
+  // IME commit key (keyCode 229 / key='Process') must NOT be swallowed.
+  //
+  // Returning false here makes xterm's _keyDown bail before
+  // _compositionHelper.keydown() → _handleAnyTextareaChanges(), the only path
+  // that recovers text committed *without* composition events. The main
+  // _inputEvent path is blocked at that same moment (composed=true while
+  // _keyDownSeen is still true), so the commit is dropped with no way back.
+  //
+  // Composition-based IMEs never reach here — they report isComposing=true for
+  // the entire sequence and return above. This only affects IMEs that commit
+  // directly: fcitx5-vinput and other voice input methods, WeChat voice, etc.
+  if (e.keyCode === 229) return true
+
+  // Printable char, no modifiers: xterm's textarea → term.onData.
+  if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) return true
+
+  // Paste: let the browser's native paste event reach xterm's onData.
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') return true
+
+  // Arrows, Enter, Tab, Ctrl combos, …: Nexus's global handler.
+  return false
+}
