@@ -83,6 +83,178 @@ function saveState(patch) {
   try { fs.chmodSync(STATE_FILE, 0o600) } catch { /* ignore */ }
 }
 
+// ─── 微信媒体（图片/语音/文件/视频）─────────────────────────────────────
+// 入站媒体一律是「CDN 直链 + AES key」两段式，落盘前要下载并解密。
+// 官方无文档，模式/IV 靠实测候选 + md5 校验确定，见 decryptMedia。
+const INBOX_DIR = path.join(DATA_DIR, 'inbox')
+/** 媒体 CDN 根；full_url 缺失时用它 + encrypt_query_param 拼下载地址 */
+const CDN_BASE = 'https://novac2c.cdn.weixin.qq.com/c2c'
+
+/** media.aes_key 是 base64(32 位 hex 字符串)；image_item.aeskey 是同一串明文 */
+function decodeAesKey(aesKey) {
+  if (!aesKey) return null
+  const s = String(aesKey)
+  const raw = Buffer.from(s, 'base64').toString('utf-8')
+  const hex = /^[0-9a-f]{32}$/i.test(raw) ? raw : s
+  return /^[0-9a-f]{32}$/i.test(hex) ? Buffer.from(hex, 'hex') : null
+}
+
+const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff])
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47])
+const looksImage = (b) => b.subarray(0, 3).equals(JPEG_MAGIC) || b.subarray(0, 4).equals(PNG_MAGIC)
+
+/** 按 magic bytes 猜扩展名；无把握返回 null（不硬编后缀，避免误导 agent） */
+function sniffExt(b) {
+  if (b.subarray(0, 3).equals(JPEG_MAGIC)) return '.jpg'
+  if (b.subarray(0, 4).equals(PNG_MAGIC)) return '.png'
+  if (b.subarray(0, 4).toString('latin1') === 'GIF8') return '.gif'
+  if (b.subarray(0, 4).equals(Buffer.from([0x52, 0x49, 0x46, 0x46]))) return '.webp'
+  if (b.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]))) return '.zip'
+  if (b.subarray(0, 12).toString('latin1').includes('ftyp')) return '.mp4'
+  if (b.subarray(0, 9).toString('latin1').includes('SILK')) return '.silk'
+  if (b.subarray(0, 5).toString('latin1') === '#!AMR') return '.amr'
+  if (b.subarray(0, 3).toString('latin1') === 'ID3') return '.mp3'
+  return null
+}
+
+/**
+ * 解密微信 CDN 媒体。候选模式依次尝试，用 verify（md5 或 magic bytes）判定命中；
+ * verify 为 null 时（如语音/视频，消息里不带 md5）取第一个能解出的候选。
+ *
+ * 2026-10-01 实测：xlsx / 语音 / 图片三类均命中 aes-128-ecb，且解密后 md5 与
+ * file_item.md5 逐字节相符；CBC 的两种 IV 均 bad decrypt，故 ECB 放第一位。
+ */
+function decryptMedia(enc, key, verify) {
+  if (verify && verify(enc)) return { buf: enc, mode: 'plain（CDN 未加密）' }
+  const modes = [
+    { name: 'aes-128-ecb', alg: 'aes-128-ecb', iv: null },
+    { name: 'aes-128-cbc/iv=key', alg: 'aes-128-cbc', iv: key },
+    { name: 'aes-128-cbc/iv=0', alg: 'aes-128-cbc', iv: Buffer.alloc(16) },
+  ]
+  const tried = []
+  for (const m of modes) {
+    try {
+      const d = crypto.createDecipheriv(m.alg, key, m.iv)
+      const out = Buffer.concat([d.update(enc), d.final()])
+      if (!verify || verify(out)) return { buf: out, mode: m.name }
+      tried.push(`${m.name}: 校验不符`)
+    } catch (e) { tried.push(`${m.name}: ${e.message}`) }
+  }
+  throw new Error(`解密失败（${tried.join('; ')}）`)
+}
+
+/** 同名文件不覆盖，追加 -1/-2… */
+function uniquePath(dir, name) {
+  const base = path.basename(String(name || 'file')).replace(/[\/\\\0]/g, '_').replace(/^\.+/, '_').slice(0, 120)
+  let file = path.join(dir, base || 'file')
+  for (let n = 1; fs.existsSync(file); n++) {
+    const ext = path.extname(base)
+    file = path.join(dir, `${path.basename(base, ext)}-${n}${ext}`)
+  }
+  return file
+}
+
+/** 下载 → 解密 → 落盘。返回 { path } 或 { note } 说明失败原因 */
+async function saveMedia(media, { name, md5, kind, mid, aeskey }) {
+  // 官方实现优先用 image_item.aeskey（明文 hex），其次 media.aes_key（base64）
+  const url = media?.full_url || (media?.encrypt_query_param
+    ? `${CDN_BASE}/download?encrypted_query_param=${media.encrypt_query_param}`
+    : null)
+  if (!url) return { path: null, note: '消息里既无 full_url 也无 encrypt_query_param' }
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 30_000)
+  let enc
+  try {
+    const res = await fetch(url, { signal: ctrl.signal })
+    if (!res.ok) return { path: null, note: `下载 HTTP ${res.status}` }
+    enc = Buffer.from(await res.arrayBuffer())
+  } catch (e) {
+    return { path: null, note: `下载异常 ${e.message}` }
+  } finally { clearTimeout(timer) }
+
+  const key = decodeAesKey(aeskey ?? media.aes_key)
+  // 校验器：文件有 md5；图片无 md5 但可验 magic bytes；语音/视频两者皆无 → null（信任 ECB 首个候选）
+  const verify = md5
+    ? (b) => crypto.createHash('md5').update(b).digest('hex') === md5
+    : kind === 'image' ? looksImage : null
+  let out = enc
+  let mode = 'plain（无 key）'
+  if (key) {
+    try {
+      const r = decryptMedia(enc, key, verify)
+      out = r.buf
+      mode = r.mode
+    } catch (e) {
+      return { path: null, note: `${e.message}（${enc.length} 字节密文，未落盘）` }
+    }
+  } else if (verify && !verify(enc)) {
+    return { path: null, note: '缺少 aes_key 且校验不符，未落盘' }
+  }
+  if (verify && !verify(out)) return { path: null, note: `落盘前校验失败，已放弃` }
+
+  const dir = path.join(INBOX_DIR, new Date().toISOString().slice(0, 10))
+  fs.mkdirSync(dir, { recursive: true })
+  // 调用方给的名字已带扩展名就照用（文件类）；否则按内容嗅探，嗅不出就不加
+  const base = name || `${kind}-${mid}`
+  const file = uniquePath(dir, path.extname(base) ? base : `${base}${sniffExt(out) ?? ''}`)
+  fs.writeFileSync(file, out)
+  return { path: file, note: `${out.length} 字节，${mode}` }
+}
+
+/**
+ * 把一条微信消息的 item_list 转成 agent 能读的文本。
+ * 媒体一律落盘并把本地路径交给 agent（agent 有完整 Bash/读文件权限，可自行处理）。
+ */
+async function describeItems(items, { mid }) {
+  const parts = []
+  for (const it of items) {
+    try {
+      if (it.type === 1) {
+        if (it.text_item?.text) parts.push(it.text_item.text)
+      } else if (it.type === 3) {
+        const v = it.voice_item ?? {}
+        const secs = v.playtime ? (v.playtime / 1000).toFixed(1) : '?'
+        if (v.text) { parts.push(`[语音 ${secs}s] ${v.text}`); continue }
+        const saved = await saveMedia(v.media, { name: `voice-${mid}`, kind: 'voice', mid })
+        parts.push(saved.path
+          ? `[语音 ${secs}s] 微信未给出转写文本；音频已保存到 ${saved.path}（SILK 编码，需转码才能直接播放）`
+          : `[语音 ${secs}s] 读取失败：${saved.note}`)
+      } else if (it.type === 4) {
+        const f = it.file_item ?? {}
+        const saved = await saveMedia(f.media, { name: f.file_name, md5: f.md5, kind: 'file', mid })
+        parts.push(saved.path
+          ? `[微信文件] ${f.file_name || '(未命名)'}（${f.len ?? '?'} 字节）已保存到 ${saved.path}`
+          : `[微信文件] ${f.file_name || '(未命名)'} 处理失败：${saved.note}`)
+      } else if (it.type === 2) {
+        const img = it.image_item ?? {}
+        const saved = await saveMedia(img.media, {
+          name: `image-${mid}`, kind: 'image', mid,
+          // 官方实现优先用 image_item.aeskey（明文 hex），其次 media.aes_key（base64）
+          aeskey: img.aeskey,
+        })
+        parts.push(saved.path
+          ? `[微信图片] 已保存到 ${saved.path}`
+          : `[微信图片] 处理失败：${saved.note}`)
+      } else if (it.type === 5) {
+        const vid = it.video_item ?? {}
+        const secs = vid.play_length ? ` ${(vid.play_length / 1000).toFixed(1)}s` : ''
+        const saved = await saveMedia(vid.media, {
+          name: `video-${mid}`, kind: 'video', mid,
+          md5: vid.video_md5,
+        })
+        parts.push(saved.path
+          ? `[微信视频${secs}] 已保存到 ${saved.path}`
+          : `[微信视频${secs}] 处理失败：${saved.note}`)
+      } else {
+        parts.push(`[未支持的消息类型 type=${it.type}]`)
+      }
+    } catch (e) {
+      parts.push(`[类型 ${it.type} 处理异常: ${e.message}]`)
+    }
+  }
+  return parts.filter(Boolean).join('\n')
+}
+
 // ─── profile → env ───────────────────────────────────────────────────────
 // 与 nexus-run-claude.sh:62-121 保持一致，改一处必须改两处。
 // 注意：模型别名仅在第三方 API（有 BASE_URL）时映射，Anthropic 官方留给 /model 控制。
@@ -417,7 +589,10 @@ async function main() {
     const rawIds = extractMessageIds(res.text)
 
     for (const [i, msg] of (res.json.msgs ?? []).entries()) {
-      if (msg.message_type !== 1) continue
+      if (msg.message_type !== 1) {
+        emit(`(跳过 message_type=${msg.message_type} 的消息 from=${msg.from_user_id})`)
+        continue
+      }
 
       const from = msg.from_user_id
       const ctx = msg.context_token
@@ -431,8 +606,12 @@ async function main() {
         continue
       }
 
-      const text = (msg.item_list ?? []).find((x) => x.type === 1)?.text_item?.text
-      if (!text) { emit(`(忽略非文本消息 from=${from})`); seen.add(mid); continue }
+      const text = await describeItems(msg.item_list ?? [], { mid })
+      if (!text) {
+        emit(`(空消息，已忽略 from=${from})`)
+        seen.add(mid)
+        continue
+      }
 
       emit('─'.repeat(64))
       emit(`📩 微信消息  from=${from}`)
@@ -467,7 +646,15 @@ async function main() {
   }
 }
 
-main().catch((e) => {
-  emit(`Fatal: ${e.stack || e.message}`)
-  process.exit(1)
-})
+// 默认启动长轮询；仅单测 import 时用 WECHAT_NO_MAIN=1 跳过。
+// 不要用 process.argv[1] 判定「是否直接执行」——pm2 经 ProcessContainerFork.js 加载本文件，
+// argv[1] 是 pm2 的包装器路径而非本文件，判定会为 false，导致通道静默不启动（实测踩过）。
+if (process.env.WECHAT_NO_MAIN !== '1') {
+  main().catch((e) => {
+    emit(`Fatal: ${e.stack || e.message}`)
+    process.exit(1)
+  })
+}
+
+export { describeItems, saveMedia, decryptMedia, decodeAesKey, loadState }
+
