@@ -10,6 +10,7 @@ import '@xterm/xterm/css/xterm.css'
 import Toolbar from './Toolbar'
 import SessionFAB from './SessionFAB'
 import GhostShield from './GhostShield'
+import { SettingsMenu, ServerPanel } from './SettingsMenu'
 import { Icon } from './icons'
 import { getWindowStatus, STATUS_DOT_COLOR, STATUS_DOT_TITLE } from './windowStatus'
 import { wsUrl } from './baseUrl'
@@ -216,6 +217,10 @@ export default function Terminal({ token }: Props) {
   const [activeWindowIndex, setActiveWindowIndex] = useState(() => parseInt(localStorage.getItem(WINDOW_KEY) || '0', 10))
   const [showSettings, setShowSettings] = useState(false)
   const [showGeneralSettings, setShowGeneralSettings] = useState(false)
+  // 齿轮点开后先出这个两项菜单（设置 / 服务器），而不是直接进设置面板。
+  // 设置面板已经长到一屏放不下，再把服务器切换塞进去会让「设置」本身变难用。
+  const [showSettingsMenu, setShowSettingsMenu] = useState(false)
+  const [showServerPanel, setShowServerPanel] = useState(false)
   const [showSessionManagerV2, setShowSessionManagerV2] = useState(false)
   const [showNewSession, setShowNewSession] = useState(false)
   const [showNewWindow, setShowNewWindow] = useState(false)
@@ -1710,7 +1715,7 @@ export default function Terminal({ token }: Props) {
 
   // Overlay guard: when any overlay opens, set xterm textarea to readOnly
   // to prevent virtual keyboard from appearing when keyboard dismisses
-  const anyOverlayOpen = showSessionDrawer || showSettings || showGeneralSettings || showNewSession || showNewWindow || showScrollback || showSessionManagerV2 || showFiles
+  const anyOverlayOpen = showSessionDrawer || showSettings || showGeneralSettings || showSettingsMenu || showServerPanel || showNewSession || showNewWindow || showScrollback || showSessionManagerV2 || showFiles
   useEffect(() => {
     if (isWidePC) return
     const ta = termRef.current?.textarea
@@ -1801,6 +1806,8 @@ export default function Terminal({ token }: Props) {
     themeMode,
     onToggleTheme: toggleTheme,
     onOpenSettings: () => setShowGeneralSettings(true),
+    onOpenGearMenu: () => setShowSettingsMenu(true),
+    onOpenServerSwitch: () => setShowServerPanel(true),
     onOpenFiles: () => setShowFiles(true),
     onOpenWorkspace: () => { if (canEmbedBrowser) { setShowFileBrowser(v => !v) } else setShowWorkspace(true) },
     onUpload: handleFileUpload,
@@ -2305,6 +2312,16 @@ export default function Terminal({ token }: Props) {
             onConfirm={handleNewWindowConfirm}
           />
         </Suspense>
+      )}
+      {showSettingsMenu && (
+        <SettingsMenu
+          onOpenSettings={() => { setShowSettingsMenu(false); setShowGeneralSettings(true) }}
+          onOpenServer={() => { setShowSettingsMenu(false); setShowServerPanel(true) }}
+          onClose={() => setShowSettingsMenu(false)}
+        />
+      )}
+      {showServerPanel && (
+        <ServerPanel onClose={() => setShowServerPanel(false)} />
       )}
       {showGeneralSettings && (
         <Suspense fallback={null}>

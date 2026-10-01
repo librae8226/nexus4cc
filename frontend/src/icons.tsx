@@ -11,6 +11,7 @@ export type IconName =
   | 'arrowDown' | 'arrowLeft' | 'arrowRight' | 'message'
   | 'play' | 'stop' | 'refresh' | 'history' | 'pin' | 'folder'
   | 'folderPlus' | 'folderOpen' | 'image' | 'alert' | 'eye' | 'eyeOff' | 'download' | 'file' | 'edit' | 'save' | 'sort' | 'list'
+  | 'globe'
 
 interface Props {
   name: IconName
@@ -27,6 +28,13 @@ const ICONS: Record<IconName, React.ReactNode> = {
   ),
   moon: (
     <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+  ),
+  globe: (
+    <g>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M2 12h20" />
+      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+    </g>
   ),
   pencil: (
     <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />

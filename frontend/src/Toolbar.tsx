@@ -16,6 +16,10 @@ interface Props {
   themeMode: ThemeMode
   onToggleTheme: () => void
   onOpenSettings?: () => void
+  /** 齿轮按钮：先出一个「设置 / 服务器」两项菜单（见 SettingsMenu.tsx） */
+  onOpenGearMenu?: () => void
+  /** 快捷菜单里的「服务器」项：直接开面板，不再套一层菜单 */
+  onOpenServerSwitch?: () => void
   onOpenSessions?: () => void
   onUpload?: () => void
   onUploadFile?: (file: File) => void
@@ -102,7 +106,7 @@ interface DragState {
 
 const ITEM_HEIGHT = 48 // px，每行编辑项高度
 
-export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _termRef, themeMode, onToggleTheme, onOpenSettings, onUploadFile, onUploadFiles, onOpenFiles, onOpenWorkspace, onFitTerminal, onShowCopySheet, embedded, collapsed: controlledCollapsed, onCollapsedChange }: Props) {
+export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _termRef, themeMode, onToggleTheme, onOpenSettings, onOpenGearMenu, onOpenServerSwitch, onUploadFile, onUploadFiles, onOpenFiles, onOpenWorkspace, onFitTerminal, onShowCopySheet, embedded, collapsed: controlledCollapsed, onCollapsedChange }: Props) {
   const { t } = useTranslation()
   const [config, setConfig]           = useState<ToolbarConfig>(loadConfig)
   const isControlled = controlledCollapsed !== undefined
@@ -817,10 +821,10 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
                 title={t('toolbar.fileList')}
               ><Icon name="history" size={18} /></button>
             )}
-            {onOpenSettings && (
+            {(onOpenGearMenu || onOpenSettings) && (
               <button
                 className={iconBtnPCClass}
-                onPointerDown={(e) => { e.preventDefault(); onOpenSettings() }}
+                onPointerDown={(e) => { e.preventDefault(); (onOpenGearMenu || onOpenSettings)!() }}
                 title={t('toolbar.settings')}
               ><Icon name="settings" size={18} /></button>
             )}
@@ -872,8 +876,8 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
           >
             <Icon name="paperclip" size={18} />
           </button>
-          {onOpenSettings && (
-            <button className={iconBtnPCClass} onPointerDown={(e) => { e.preventDefault(); onOpenSettings() }} title={t('toolbar.settings')}>
+          {(onOpenGearMenu || onOpenSettings) && (
+            <button className={iconBtnPCClass} onPointerDown={(e) => { e.preventDefault(); (onOpenGearMenu || onOpenSettings)!() }} title={t('toolbar.settings')}>
               <Icon name="settings" size={18} />
             </button>
           )}
@@ -982,6 +986,14 @@ export default function Toolbar({ token, sendToWs, scrollToBottom, termRef: _ter
                   <button className={quickMenuItemClass} onPointerDown={(e) => { e.preventDefault(); onOpenSettings(); setShowQuickMenu(false) }}>
                     <Icon name="settings" size={16} />
                     <span>{t('toolbar.settings')}</span>
+                  </button>
+                )}
+                {/* 「服务器」和「设置」并列。这里不再套一层菜单 —— 快捷菜单本身
+                    就是菜单，再套一层就成了「⋯ → 设置 → 设置」。 */}
+                {onOpenServerSwitch && (
+                  <button className={quickMenuItemClass} onPointerDown={(e) => { e.preventDefault(); onOpenServerSwitch(); setShowQuickMenu(false) }}>
+                    <Icon name="globe" size={16} />
+                    <span>{t('server.menuEntry')}</span>
                   </button>
                 )}
               </div>

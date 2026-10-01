@@ -22,6 +22,7 @@
   "server": {
     "title": "服务器",
     "entry": "服务器",
+    "menuEntry": "服务器",
     "sectionTitle": "服务端地址",
     "sectionDesc": "Nexus 后端的地址。浏览器里与本页同源，无需配置。",
     "settingsDesc": "Nexus 后端的地址。切换后 App 会重新连接（登录状态保留）。",
