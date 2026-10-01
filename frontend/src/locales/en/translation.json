@@ -42,6 +42,8 @@
     "title": "Nexus",
     "subtitle": "AI Agent Terminal Panel",
     "passwordPlaceholder": "Enter password",
+    "usernamePlaceholder": "Username (multi-user servers only)",
+    "usernameRequired": "This server requires a username — please fill it in",
     "loginButton": "Login",
     "loggingIn": "Logging in...",
     "wrongPassword": "Wrong password",

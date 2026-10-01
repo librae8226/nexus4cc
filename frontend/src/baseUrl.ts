@@ -23,6 +23,13 @@ export interface ServerProfile {
   id: string
   name: string
   url: string
+  /**
+   * 登录用户名。**只有多用户实例需要** —— Nexus 5.x 的 PAM 认证
+   * （`POST /api/auth/login` body 为 `{username, password}`）要求 username 必填，
+   * 缺了直接 400；而 4.x 单用户版只认 password，多传一个字段也无害。
+   * 所以：留空 → 只发 password；填了 → 发 username+password。
+   */
+  username?: string
 }
 
 const PROFILES_KEY = 'nexus_profiles'
@@ -72,6 +79,7 @@ function readProfiles(): ServerProfile[] {
         id: p.id as string,
         url: p.url as string,
         name: typeof p.name === 'string' ? p.name : (p.id as string),
+        ...(typeof p.username === 'string' && p.username ? { username: p.username } : {}),
       }))
   } catch {
     // 半截 JSON / 用户手改坏了：当作没有 profile，退回空 base（= 同源），
@@ -111,6 +119,13 @@ export function upsertProfile(profile: ServerProfile): ServerProfile[] {
   writeProfiles(list)
   if (!localStorage.getItem(ACTIVE_KEY)) localStorage.setItem(ACTIVE_KEY, profile.id)
   return list
+}
+
+/** 登录成功后把用户名记回当前 profile，下次不用再填 */
+export function setActiveProfileUsername(username: string): void {
+  const active = getActiveProfile()
+  if (!active || active.username === username) return
+  upsertProfile({ ...active, username })
 }
 
 export function removeProfile(id: string): ServerProfile[] {

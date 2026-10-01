@@ -42,6 +42,8 @@
     "title": "Nexus",
     "subtitle": "AI Agent 终端面板",
     "passwordPlaceholder": "输入密码",
+    "usernamePlaceholder": "用户名（多用户服务器需要）",
+    "usernameRequired": "该服务器要求用户名，请一并填写",
     "loginButton": "登录",
     "loggingIn": "登录中...",
     "wrongPassword": "密码错误",

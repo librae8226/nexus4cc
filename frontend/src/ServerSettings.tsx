@@ -56,6 +56,7 @@ export default function ServerSettings({ defaultOpen = false, collapsible = true
   const [editingId, setEditingId] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [url, setUrl] = useState('')
+  const [username, setUsername] = useState('')
   const [error, setError] = useState('')
 
   // 本组件会写 localStorage，另一个入口（设置页）也会 —— 靠事件保持同步
@@ -72,6 +73,7 @@ export default function ServerSettings({ defaultOpen = false, collapsible = true
     setEditingId('')
     setName('')
     setUrl('')
+    setUsername('')
     setError('')
     setOpen(true)
   }
@@ -80,6 +82,7 @@ export default function ServerSettings({ defaultOpen = false, collapsible = true
     setEditingId(p.id)
     setName(p.name)
     setUrl(p.url)
+    setUsername(p.username ?? '')
     setError('')
   }
 
@@ -95,7 +98,12 @@ export default function ServerSettings({ defaultOpen = false, collapsible = true
     }
     const normalized = normalizeUrl(url)
     const id = editingId || newProfileId()
-    upsertProfile({ id, name: name.trim() || normalized, url: normalized })
+    upsertProfile({
+      id,
+      name: name.trim() || normalized,
+      url: normalized,
+      ...(username.trim() ? { username: username.trim() } : {}),
+    })
     // 刚保存的这套直接切过去 —— 新增地址的意图就是要用它
     const changed = id !== activeId
     setActiveProfileId(id)
@@ -160,6 +168,10 @@ export default function ServerSettings({ defaultOpen = false, collapsible = true
                   <input className={inputCls} value={url} onChange={(e) => setUrl(e.target.value)}
                     placeholder={t('server.urlPlaceholder')} autoCapitalize="none"
                     autoCorrect="off" spellCheck={false} />
+                  {/* 多用户实例（Nexus 5.x，PAM）要用户名；单用户版留空即可 */}
+                  <input className={inputCls} value={username} onChange={(e) => setUsername(e.target.value)}
+                    placeholder={t('login.usernamePlaceholder')} autoCapitalize="none"
+                    autoCorrect="off" spellCheck={false} />
                   {error && <p className="text-nexus-error text-xs m-0">{error}</p>}
                   <div className="flex gap-2">
                     <button type="button" onClick={save}
@@ -183,6 +195,7 @@ export default function ServerSettings({ defaultOpen = false, collapsible = true
                   className="flex-1 text-left bg-transparent border-none cursor-pointer p-0 min-w-0">
                   <div className="text-nexus-text text-sm truncate">{p.name}</div>
                   <div className="text-nexus-text-2 text-xs truncate">
+                    {p.username && <span className="text-nexus-text">{p.username}@</span>}
                     {p.url}
                     {p.url.startsWith('http://') && (
                       <span className="ml-2" title={t('server.plaintextHint')}>
@@ -210,6 +223,9 @@ export default function ServerSettings({ defaultOpen = false, collapsible = true
                 placeholder={t('server.namePlaceholder')} autoFocus />
               <input className={inputCls} value={url} onChange={(e) => setUrl(e.target.value)}
                 placeholder={t('server.urlPlaceholder')} autoCapitalize="none"
+                autoCorrect="off" spellCheck={false} />
+              <input className={inputCls} value={username} onChange={(e) => setUsername(e.target.value)}
+                placeholder={t('login.usernamePlaceholder')} autoCapitalize="none"
                 autoCorrect="off" spellCheck={false} />
               {error && <p className="text-nexus-error text-xs m-0">{error}</p>}
               <div className="flex gap-2">
