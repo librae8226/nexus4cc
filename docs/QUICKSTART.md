@@ -238,6 +238,65 @@ http://192.168.x.x:59000
 
 ---
 
+## Android App（开发中）
+
+> 需求与技术方案见 [ANDROID-APP.md](ANDROID-APP.md)。当前处于 M0（全链路打通），
+> 尚未发布，构建产物仅供本地验证。
+
+### 服务端必须先放行
+
+APK 里的 WebView 与服务器**不同源**，浏览器那条同源路径不需要的 CORS 在这里是必须的。
+在 `.env` 里加一行再重启服务：
+
+```bash
+CORS_ORIGINS=http://localhost,https://localhost
+```
+
+两个 origin 分别对应 `capacitor.config.json` 里 `androidScheme` 的两种取值。留空 =
+不发任何 CORS 头（浏览器/PWA 与改造前完全一致），但也意味着 APK 连不上。
+
+### 构建
+
+需要 Docker（Android SDK 跑在容器里，不装到宿主机）：
+
+```bash
+cd frontend && npm run build    # 必须先有前端产物
+cd .. && android/build-apk.sh   # 默认 assembleDebug
+```
+
+产物：`android/app/build/outputs/apk/debug/app-debug.apk`（约 4.4 MB）。
+首次构建会拉 Gradle 发行版和依赖，之后走 `android/.gradle-home/` 缓存。
+
+### 安装
+
+```bash
+# 用 adb（需自行安装 android-tools-adb）
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+也可以直接把 APK 传到手机上点击安装（需允许「安装未知来源应用」）。
+
+### 首次启动要配服务器地址
+
+APK 里没有「同源」这回事，**登录请求本身就发给某个地址**，所以地址必须先于登录存在。
+首次启动时登录页会直接展开服务器地址编辑器，填 `主机IP:59000` 即可（会自动补 `http://`）。
+
+以 `http://` 开头的地址会在界面上标注「未加密」——局域网/Tailscale 路径是明文传输，
+这是自托管场景的已知取舍。
+
+### 国产 ROM 要手动放行后台
+
+息屏后能否收到通知，取决于系统是否允许 App 常驻，这一项**代码无法完全解决**：
+
+- **vivo / OriginOS 6**：设置 → 电池 → 更多设置 → **智能后台冻结** → 把 Nexus 加入
+  「不受冻结影响」，**改完需重启手机生效**。只开自启动和白名单不够，闲置约 3 分钟照样休眠。
+- **一加 / ColorOS 16**：自启动管理里允许 Nexus，并在多任务界面给 Nexus 加锁。
+- 两台机器都建议：电池优化 → 不优化。
+
+保活失败也不影响 Agent 继续跑（tmux 在服务端），只是通知会延迟或丢失。
+
+---
+
 ## 常见问题
 
 ### Q: 提示 "Config profile 'xxx' not found"

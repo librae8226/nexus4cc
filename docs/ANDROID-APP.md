@@ -1,6 +1,6 @@
 # ANDROID-APP.md — Nexus Android 客户端（需求 + 技术方案）
 
-**锚点**: `docs/NORTH-STAR.md` | **状态**: 需求待评审 | **更新**: 2026-10-02
+**锚点**: `docs/NORTH-STAR.md` | **状态**: M0 代码侧完成，待真机裁决 | **更新**: 2026-10-02
 
 ---
 
@@ -247,11 +247,12 @@ Nexus 的移动端今天是 **PWA**：`public/manifest.json` + `public/sw.js`，
 
 现状是**没有任何"服务器地址"概念**：约 30 处相对路径 `fetch('/api/...')`，WebSocket 由 `location.host` 拼出（`Terminal.tsx:1485-1507`）。WebView 有自己的 origin，一装上就连不上。
 
-**好消息：改动面比看上去小得多。** 已核实全前端**只有一个 `new WebSocket`**（`Terminal.tsx:1507`），且约 30 处 `fetch` **全是相对路径字符串**（无 `Request` 对象、无非 `/api` 的相对请求）。因此不需要手改 30 处：
+**好消息：改动面比看上去小得多** —— 但**比本节初稿以为的多两处**（实施时审计出来的，见 §12）：
 
 - 新增 `frontend/src/baseUrl.ts`，导出 `apiUrl()` / `wsUrl()` / `getApiBase()` / `getActiveProfile()` / `isNative()`，profile 列表存 `localStorage`（`nexus_profiles` / `nexus_active_profile`）。
-- **零调用点改动**：`installFetchRewrite()` 在 bootstrap 时包一层 `window.fetch`，只对匹配 `^\/(api|workspace)(\/|$|\?)` 的请求前缀 base URL；其余（打包资源等）原样放行。在 `main.tsx` 里于 `createRoot()` **之前**调用。
-- WS 只改一处：`Terminal.tsx:1485,1507` 换成 `wsUrl('/ws?token=…&window=…&session=…')`。
+- **零调用点改动**：`installRequestRewrite()` 在 bootstrap 时包一层 `window.fetch` **和 `XMLHttpRequest.prototype.open`**，只对匹配 `^\/(api|workspace)([/?]|$)` 的请求前缀 base URL；其余（打包资源、绝对 URL）原样放行。在 `main.tsx` 里于 `createRoot()` **之前**调用。
+- WS 只改一处：`Terminal.tsx:1507` 换成 `wsUrl('/ws?token=…&window=…&session=…')`。
+- **非 fetch 的 URL 拼装要单独处理**：`WorkspaceBrowser.tsx:603` 把 `/workspace?…` 塞进 `<a href>`，走的是浏览器导航而非 fetch，改写覆盖不到，必须显式过 `apiUrl()`。
 - **浏览器/PWA 路径零影响**：无激活 profile 时 `getApiBase()` 返回 `''`，`apiUrl` 是恒等函数，行为与今天完全一致——**一个 bundle 同时服务浏览器和 App**。
 - 权衡：包 `window.fetch` 是 monkey-patch，不如显式 `apiFetch()` 干净，但它把 30 处改动压到 1 处；这是刻意的取舍，需要在 `baseUrl.ts` 顶部注释说明原因。
 - 地址设置界面**必须先于登录可达**（登录请求本身就是 profile 定向的）：`App.tsx` 登录页加一个服务器入口；native 且无 profile 时直接显示编辑器而不是登录表单。主编辑器放进 `GeneralSettings.tsx`（Restore 与 About 之间），含增删改、**测试连通性**（请求 `${url}/api/version`，401=可达，200=已认证）、切换。
@@ -505,3 +506,52 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 | 2026-10-02 | Token 安全 | v1 做生物识别门禁，**不做 Keystore 存储迁移**（§10） |
 | 2026-10-02 | Android 工程位置 | 本仓 `android/`，`versionName`/`versionCode` 从 `package.json` 派生，无需手工维护 |
 | 2026-10-02 | 里程碑排序 | M0 全链路裁决 → **M1 前台服务保活探针**（先于一切功能）→ M2…M6 |
+
+---
+
+## 12. M0 实测记录（2026-10-02）
+
+代码侧已完成并提交，真机部分待设备。
+
+### 12.1 计划中被实施推翻的四处
+
+| # | 初稿说法 | 实施时的事实 | 影响 |
+|---|---|---|---|
+| 1 | 全前端网络出口只有「约 30 处 fetch + 1 处 WebSocket」 | **还漏了两处**：`Terminal.tsx:848` 的上传队列走 `XMLHttpRequest`（需要 `xhr.upload.onprogress`，所以当初没用 fetch）；`WorkspaceBrowser.tsx:603` 把 `/workspace?…` 拼进 `<a href>`，走浏览器导航 | 前者靠包 `XMLHttpRequest.prototype.open` 覆盖，仍是零调用点改动；后者必须显式 `apiUrl()`。**只按初稿做，拍照上传和文件打开都会在 APK 里静默失效** |
+| 2 | fetch 调用数「约 30 处」 | 实际 55 处 fetch + 1 处 XHR | 只影响估算，结论不变 |
+| 3 | `configChanges` 需人工核对、可能要补（风险 R5） | Capacitor 模板**已经**带全：`configChanges=0x1ff4`，含 orientation / screenSize / smallestScreenSize / screenLayout / density / keyboardHidden / uiMode | R5 自动消解，无需改动 |
+| 4 | 自研插件落点写成 `MainActivity.kt` | Capacitor 生成的是 **Java** 的 `MainActivity.java`，工程未启用 Kotlin 插件 | M1 加自研 Kotlin 前要先给 `android/app/build.gradle` 加 Kotlin Gradle 插件，或把 `MainActivity` 保持 Java 只新插件用 Kotlin |
+
+### 12.2 构建工具链的两个坑（都已解决）
+
+- **`build-tools;35.0.0` 必须预装**。项目里没有任何地方声明它 —— 是 AGP 8.13.0 自带的默认 `buildToolsVersion`，对每个 subproject 生效，与 `compileSdk=36` 无关。不预装的话 Gradle 会在运行期尝试下载，而那时容器以宿主 uid 运行、对 `/opt/android-sdk` 无写权限，报错是极具误导性的 `The SDK directory is not writable`。
+- **`build-apk.sh` 里 `cap sync` 不能省**。漏掉就是「改了前端、APK 里还是旧界面」，且**没有任何报错**。
+
+### 12.3 已验证（不需要真机）
+
+| 项 | 方法 | 结果 |
+|---|---|---|
+| CORS 中间件行为 | 从 `server.js` 抽出真实代码块挂到哑 express 上跑 | 13/13 |
+| base-URL 改写 | `baseUrl.ts` 编译后在 polyfill 的浏览器环境里跑 | 30/30 |
+| **跨源全链路** | 真实浏览器：origin A 伺服真实 `frontend/dist`，origin B 提供真实 CORS 中间件 + 真实 bcrypt/jwt 登录 | 9/9 |
+| 版本派生 | `aapt2 dump badging` 读构建产物 | `4.8.6` / `40806` |
+| 清单与资源 | 同上 | `networkSecurityConfig` 生效、`configChanges=0x1ff4`、web 资源就位 |
+
+跨源那条带**反面对照**：不配 profile 时登录必须失败。否则无法排除「成功是因为恰好同源或别的巧合」。
+
+### 12.4 待真机裁决（M0 剩余部分）
+
+| 未知 | 怎么测 | 决定什么 |
+|---|---|---|
+| `androidScheme: 'http'` 下明文 profile 能否连通 | 装上 APK，配局域网 profile，登录 + 终端可交互 | 主力场景是否成立 |
+| `ws://` 是否被混内容策略拦截 | 同上，看终端能否真的连上（登录成功不代表 WS 成功） | 若被拦，退到全 profile TLS |
+| 同一套流程换 `androidScheme: 'https'` + `allowMixedContent` | 改 `capacitor.config.json` → `cap sync` → 重新构建 | A/B 二选一 |
+| 折叠屏开合不断连 | X Fold6 开合 10 次 | F-23.8 |
+
+**前置**：服务端 `.env` 要有 `CORS_ORIGINS=http://localhost,https://localhost` 并重启 —— 当前**未设置**，不设置的话 APK 连不上，且表现为没有线索的「连接失败」。
+
+### 12.5 构建产物
+
+- `android/app/build/outputs/apk/debug/app-debug.apk`，4.39 MB
+- minSdk 24 / targetSdk 36 / compileSdk 36，唯一权限 `INTERNET`
+- 构建命令：`android/build-apk.sh`（Docker 内置 Android SDK，宿主机零污染）

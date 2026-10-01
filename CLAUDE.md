@@ -28,6 +28,10 @@ Anchor: `docs/NORTH-STAR.md` — 修改任何文档前先对照锚点三原则
 ```
 server.js                  # 唯一后端入口：Express + WS + PTY
 channels/wechat-worker.mjs # 微信 iLink 通道（独立进程，PM2 `nexus-wechat`）
+capacitor.config.json      # Android 壳配置（webDir=frontend/dist）
+android/                   # Capacitor Android 工程（F-23）
+  Dockerfile               #   构建环境（Android SDK 在容器里，宿主机零污染）
+  build-apk.sh             #   构建入口：cap sync + gradlew，产物在 app/build/outputs/apk/
 data/                      # 持久化数据（toolbar、configs、channels）
 public/
   sw.js                    # Service Worker（cache-first 静态资源）
@@ -90,6 +94,11 @@ docs/
 |---|---|
 | `package.json` | `"version"` |
 | `frontend/package.json` | `"version"` |
+
+**Android 不在此列** —— 它是派生消费方，不是第四个手工维护点。
+`android/app/build.gradle` 从仓库根的 `package.json` 读版本并派生
+`versionName`/`versionCode`（`4.8.6` → `40806`），所以上面这套流程产出的 APK
+版本自动是对的。改 `package.json` 版本后 APK 无需任何额外操作。
 
 发布流程：
 ```bash
