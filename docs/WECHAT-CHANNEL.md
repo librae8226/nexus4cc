@@ -39,11 +39,15 @@ session 池与 memory**：
 对不上就自动丢弃（否则 `--resume` 会报「找不到会话」）。入站媒体也不用搬，
 新目录会重建（旧目录里的历史文件自己挪）。
 
-### 看实时活动：tmux 窗口 `home-librae:wechat`
+### 看实时活动：tmux 窗口 `home-librae-work-wechat-agent:channel`
 
-窗口里跑 `tail -n 200 -F data/channels/wechat.log`，在 Nexus UI 里直接可见：
-收到的消息、agent 的每次工具调用、回复正文、耗时与费用。**消息有没有送达、
-agent 在干什么，看这个窗口即可。**
+窗口里跑 `tail -n 200 -F ~/work/nexus/data/channels/wechat.log`，在 Nexus UI 里
+直接可见：收到的消息、agent 的每次工具调用、回复正文、耗时与费用。
+**消息有没有送达、agent 在干什么，看这个窗口即可。**
+
+它挂在以 agent 工作目录命名的 project session 里（`~/work/wechat-agent`
+→ `home-librae-work-wechat-agent`，命名规则见 `server.js` projectName），
+和 agent 的身份目录对齐，而不是挂在家目录 session 上。
 
 **worker 不放进 tmux，只留 PM2 监督。** 反过来做的话，机器重启后
 `scripts/nexus-match-panes.js` 只认标题含 `nexus-run-claude.sh` 的 pane，
@@ -56,8 +60,11 @@ worker 不会被拉起。tmux 只负责「看」，PM2 负责「活」。
 误关了就这样重建：
 
 ```sh
-tmux new-window -t home-librae -n wechat -c ~/work/nexus
-tmux send-keys -t home-librae:wechat "tail -n 200 -F ~/work/nexus/data/channels/wechat.log" Enter
+# session 已存在就加窗口，不存在就建 session（-n channel 一并对新 session 生效）
+tmux new-session -d -s home-librae-work-wechat-agent -c ~/work/wechat-agent -n channel 2>/dev/null \
+  || tmux new-window -t home-librae-work-wechat-agent -n channel -c ~/work/wechat-agent
+tmux send-keys -t home-librae-work-wechat-agent:channel \
+  "tail -n 200 -F ~/work/nexus/data/channels/wechat.log" Enter
 ```
 
 ## 支持的消息类型
