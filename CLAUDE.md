@@ -27,7 +27,8 @@ Anchor: `docs/NORTH-STAR.md` — 修改任何文档前先对照锚点三原则
 
 ```
 server.js                  # 唯一后端入口：Express + WS + PTY
-data/                      # 持久化数据（toolbar、configs）
+channels/wechat-worker.mjs # 微信 iLink 通道（独立进程，PM2 `nexus-wechat`）
+data/                      # 持久化数据（toolbar、configs、channels）
 public/
   sw.js                    # Service Worker（cache-first 静态资源）
   icon.svg                 # PWA 图标

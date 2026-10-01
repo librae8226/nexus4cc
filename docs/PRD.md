@@ -50,7 +50,11 @@
 
 > 对应北极星「轴二：零摩擦上下文同步」——不限于浏览器终端的交互渠道
 
-*(F-13/F-14/F-16/F-17 已移除 — 非交互派发、上下文附件、Telegram Bot、多渠道路由功能已从代码库中移除，不再需要。)*
+*(F-13/F-14/F-16/F-17 已移除 — 非交互派发、上下文附件、Telegram Bot、多渠道路由已从代码库中移除。2026-10 起由 **F-22 微信通道** 以更小的形态重新引入：单通道、不建多渠道路由框架。)*
+
+| ID | Feature | 验收标准 |
+|---|---|---|
+| **F-22** | **微信通道（iLink / ClawBot）** | 独立进程 `channels/wechat-worker.mjs`，PM2 监督（`nexus-wechat`）。微信私聊 → headless `claude -p --output-format stream-json` → 回复回微信。凭证落 `data/channels/wechat.json`（0600）。`allow_from` 白名单为空则拒绝启动。对话写入 `data/channels/wechat.log`，供 tmux window `tail -F` 在 Nexus UI 内观看。**不引入非 PTY 会话类型**——显示层复用现有 PTY/WS 通路 |
 
 ### Done（原 Nice/v4 — 已提前完成）
 

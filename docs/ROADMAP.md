@@ -12,6 +12,7 @@ F-01 to F-12, F-15, F-18 complete.（F-13/14/16/17 已移除，F-19/F-20 提前�
 
 ---
 
+| **F-22 微信通道** ✅ | `channels/wechat-worker.mjs` — iLink 长轮询收微信私聊 → headless `claude -p` → 回复回微信；PM2 `nexus-wechat` 常驻。待补：server.js 的 `shell_type: 'wechat'` 观看窗口分支、前端新建入口 |
 | Open-source polish | Git history rewrite, rate limits, etc. |
 | History mode redesign | In-place swap 方案（见 `docs/HISTORY_MODE_REDESIGN.md`） |
 | ANSI output in file viewer | 文件内容 ANSI 渲染 |
