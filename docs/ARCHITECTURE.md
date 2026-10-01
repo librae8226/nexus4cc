@@ -172,75 +172,14 @@ Effect B [token, activeWindowIndex] — 管理 WebSocket（窗口切换时重建
 
 ---
 
-## 微信通道（iLink / ClawBot）
-
-独立于 server.js 的常驻 worker，由 PM2 监督（应用名 `nexus-wechat`）。
-
-```
-微信私聊 ⟷ iLink API (ilinkai.weixin.qq.com)      # 长轮询，无需公网 IP / webhook
-              ▲ │
-              │ ▼
-   channels/wechat-worker.mjs                     # PM2: nexus-wechat
-     · 扫码登录 + 凭证持久化（data/channels/wechat.json, 0600）
-     · allow_from 白名单（为空则拒绝启动）
-     · message_id 去重 / 游标续传 / context_token 回显
-     · spawn claude -p --output-format stream-json --verbose
-     · 结构化对话 → data/channels/wechat.log
-              │
-              ▼
-   tmux window: tail -F wechat.log                # 观看（可选）
-              │ stdout → ptyMap → WS 广播
-              ▼
-   浏览器 Nexus UI（显示层零改动）
-```
-
-**关键约束**（实测结论，改代码前必读）
-- 出站成功判据是**响应体含 `message_id`**，iLink 不返回 `ret` 字段
-- `message_id` 是超出 `Number.MAX_SAFE_INTEGER` 的大整数，**必须按字符串处理**
-- `context_token` 须取自当前入站消息；用缓存旧值会静默不投递
-- **无续期接口**：`ret/errcode === -14` 时只能重新扫码，且会签发新的 `ilink_bot_id`
-- 同一 `bot_token` 只允许一个轮询进程（多进程互踢）
-- 仅支持一对一私聊，机器人入不了群；媒体未实现，只处理文本
-- ⚠️ **`WECHAT_PERMISSION=full` 时该通道等价于把本机 shell 暴露到微信**，`allow_from` 白名单是唯一防线；`WECHAT_WORKDIR` 只是默认工作位置，**不是沙箱**
-
-环境变量见 `.env.example` 的「微信通道」段；实际取值在 `ecosystem.config.cjs`。
-
-> ⚠️ `ecosystem.config.cjs` 在仓库里是 **gitignored**（含宿主本地路径，与 `nexus` 应用同理）。
-> 换机重建时需手动补上这个 app：
-
-```js
-{
-  name: 'nexus-wechat',
-  script: './channels/wechat-worker.mjs',
-  cwd: require('path').resolve(__dirname),
-  instances: 1,
-  exec_mode: 'fork',
-  autorestart: true, max_restarts: 10, restart_delay: 5000,
-  env: {
-    WECHAT_PROFILE: 'deepseek',
-    WECHAT_WORKDIR: process.env.HOME + '/work/wechat-agent',
-    WECHAT_PERMISSION: 'full'   // full | safe
-  },
-  error_file: './logs/nexus-wechat-error.log',
-  out_file: './logs/nexus-wechat-out.log',
-  time: true
-}
-```
-
-启动：`pm2 start ecosystem.config.cjs --only nexus-wechat && pm2 save`
-（**`pm2 save` 不能漏** —— 它才把进程列表写进 `~/.pm2/dump.pm2`，漏了重启后不会自动回来。）
-
 ## 数据层
 
 ```
 data/
 ├── toolbar-config.json    # 工具栏布局（所有设备共享）
-├── configs/
-│   ├── profile-a.json     # claude 启动配置 profile
-│   └── profile-b.json
-└── channels/
-    ├── wechat.json        # 微信凭证 + 游标 + 去重表（0600，gitignore）
-    └── wechat.log         # 微信对话transcript（供 tail -F 观看）
+└── configs/
+    ├── profile-a.json     # claude 启动配置 profile
+    └── profile-b.json
 ```
 
 **特点**: No database — JSON files + live tmux state.

@@ -12,7 +12,6 @@ F-01 to F-12, F-15, F-18 complete.（F-13/14/16/17 已移除，F-19/F-20 提前�
 
 ---
 
-| **F-22 微信通道** ✅ | `channels/wechat-worker.mjs` — iLink 长轮询收微信私聊 → headless `claude -p` → 回复回微信；PM2 `nexus-wechat` 常驻。待补：server.js 的 `shell_type: 'wechat'` 观看窗口分支、前端新建入口 |
 | **F-23 Android 客户端** 🚧 | Capacitor 壳 + 原生层（后台常驻/通知/语音/相机/SAF/分享/生物识别）。需求与技术方案见 `docs/ANDROID-APP.md`，里程碑 M0-M6。**M0 代码侧完成**（CORS 白名单 + 前端 base-URL 抽象 + Capacitor 工程 + Docker 工具链，debug APK 4.4MB 可构建），待真机裁决 `androidScheme` 与 `ws://` 混内容行为 |
 | Open-source polish | Git history rewrite, rate limits, etc. |
 | History mode redesign | In-place swap 方案（见 `docs/HISTORY_MODE_REDESIGN.md`） |
