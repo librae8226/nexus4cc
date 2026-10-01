@@ -56,6 +56,7 @@ frontend/src/
   locales/                 # 翻译文件（en, zh-CN）
 docs/
   NORTH-STAR.md            # 锚点文件（核心问题/用户/Out-of-Scope）
+  ANDROID-APP.md           # Android 客户端需求 + 技术方案（F-23）
   PRD.md                   # 功能规格
   ROADMAP.md               # 迭代路线图
   ARCHITECTURE.md          # 架构现状
