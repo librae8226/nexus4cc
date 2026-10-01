@@ -262,14 +262,15 @@ async function describeItems(items, { mid }) {
       } else if (it.type === 3) {
         const v = it.voice_item ?? {}
         const secs = v.playtime ? (v.playtime / 1000).toFixed(1) : '?'
-        if (v.text) { parts.push(`[语音 ${secs}s] ${v.text}`); continue }
+        // 无论微信是否给了转写，都解一份音频落盘：文本可能错，原始音频是兜底
         const saved = await saveMedia(v.media, {
           name: `voice-${mid}`, kind: 'voice', mid,
           transcode: 'silk2wav', sampleRate: v.sample_rate,
         })
-        parts.push(saved.path
-          ? `[语音 ${secs}s] 微信未给出转写文本；音频已保存到 ${saved.path}`
-          : `[语音 ${secs}s] 读取失败：${saved.note}`)
+        const audio = saved.path ? `原始音频：${saved.path}` : `原始音频读取失败：${saved.note}`
+        parts.push(v.text
+          ? `[语音 ${secs}s] ${v.text}\n（${audio}）`
+          : `[语音 ${secs}s] 微信未给出转写文本\n（${audio}）`)
       } else if (it.type === 4) {
         const f = it.file_item ?? {}
         const saved = await saveMedia(f.media, { name: f.file_name, md5: f.md5, kind: 'file', mid })
