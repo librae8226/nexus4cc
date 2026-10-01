@@ -59,3 +59,6 @@ nexus-tech-report-wb.md
 
 # Gradle 缓存（约 1-2GB，容器构建用）
 android/.gradle-home/
+
+# 构建出的 APK（便于取用，非源码）
+android/dist/
