@@ -54,6 +54,12 @@ const PROFILE_PATH = path.join(REPO, 'data', 'configs', `${PROFILE_ID}.json`)
 const WORKDIR = process.env.WECHAT_WORKDIR || path.join(os.homedir(), 'work')
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude'
 const FULL_PERMISSIONS = (process.env.WECHAT_PERMISSION || 'full') !== 'safe'
+// 本地复核：用 fcitx5-vinput 自带的 sherpa-onnx 再转写一遍语音，两边对不上就标出来。
+// 任何失败都只是少一行提示，不影响消息投递。
+const LOCAL_ASR = (process.env.WECHAT_LOCAL_ASR || 'on') !== 'off'
+const ASR_SCRIPT = path.join(__dirname, 'local-asr.py')
+const PYTHON_BIN = process.env.PYTHON_BIN || 'python3'
+const ASR_TIMEOUT_MS = Number(process.env.WECHAT_ASR_TIMEOUT_MS || 20_000)
 
 // ─── 日志 ────────────────────────────────────────────────────────────────
 fs.mkdirSync(DATA_DIR, { recursive: true })
@@ -249,6 +255,43 @@ async function saveMedia(media, { name, md5, kind, mid, aeskey, transcode, sampl
   return { path: file, note: `${out.length} 字节，${mode}${extraNote}` }
 }
 
+/** 调 local-asr.py 转写。任何失败都只返回 { ok:false, note }，不抛。 */
+function transcribeLocal(wavPath) {
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (r) => { if (!done) { done = true; resolve(r) } }
+
+    const child = spawn(PYTHON_BIN, [ASR_SCRIPT, wavPath], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    let err = ''
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      finish({ ok: false, note: `超时 ${ASR_TIMEOUT_MS}ms` })
+    }, ASR_TIMEOUT_MS)
+
+    child.stdout.on('data', (d) => { out += d })
+    child.stderr.on('data', (d) => { err += d })
+    child.on('error', (e) => {
+      clearTimeout(timer)
+      finish({ ok: false, note: `无法启动 ${PYTHON_BIN}：${e.message}` })
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      const text = out.trim()
+      if (code === 0 && text) finish({ ok: true, text })
+      else finish({ ok: false, note: err.trim().split('\n').pop() || `退出码 ${code}` })
+    })
+  })
+}
+
+/**
+ * 比对前抹掉空白、标点和大小写：两边标点习惯不同（微信常不给标点、本地会给），
+ * 英文大小写也会飘（Nexus/nexus），这些都不该报"不一致"；
+ * 真正的字词差异（"啦"vs"了"、"三百万"vs"300万"）必须留下。
+ */
+const SPEECH_NOISE = /[\s　，。！？；：、""''（）《》〈〉【】「」『』…—～·,.;:!?'"()[\]{}<>~`|/\\@#$%^&*+=_-]/g
+const normalizeSpeech = (s) => (s || '').replace(SPEECH_NOISE, '').toLowerCase()
+
 /**
  * 把一条微信消息的 item_list 转成 agent 能读的文本。
  * 媒体一律落盘并把本地路径交给 agent（agent 有完整 Bash/读文件权限，可自行处理）。
@@ -267,10 +310,16 @@ async function describeItems(items, { mid }) {
           name: `voice-${mid}`, kind: 'voice', mid,
           transcode: 'silk2wav', sampleRate: v.sample_rate,
         })
-        const audio = saved.path ? `原始音频：${saved.path}` : `原始音频读取失败：${saved.note}`
-        parts.push(v.text
-          ? `[语音 ${secs}s] ${v.text}\n（${audio}）`
-          : `[语音 ${secs}s] 微信未给出转写文本\n（${audio}）`)
+        const lines = [`[语音 ${secs}s] ${v.text || '微信未给出转写文本'}`]
+        lines.push(saved.path ? `（原始音频：${saved.path}）` : `（原始音频读取失败：${saved.note}）`)
+        if (LOCAL_ASR && saved.path) {
+          const asr = await transcribeLocal(saved.path)
+          if (!asr.ok) lines.push(`（本地转写失败：${asr.note}）`)
+          else if (!v.text) lines.push(`本地转写：${asr.text}`)
+          else if (normalizeSpeech(asr.text) === normalizeSpeech(v.text)) lines.push('本地转写：与微信一致')
+          else lines.push(`⚠️ 本地转写不一致：${asr.text}`)
+        }
+        parts.push(lines.join('\n'))
       } else if (it.type === 4) {
         const f = it.file_item ?? {}
         const saved = await saveMedia(f.media, { name: f.file_name, md5: f.md5, kind: 'file', mid })
