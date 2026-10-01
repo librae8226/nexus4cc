@@ -29,6 +29,13 @@ try {
   }
 } catch { /* .env 不存在时忽略 */ }
 
+// locale 兜底：pm2 拉起本进程时会把 LANG 过滤掉（连带 USER / LOGNAME / SHELL），
+// 于是 tmux server 与每个 pane 的 shell 都没有 locale —— pane 里 vi/vim 会以
+// encoding=latin1 启动，UTF-8 中文看不见（Claude 不受影响是因为 nexus-run-claude.sh
+// 内部自己 export 了 C.UTF-8）。这里补默认值，让它 spawn 的所有子进程都拿到 UTF-8 locale。
+// 注：上面那段 .env 加载在前，故 .env 里显式写的 LANG 优先级更高。
+process.env.LANG ||= 'C.UTF-8';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // 持久化数据目录（通过 Docker volume 挂载，重建容器不丢失）
