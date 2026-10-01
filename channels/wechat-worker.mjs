@@ -64,6 +64,15 @@ const LOCAL_ASR = (process.env.WECHAT_LOCAL_ASR || 'on') !== 'off'
 const ASR_SCRIPT = path.join(__dirname, 'local-asr.py')
 const PYTHON_BIN = process.env.PYTHON_BIN || 'python3'
 const ASR_TIMEOUT_MS = Number(process.env.WECHAT_ASR_TIMEOUT_MS || 20_000)
+// 微信偶发把「还没打完就按了发送」的残句先送到，用户重打一遍，后一条就成了前一条的
+// 严格延长。窗口内认定是同一件事的补全版，别当两个问题各答一遍。
+const MERGE_WINDOW_MS = Number(process.env.WECHAT_MERGE_WINDOW_MS || 10 * 60_000)
+// 会话收口：agent 处理完本轮后若写了这个文件，就清空本会话，下条消息开干净窗口。
+const HANDOFF_FILE = path.join(DATA_DIR, 'handoff.json')
+// 新会话开场注入多少条事件摘要。目录按 claude 的 project slug 规则推导，可用环境变量覆盖。
+const EVENT_KEEP = Number(process.env.WECHAT_EVENT_KEEP || 5)
+const EVENT_DIR = process.env.WECHAT_EVENT_DIR || path.join(
+  os.homedir(), '.claude', 'projects', WORKDIR.replace(/[/\\]/g, '-'), 'memory', 'events')
 
 // ─── 日志 ────────────────────────────────────────────────────────────────
 fs.mkdirSync(DATA_DIR, { recursive: true })
@@ -617,6 +626,37 @@ async function sendMessage(token, to, text, contextToken) {
   return true
 }
 
+/**
+ * 这条是不是上一条的「补全版」？后者以前者为前缀、更长，且在时间窗口内。
+ * now 走参数便于测试。
+ */
+function isCompletionOf(prev, text, { now = Date.now(), windowMs = MERGE_WINDOW_MS } = {}) {
+  return Boolean(prev) &&
+    now - prev.at < windowMs &&
+    text.length > prev.text.length &&
+    text.startsWith(prev.text)
+}
+
+/**
+ * 新会话的开场白：把最近几条事件摘要带上，免得换了干净窗口就人走茶凉。
+ * 读不到就返回空字符串——这只是锦上添花，不能影响消息处理。
+ */
+function recentEventsBlock() {
+  try {
+    if (!fs.existsSync(EVENT_DIR)) return ''
+    const files = fs.readdirSync(EVENT_DIR).filter((f) => f.endsWith('.md')).sort().slice(-EVENT_KEEP)
+    if (!files.length) return ''
+    const body = files
+      .map((f) => fs.readFileSync(path.join(EVENT_DIR, f), 'utf8').trim())
+      .join('\n\n---\n\n')
+    return `（新会话开场。以下是最近 ${files.length} 条事件摘要，供你了解上下文，不必逐条回应。）\n\n`
+      + `${body}\n\n===== 以下是用户本次消息 =====\n`
+  } catch (e) {
+    emit(`   ⚠️ 读事件摘要失败（不影响处理）: ${e.message}`)
+    return ''
+  }
+}
+
 // ─── 主流程 ──────────────────────────────────────────────────────────────
 async function main() {
   rotateLog()
@@ -665,6 +705,8 @@ async function main() {
 
   const seen = new Set(state.seenMessageIds ?? [])
   const sessionsByPeer = { ...(state.sessionsByPeer ?? {}) }
+  // peer → 上一条入站文本。故意只放内存：重启后清空，宁可漏判也不要误判。
+  const lastInbound = new Map()
   let buf = state.getUpdatesBuf ?? ''
   let lastSeenSaveMs = 0   // 心跳落盘节流用；初值 0 保证启动后立刻记一次
 
@@ -763,9 +805,28 @@ async function main() {
       emit(`📩 微信消息  from=${from}`)
       emit(`   ${text}`)
 
+      // 补全版检测：不改变处理流程，只是让 agent 知道「这跟上一条是同一件事」
+      const prevInbound = lastInbound.get(from)
+      lastInbound.set(from, { text, at: Date.now() })
+      let prompt = text
+      if (isCompletionOf(prevInbound, text)) {
+        emit('   ↳ 判定为上一条的补全版（残句重打），标注为同一件事')
+        prompt = '（注意：这条与刚才那条是同一件事。上一条是用户还没打完就发出去的残句，'
+          + '这条是补全版。按一个完整问题回答，不要拆成两件事。）\n' + text
+      }
+
+      // 新会话开场（没有可续的 sessionId）：把最近几条事件摘要带上
+      if (!sessionsByPeer[from]) {
+        const events = recentEventsBlock()
+        if (events) {
+          emit(`   ↳ 新会话：注入最近 ${EVENT_KEEP} 条事件摘要`)
+          prompt = events + prompt
+        }
+      }
+
       const started = Date.now()
       try {
-        const out = await runAgent(text, { resumeId: sessionsByPeer[from], env, label, model })
+        const out = await runAgent(prompt, { resumeId: sessionsByPeer[from], env, label, model })
         sessionsByPeer[from] = out.sessionId
         const secs = ((Date.now() - started) / 1000).toFixed(1)
         emit(`   完成 ${secs}s  工具 ${out.toolCount} 次  $${(out.cost ?? 0).toFixed(4)}  is_error=${out.isError}`)
@@ -776,6 +837,14 @@ async function main() {
         await sendMessage(token, from, `⚠️ 执行失败：${e.message}`, ctx).catch(() => {})
       }
       emit('─'.repeat(64))
+
+      // 收口信号：agent 本轮写了 handoff 文件 = 这件事聊完了，该换干净窗口。
+      // 放在落盘之前，好让清空后的 sessionsByPeer 一起持久化。
+      if (fs.existsSync(HANDOFF_FILE)) {
+        fs.rmSync(HANDOFF_FILE, { force: true })
+        delete sessionsByPeer[from]
+        emit('   ↳ 收到收口信号：本会话已清空，下条消息开新窗口')
+      }
 
       // 处理成功后才记入去重表并落盘
       seen.add(mid)
@@ -802,5 +871,5 @@ if (process.env.WECHAT_NO_MAIN !== '1') {
   })
 }
 
-export { describeItems, saveMedia, decryptMedia, decodeAesKey, loadState }
+export { describeItems, saveMedia, decryptMedia, decodeAesKey, loadState, isCompletionOf, recentEventsBlock }
 
