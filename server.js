@@ -839,11 +839,11 @@ app.post('/api/upload', authMiddleware, (req, res, next) => {
   })
 })
 
-// ---- F-21: 文件上传 API（直接上传到当前 session 的工作目录）----
+// ---- F-21: 文件上传 API（上传到当前 workspace 的 data/uploads/）----
 
-// 读取指定 session 的当前工作目录（cwd）
+// 读取指定 session 的 uploads 目录
 // 优先级：NEXUS_CWD 环境变量 > tmux pane_current_path > WORKSPACE_ROOT
-function getSessionCwd(session = TMUX_SESSION) {
+function getWorkspaceUploadsDir(session = TMUX_SESSION) {
   let cwd
   try {
     const out = execSync(`tmux show-environment -t ${session} NEXUS_CWD 2>/dev/null`).toString().trim()
@@ -856,12 +856,7 @@ function getSessionCwd(session = TMUX_SESSION) {
     } catch {}
   }
   if (!cwd) cwd = WORKSPACE_ROOT
-  return cwd
-}
-
-// 旧版上传目录（<cwd>/data/uploads/日期/）：仅用于文件面板查看/清理历史文件，不再写入
-function getWorkspaceUploadsDir(session = TMUX_SESSION) {
-  return join(getSessionCwd(session), 'data', 'uploads')
+  return join(cwd, 'data', 'uploads')
 }
 
 const fileUpload = multer({
@@ -869,17 +864,17 @@ const fileUpload = multer({
   limits: { fileSize: 100 * 1024 * 1024 } // 100MB
 })
 
-// POST /api/files/upload — 上传文件到当前 session 的工作目录
+// POST /api/files/upload — 上传文件到当前 workspace/data/uploads/日期/
 // Query: overwrite=1 强制覆盖已存在的文件
 app.post('/api/files/upload', authMiddleware, (req, res, next) => {
   fileUpload.single('file')(req, res, (err) => {
     if (err) return res.status(400).json({ error: err.message })
     if (!req.file) return res.status(400).json({ error: 'no file' })
 
-    const uploadDir = getSessionCwd(req.query.session || TMUX_SESSION)
-    if (!existsSync(uploadDir) || !statSync(uploadDir).isDirectory()) {
-      return res.status(400).json({ error: 'workspace directory not found', path: uploadDir })
-    }
+    const dateDir = new Date().toISOString().slice(0, 10)
+    const uploadsDir = getWorkspaceUploadsDir(req.query.session || TMUX_SESSION)
+    const uploadDir = join(uploadsDir, dateDir)
+    if (!existsSync(uploadDir)) mkdirSync(uploadDir, { recursive: true })
 
     // 使用前端传递的原始文件名（避免 multer 解析编码问题）
     const originalName = req.body.originalName || req.file.originalname
