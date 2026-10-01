@@ -63,6 +63,8 @@ interface Props {
   onRefresh?: () => void
   /** Called when user double-clicks a channel — should close any open file editor */
   onCloseEditor?: () => void
+  /** Called after a channel's tmux scrollback history is cleared */
+  onHistoryCleared?: () => void
   layout?: 'modal' | 'sidebar'
 }
 
@@ -106,6 +108,7 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
   onNewChannel,
   onRefresh: _onRefresh,
   onCloseEditor,
+  onHistoryCleared,
   layout = 'modal',
 }: Props, ref) {
   const { t } = useTranslation()
@@ -283,6 +286,23 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
     }
   }
 
+  const handleClearChannelHistory = async (channel: Channel) => {
+    setChannelMenu(null)
+    setLongPressMenu(null)
+    setSidebarChannelMenu(null)
+    if (!confirm(t('sessionMgr.clearHistoryConfirm', { name: channel.name }))) return
+    try {
+      const r = await fetch(`/api/sessions/${channel.index}/history?session=${encodeURIComponent(currentProject)}`, {
+        method: 'DELETE',
+        headers,
+      })
+      if (!r.ok) { setError(await parseApiError(r, t('sessionMgr.clearHistoryFailed'))); return }
+      onHistoryCleared?.()
+    } catch (e: unknown) {
+      setError(parseNetworkError(e))
+    }
+  }
+
   const handleRenameProject = async (project: Project) => {
     setProjectMenu(null)
     setSidebarProjectMenu(null)
@@ -335,7 +355,7 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
     const row = (e.currentTarget as HTMLElement).closest('[data-menu-row]') as HTMLElement
     const rect = row ? row.getBoundingClientRect() : (e.currentTarget as HTMLElement).getBoundingClientRect()
     const menuWidth = 160
-    const menuHeight = 80
+    const menuHeight = 120
     let x = rect.right - menuWidth
     let y = rect.bottom + 4
     if (x + menuWidth > window.innerWidth - 16) x = window.innerWidth - menuWidth - 16
@@ -354,7 +374,7 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
       const menuWidth = 150
       let x = clickX + 4
       let y = clickY + 4
-      if (y + 90 > window.innerHeight) y = clickY - 90
+      if (y + 130 > window.innerHeight) y = clickY - 130
       if (x + menuWidth > window.innerWidth) x = window.innerWidth - menuWidth
       if (x < 0) x = 0
       setSidebarChannelMenu({ channel, x, y })
@@ -380,7 +400,7 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
       setPressChannel(null)
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
       const menuWidth = 120
-      const menuHeight = 80
+      const menuHeight = 120
       let x = rect.left + rect.width / 2
       let y = rect.bottom + 8
       if (x + menuWidth / 2 > window.innerWidth - 16) x = window.innerWidth - menuWidth / 2 - 16
@@ -620,6 +640,10 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
                   <Icon name="pencil" size={14} />
                   <span>{t('common.rename')}</span>
                 </button>
+                <button className="flex items-center gap-2 px-4 py-2.5 bg-transparent border-none text-nexus-text text-sm cursor-pointer w-full text-left" onPointerDown={() => handleClearChannelHistory(activeChannelMenu.channel)}>
+                  <Icon name="history" size={14} />
+                  <span>{t('sessionMgr.clearHistory')}</span>
+                </button>
                 <div className="h-px bg-nexus-border my-1" />
                 <button className="flex items-center gap-2 px-4 py-2.5 bg-transparent border-none text-nexus-error text-sm cursor-pointer w-full text-left" onPointerDown={() => handleCloseChannel(activeChannelMenu.channel)}>
                   <Icon name="x" size={14} />
@@ -761,6 +785,10 @@ export default forwardRef<SessionManagerV2Handle, Props>(function SessionManager
               <button className="flex items-center gap-2 px-4 py-2.5 bg-transparent border-none text-nexus-text text-sm cursor-pointer w-full text-left" onPointerDown={() => handleRenameChannel(sidebarChannelMenu.channel)}>
                 <Icon name="pencil" size={14} />
                 <span>{t('common.rename')}</span>
+              </button>
+              <button className="flex items-center gap-2 px-4 py-2.5 bg-transparent border-none text-nexus-text text-sm cursor-pointer w-full text-left" onPointerDown={() => handleClearChannelHistory(sidebarChannelMenu.channel)}>
+                <Icon name="history" size={14} />
+                <span>{t('sessionMgr.clearHistory')}</span>
               </button>
               <div className="h-px bg-nexus-border my-1" />
               <button className="flex items-center gap-2 px-4 py-2.5 bg-transparent border-none text-nexus-error text-sm cursor-pointer w-full text-left" onPointerDown={() => handleCloseChannel(sidebarChannelMenu.channel)}>

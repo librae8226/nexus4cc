@@ -1732,6 +1732,13 @@ export default function Terminal({ token }: Props) {
     scrollbackPrefetchRef.current = null
   }
 
+  // 后端已清掉该 channel 的 tmux 回滚历史 —— 作废本地历史 overlay 缓存，
+  // 否则下次上滑会命中清空前的预取结果，看起来像没生效。
+  function handleHistoryCleared() {
+    scrollbackCacheRef.current = null
+    scrollbackPrefetchRef.current = null
+  }
+
   function handleOverlayScroll(e: React.UIEvent<HTMLDivElement>) {
     const el = e.currentTarget
     const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 30
@@ -1998,6 +2005,7 @@ export default function Terminal({ token }: Props) {
                       onNewProject={openNewSessionDialog}
                       onNewChannel={handleCreateWindow}
                       onCloseEditor={() => workspaceBrowserRef.current?.closeEditor()}
+                      onHistoryCleared={handleHistoryCleared}
                       layout="sidebar"
                     />
                   </div>
@@ -2274,6 +2282,7 @@ export default function Terminal({ token }: Props) {
             onSwitchChannel={attachToWindow}
             onNewProject={() => { setShowSessionManagerV2(false); openNewSessionDialog() }}
             onNewChannel={() => { setShowSessionManagerV2(false); handleCreateWindow() }}
+            onHistoryCleared={handleHistoryCleared}
           />
         </Suspense>
       )}

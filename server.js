@@ -1000,6 +1000,19 @@ app.post('/api/sessions/:id/rename', authMiddleware, (req, res) => {
   }
 })
 
+// DELETE /api/sessions/:id/history — 清除窗口的 tmux 回滚历史
+// 只清 scrollback 缓冲区：可见屏幕不变，pane 内进程（claude 等）不受影响。
+app.delete('/api/sessions/:id/history', authMiddleware, (req, res) => {
+  const index = req.params.id
+  const session = req.query.session || TMUX_SESSION
+  try {
+    execFileSync('tmux', ['clear-history', '-t', `${session}:${index}`], { stdio: 'pipe' })
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // GET /api/sessions/:id/output — 获取窗口最后输出（F-15 状态卡片）
 app.get('/api/sessions/:id/output', authMiddleware, (req, res) => {
   const windowIndex = parseInt(req.params.id, 10);
