@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Nexus 的核心场景是「手机连回自己的主机」，其中有两条路径是明文：
+    - 局域网直连    http://192.168.x.x:59000
+    - Tailscale     http://100.x.x.x:59000
+  Android 9（API 28）起默认禁止明文流量，不放行的话 App 只能在
+  Cloudflare Tunnel（https）下工作 —— 等于砍掉一半 profile。
+
+  为什么用 base-config 全局放开，而不是逐个 <domain> 列举：
+  服务器地址由用户在 App 内自由填写，局域网 IP 随网络环境变化，
+  列举法一换网就失效。这是个人自托管 App 的已知取舍；设置界面会对
+  以 http:// 开头的地址显式标注「未加密」，不靠静默。
+
+  只影响 App 自身的出站请求。Capacitor 壳用 androidScheme 从本地
+  assets 加载页面，不经过网络栈，与此无关。
+
+  trust-anchors 只保留 system：若将来要走「局域网自签证书」那条退路
+  （见 docs/ANDROID-APP.md §6.5 三级退路），需要在这里补
+  <certificates src="user" />，代价是用户级 CA 也能 MITM 本 App。
+  默认不放开，需要时再显式加。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

@@ -28,6 +28,22 @@ screenshots/
 # PM2
 ecosystem.config.cjs
 
+# Android (Capacitor shell) — 只提交源码与配置，其余全是可再生产物
+android/.gradle/
+android/build/
+android/app/build/
+android/app/release/
+android/local.properties
+android/keystore/
+android/keystore.properties
+android/.idea/
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+*.jks
+*.keystore
+!android/app/debug.keystore
+
 # Runtime data (tasks, session configs)
 # Ignore everything under data/, except the default anthropic profile (no secrets)
 data/*
@@ -40,3 +56,6 @@ logs/
 .wb-*.mmd
 nexus-tech-report-wb.md
 .blackboard/
+
+# Gradle 缓存（约 1-2GB，容器构建用）
+android/.gradle-home/

@@ -1,0 +1,67 @@
+apply plugin: 'com.android.application'
+
+// ── 版本号派生自 package.json ────────────────────────────────────────────
+// 项目的版本事实源是 git tag，package.json 必须跟着走（见 CLAUDE.md）。
+// Android 不再做第四处手工维护，而是派生消费：现有的发布流程
+// （改两个 package.json → commit → tag）自动产出版本正确的 APK。
+//   4.8.6 -> versionName "4.8.6", versionCode 40806（主*10000+次*100+修订）
+// tokenize('.-') 而非 '.'：容忍 4.9.0-rc1 这类预发布后缀，否则 `as int` 会抛错。
+def pkgVersion = new groovy.json.JsonSlurper().parseText(file('../../package.json').text).version
+def versionParts = pkgVersion.tokenize('.-').take(3)
+if (versionParts.size() < 3 || versionParts.any { !(it ==~ /\d+/) }) {
+    throw new GradleException("package.json 的 version 不是 MAJOR.MINOR.PATCH 形式（读到 '${pkgVersion}'），无法派生 versionCode")
+}
+def (verMajor, verMinor, verPatch) = versionParts.collect { it as int }
+
+android {
+    namespace = "com.librae.nexus"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.librae.nexus"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode verMajor * 10000 + verMinor * 100 + verPatch
+        versionName pkgVersion
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

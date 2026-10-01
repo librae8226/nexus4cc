@@ -1,0 +1,13 @@
+{
+  "appId": "com.librae.nexus",
+  "appName": "Nexus",
+  "webDir": "frontend/dist",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": false
+  },
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#0f0f0f"
+  }
+}
