@@ -132,6 +132,21 @@ export function getApiBase(): string {
   return getActiveProfile()?.url ?? ''
 }
 
+/**
+ * 「服务器地址」这个概念在这个环境里是否成立 —— 决定相关 UI 要不要出现。
+ *
+ * 浏览器：前端由 server.js 同源伺服，地址无从谈起 → false。
+ * APK：WebView 与后端不同源，地址是登录的前提 → true。
+ * 另外，已配过 profile 的浏览器保留入口（有人会手动指向另一个 Nexus）。
+ *
+ * **全应用唯一的判定点。** 登录页和终端页都从这里取，不要各自重写一遍 ——
+ * 这条规则曾经散在三处，结果漏了「⋯ 菜单」那一条，浏览器里就冒出一个点开
+ * 只有「尚未配置服务器」的死项。
+ */
+export function needsServerConfig(): boolean {
+  return isNative() || readProfiles().length > 0
+}
+
 export function apiUrl(path: string): string {
   const base = getApiBase()
   if (!base) return path

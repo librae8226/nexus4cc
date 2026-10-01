@@ -13,7 +13,7 @@ import GhostShield from './GhostShield'
 import { SettingsMenu, ServerPanel } from './SettingsMenu'
 import { Icon } from './icons'
 import { getWindowStatus, STATUS_DOT_COLOR, STATUS_DOT_TITLE } from './windowStatus'
-import { wsUrl } from './baseUrl'
+import { wsUrl, needsServerConfig } from './baseUrl'
 
 // ANSI 256-color palette (0-15 standard, 16-231 6x6x6 cube, 232-255 grayscale)
 const ANSI256: string[] = (() => {
@@ -221,6 +221,9 @@ export default function Terminal({ token }: Props) {
   // 设置面板已经长到一屏放不下，再把服务器切换塞进去会让「设置」本身变难用。
   const [showSettingsMenu, setShowSettingsMenu] = useState(false)
   const [showServerPanel, setShowServerPanel] = useState(false)
+  // 终端页里三个入口（齿轮、⋯ 菜单、服务器面板）都从这一个值派生。
+  // 判定规则本身定义在 baseUrl.needsServerConfig()，不在这里重写。
+  const [showServer] = useState(needsServerConfig)
   const [showSessionManagerV2, setShowSessionManagerV2] = useState(false)
   const [showNewSession, setShowNewSession] = useState(false)
   const [showNewWindow, setShowNewWindow] = useState(false)
@@ -1806,8 +1809,10 @@ export default function Terminal({ token }: Props) {
     themeMode,
     onToggleTheme: toggleTheme,
     onOpenSettings: () => setShowGeneralSettings(true),
-    onOpenGearMenu: () => setShowSettingsMenu(true),
-    onOpenServerSwitch: () => setShowServerPanel(true),
+    // 传 undefined 而不是在组件内部判：齿轮在没有服务器概念时应该维持原行为
+    // （直开设置），而不是弹出一个只有「设置」一项的残废菜单。
+    onOpenGearMenu: showServer ? () => setShowSettingsMenu(true) : undefined,
+    onOpenServerSwitch: showServer ? () => setShowServerPanel(true) : undefined,
     onOpenFiles: () => setShowFiles(true),
     onOpenWorkspace: () => { if (canEmbedBrowser) { setShowFileBrowser(v => !v) } else setShowWorkspace(true) },
     onUpload: handleFileUpload,

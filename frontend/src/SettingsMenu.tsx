@@ -19,7 +19,7 @@ import { useTranslation } from 'react-i18next'
 import GhostShield from './GhostShield'
 import { Icon } from './icons'
 import ServerSettings from './ServerSettings'
-import { PROFILES_CHANGED_EVENT, getActiveProfile, getProfiles, isNative } from './baseUrl'
+import { PROFILES_CHANGED_EVENT, getActiveProfile } from './baseUrl'
 
 /** 切服务器 = 整页重载。只换 base URL 会留下"新请求打新地址、旧 WS 还挂在老地址"
  *  的混合态；重载让终端 WS 和会话列表整体从新地址重建。
@@ -58,9 +58,6 @@ export function SettingsMenu({ onOpenSettings, onOpenServer, onClose }: MenuProp
   const { t } = useTranslation()
   const [activeName, setActiveName] = useState(() => getActiveProfile()?.name ?? '')
   const [activeUrl, setActiveUrl] = useState(() => getActiveProfile()?.url ?? '')
-  // 浏览器里前后端同源，服务器地址是个多余概念。只在 APK 里、或用户已经配过
-  // profile 时才显示这一项。与登录页同一条规则。
-  const [showServer] = useState(() => isNative() || getProfiles().length > 0)
 
   useEffect(() => {
     const sync = () => {
@@ -83,24 +80,24 @@ export function SettingsMenu({ onOpenSettings, onOpenServer, onClose }: MenuProp
           <span>{t('toolbar.settings')}</span>
         </button>
 
-        {showServer && (
-          <>
-            <div className="h-px bg-nexus-border mx-4" />
-            <button type="button" className={itemCls} onClick={onOpenServer}>
-              <Icon name="globe" size={18} />
-              <span className="flex-1 min-w-0">
-                <span className="block">{t('server.menuEntry')}</span>
-                {/* 显示当前生效的那一套，省得进面板才知道现在连的是哪 */}
-                {activeUrl && (
-                  <span className="block text-nexus-text-2 text-xs truncate">
-                    {activeName} · {activeUrl}
-                  </span>
-                )}
-              </span>
-              <Icon name="chevronRight" size={16} />
-            </button>
-          </>
-        )}
+        {/* 是否出现由 Terminal 的 showServer 决定（本组件只在需要时才被挂载），
+            这里不再重复判定 —— 判定散在多处正是上一版漏掉「⋯ 菜单」的原因。 */}
+        <>
+          <div className="h-px bg-nexus-border mx-4" />
+          <button type="button" className={itemCls} onClick={onOpenServer}>
+            <Icon name="globe" size={18} />
+            <span className="flex-1 min-w-0">
+              <span className="block">{t('server.menuEntry')}</span>
+              {/* 显示当前生效的那一套，省得进面板才知道现在连的是哪 */}
+              {activeUrl && (
+                <span className="block text-nexus-text-2 text-xs truncate">
+                  {activeName} · {activeUrl}
+                </span>
+              )}
+            </span>
+            <Icon name="chevronRight" size={16} />
+          </button>
+        </>
       </div>
     </Shell>
   )

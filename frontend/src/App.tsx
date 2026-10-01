@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import Terminal from './Terminal'
 import ServerSettings from './ServerSettings'
-import { getApiBase, getProfiles, isNative } from './baseUrl'
+import { getApiBase, needsServerConfig } from './baseUrl'
 
 const STORAGE_KEY = 'nexus_token'
 
@@ -13,8 +13,8 @@ export default function App() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   // 一次性判定即可：登录页存活期间不会有人往里加 profile（加了也只能从这个
-  // 组件加，而它没渲染就没有入口）。
-  const [showServer] = useState(() => isNative() || getProfiles().length > 0)
+  // 组件加，而它没渲染就没有入口）。规则见 baseUrl.needsServerConfig()。
+  const [showServer] = useState(needsServerConfig)
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
