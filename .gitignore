@@ -62,3 +62,7 @@ android/.gradle-home/
 
 # 构建出的 APK（便于取用，非源码）
 android/dist/
+
+# Python 字节码缓存（channels/local-asr.py 等）
+__pycache__/
+*.pyc

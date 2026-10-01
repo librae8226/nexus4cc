@@ -69,6 +69,7 @@ docs/
   HISTORY_MODE_REDESIGN.md # 历史模式重设计（设计阶段）
   story.md                 # 项目故事/背景
   pm2-setup.md             # PM2 部署指南
+  WECHAT-CHANNEL.md        # 微信通道运维（会话模型/铁律/故障处理）
 ```
 
 ## Agent Workflow Rules
@@ -168,3 +169,4 @@ Rules: English subject, imperative mood, no trailing period, blank line before b
 | Env var added | `.env.example` + commit body |
 | Bug fix | commit body (root cause) |
 | Session/persistence change | `docs/SESSION-PERSISTENCE.md` |
+| 微信通道改动（含运维约定） | `docs/WECHAT-CHANNEL.md` |

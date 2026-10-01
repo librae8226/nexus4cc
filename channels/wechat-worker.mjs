@@ -48,6 +48,10 @@ const MAX_TURNS = Number(process.env.WECHAT_MAX_TURNS || 40)
 const SEEN_MAX = 2000
 const SEND_GAP_MS = 1200          // 发送节流，社区观测到 <1s 易触发限流
 const CHUNK_LIMIT = 2000          // 长文切分阈值
+// -14（会话被顶掉）后的探测间隔。iLink 无续期接口，只能等人工重扫，
+// 30 分钟探一次足够，绝不能退化成 5 秒热循环。
+const EXPIRED_POLL_MS = Number(process.env.WECHAT_EXPIRED_POLL_MS || 30 * 60_000)
+const HEARTBEAT_SAVE_MS = 10 * 60_000   // 存活心跳落盘节流
 
 const PROFILE_ID = process.env.WECHAT_PROFILE || 'deepseek'
 const PROFILE_PATH = path.join(REPO, 'data', 'configs', `${PROFILE_ID}.json`)
@@ -642,6 +646,13 @@ async function main() {
   emit(`  workdir    : ${WORKDIR}`)
   emit(`  权限       : ${FULL_PERMISSIONS ? '⚠️  完整权限（--dangerously-skip-permissions）' : '受限'}`)
   emit(`  对话日志   : ${LOG_FILE}`)
+  // 存活记录：用来回答「这个会话到底能活多久」——见 docs/WECHAT-CHANNEL.md
+  if (state.loggedInAt) {
+    const h = ((Date.now() - Date.parse(state.loggedInAt)) / 3600_000).toFixed(1)
+    emit(`  绑定于     : ${state.loggedInAt}（已 ${h} 小时）`)
+  }
+  if (state.lastSeenAt) emit(`  上次活动   : ${state.lastSeenAt}`)
+  if (state.expiredAt) emit(`  ⚠️ 曾于 ${state.expiredAt} 过期（累计 ${state.expiredCount ?? 1} 次）`)
   if (!fs.existsSync(WORKDIR)) emit(`  ⚠️ workdir 不存在: ${WORKDIR}`)
   emit('═'.repeat(64))
 
@@ -655,6 +666,22 @@ async function main() {
   const seen = new Set(state.seenMessageIds ?? [])
   const sessionsByPeer = { ...(state.sessionsByPeer ?? {}) }
   let buf = state.getUpdatesBuf ?? ''
+  let lastSeenSaveMs = 0   // 心跳落盘节流用；初值 0 保证启动后立刻记一次
+
+  /** 记一次「会话活着」：清过期标记 + 节流落盘 lastSeenAt，用于统计真实会话寿命 */
+  const markSeen = () => {
+    const nowMs = Date.now()
+    if (state.expiredAt) {
+      emit(`✅ 会话已恢复（${state.expiredAt} → ${new Date(nowMs).toISOString()}）`)
+      state.expiredAt = null
+      saveState({ expiredAt: null })
+    }
+    if (nowMs - lastSeenSaveMs < HEARTBEAT_SAVE_MS) return
+    lastSeenSaveMs = nowMs
+    saveState({ lastSeenAt: new Date(nowMs).toISOString() })
+    const since = state.loggedInAt ? ((nowMs - Date.parse(state.loggedInAt)) / 3600_000).toFixed(1) : '?'
+    emit(`💓 会话正常（已连接 ${since} 小时）`)
+  }
 
   // 单消费者：同一 bot_token 只允许一个轮询进程，多进程会互相踢下线
   for (const sig of ['SIGINT', 'SIGTERM']) {
@@ -676,15 +703,32 @@ async function main() {
       await sleep(3000)
       continue
     }
-    if (res.json === null) continue   // 长轮询超时，正常
+    // 长轮询超时属正常：服务端一直挂着连接 = 会话活着，同样算「见到了」
+    if (res.json === null) { markSeen(); continue }
 
     const ret = res.json.ret ?? res.json.errcode
     if (ret === -14) {
-      emit('❌ 会话已过期（ret=-14）。iLink 无续期接口，需要重新扫码。')
-      emit('   清空凭证后重启本服务即可重新扫码：')
-      emit(`   rm ${STATE_FILE} && pm2 restart nexus-wechat`)
-      process.exit(3)
+      // 不再 exit(3)：那会让 pm2 每 5 秒拉起一次，无限打接口。
+      // iLink 无续期接口，唯一恢复路径是人工重扫，所以这里改成低频探测。
+      const nowIso = new Date().toISOString()
+      if (!state.expiredAt) {
+        state.expiredAt = nowIso
+        state.expiredCount = (state.expiredCount ?? 0) + 1
+        saveState({ expiredAt: state.expiredAt, expiredCount: state.expiredCount })
+        emit('❌ 会话已过期（ret=-14）——本 bot 已被顶掉或失效。')
+        emit('   iLink 一个微信号同时只能有一个 bot 在线：新扫码会顶掉旧的。')
+        emit('   请先确认没有其他绑定在跑，再按 docs/WECHAT-CHANNEL.md 重新绑定。')
+        emit('   本进程不会自行重扫，也不会热循环。')
+      } else {
+        const min = Math.round((Date.now() - Date.parse(state.expiredAt)) / 60_000)
+        emit(`   ↳ 仍处于过期状态（已 ${min} 分钟）`)
+      }
+      emit(`   ${Math.round(EXPIRED_POLL_MS / 60_000)} 分钟后再探一次。`)
+      await sleep(EXPIRED_POLL_MS)
+      continue
     }
+
+    markSeen()
 
     // 游标：非空才持久化；在处理完本批消息后再落盘，宁可重投也不丢
     const nextBuf = res.json.get_updates_buf || null
