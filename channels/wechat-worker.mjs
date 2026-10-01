@@ -237,7 +237,8 @@ async function describeItems(items, { mid }) {
           : `[微信图片] 处理失败：${saved.note}`)
       } else if (it.type === 5) {
         const vid = it.video_item ?? {}
-        const secs = vid.play_length ? ` ${(vid.play_length / 1000).toFixed(1)}s` : ''
+        // 实测 play_length 可能为 0（此时真实时长要从文件 mvhd 读），别显示错误的 0.0s
+        const secs = vid.play_length > 0 ? ` ${(vid.play_length / 1000).toFixed(1)}s` : ''
         const saved = await saveMedia(vid.media, {
           name: `video-${mid}`, kind: 'video', mid,
           md5: vid.video_md5,
