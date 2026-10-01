@@ -90,6 +90,7 @@ const {
   CLAUDE_PROXY = '',
   CLAUDE_BIN: CLAUDE_BIN_ENV = '',
   GITHUB_REPO = 'librae8226/nexus4cc',
+  CORS_ORIGINS = '',
 } = process.env;
 
 if (!JWT_SECRET || !ACC_PASSWORD_HASH) {
@@ -180,6 +181,33 @@ function buildLaunchEnv() {
 
   const proxyExports = Object.entries(proxyVars).map(([k, v]) => `export ${k}='${v}'`).join('; ');
   return { proxyVars, proxyPrefix: proxyExports ? `${proxyExports}; ` : '' };
+}
+
+// ── CORS 白名单（独立 origin 客户端，如 Android APK）──────────────────────
+// 浏览器路径永远与 server 同源，从不需要 CORS，所以这里默认是关闭的。
+// APK 里 WebView 的 origin 是 http(s)://localhost，与服务器不同源，而且
+// Authorization 头本身就会触发 OPTIONS 预检 —— 不放行的话请求根本发不出去。
+// 两个必须踩准的点：
+//   1) 中间件要注册在 express.static 之前。静态中间件会自己应答 OPTIONS
+//      （200 + Allow），但不会带任何 CORS 头，注册晚了预检就永远失败。
+//   2) 预检要直接短路返回，不能让请求落到路由或 SPA 兜底 app.get('*') 上。
+// CORS_ORIGINS 为空 = 中间件根本不装 = 与改造前逐字节等价，浏览器零影响。
+const corsOrigins = CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
+if (corsOrigins.length > 0) {
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    const allowed = origin && corsOrigins.includes(origin);
+    if (allowed) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Max-Age', '86400');
+      if (req.method === 'OPTIONS') return res.sendStatus(204);
+    }
+    next();
+  });
+  console.log(`CORS allowed origins: ${corsOrigins.join(', ')}`);
 }
 
 // 静态文件：frontend/dist 和 public
