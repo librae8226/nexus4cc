@@ -513,3 +513,38 @@ GRUB `TIMEOUT=5`（引导菜单不会卡着等人）。Nexus 永不 exit（探�
 
 **遗留**：快照选择器的「健康」判据（≥2 条 claude 频道）偏弱 —— 故障中途存下的 3 频道快照
 （16:02 那份）也会被当成健康恢复源。等下一份健康快照落地即自愈；彻底修法另议。
+
+## 17. 真机掉电演练结果（2026-10-02 晚，用户手动断电三次）
+
+**结论：三次硬掉电、三次全自动恢复，用户定义的底线（页面可达 + 页内可起 recovery agent）成立。**
+
+| 断电 | 开机（本地） | 恢复结果（审计原文） | 所用快照 |
+|---|---|---|---|
+| ~15:56 | 16:44:52 | `restore-ok missingSessions=0 channels=8` | 16:44:19 |
+| 再断 | 17:03:14 | `restore-ok missingSessions=0 channels=8` | 16:47:02 |
+| 再断 | 17:07:40 | `restore-ok missingSessions=0 channels=8` | 16:47:02 |
+
+**这次演练证到的（都是之前只有推理、没有实证的）**
+- **server 由 unit 起**，不是 nexus：server 进程是 `tmux new-session -d -s main -n shell -c /home/librae`（监督脚本签名），
+  unit `ActiveEnterTimestamp` 与之一致；nexus 只做探测。
+- **server 的 global env 干净**：只剩 unit 显式写的 `TMUX_SESSION`，无 PM2/claude/密钥。
+- **`wait_proxy` 生效**（日志「代理已就绪」）→ claude 频道不在代理起来之前乱试。
+- **闭环核对落到数字**：`核对：session 缺 0 / 频道 8 在跑（快照期望 8）`。
+- 面板 200；三个 unit/timer 全部 active；**本次开机 core 转储 0 个**（`LimitCORE=0` 生效）。
+- 审计日志在断电后完整可用，且能点名人为操作：`channel-deleted main:1 … actor{ip:192.168.3.92, device:手机}`。
+
+**同一天另一处关键修复**（server-admin 频道的会话，commit `fa8ecbf`）：修掉「重启后每个 channel 都退回
+shell」。三环根因：① resurrect 建窗不带命令 → `automatic-rename` 把窗口名改写成 shell 名；② 它自己的
+改名步骤那行 stderr 被 `>/dev/null 2>&1` 吞掉 → 整批静默失效；③ `nexus-resume-claude.sh` 的「窗口名
+必须与快照一致」守卫据此把 6 个频道全部跳过。修法是结构恢复后、接续前按快照补窗口名（只动自动改名
+产物）；同时取消 `missing_sessions == 0` 就无条件退出的盲点（session 齐但频道不齐时继续接续）。
+
+**本次演练暴露并已修的两处噪音**（commit `9a671e6`）
+- 闭环告警（`restore-incomplete` + 微信）只在**默认 socket** 上生效：演练常把 socket 指到临时目录，
+  拿那里的频道数与线上快照比毫无意义 —— 15:57 就被这样误报过一次。
+- `viaOf` 承认「频道级动作解释 session 级变化」：`channel-deleted target=main:1` 现在能正确解释随后的
+  `session-windows-changed main`，不再误标 `via=unknown`。
+
+**仍未闭合的一项**：断电后机器是**自己开机**还是**手动按电源键**（三次开机分别在断后 48/19/4 分钟）
+→ 若必须手动按，就是 BIOS 的 AC Power Recovery 未设为 Power On，需要进 BIOS（或加 UPS）。这一条
+只能人到现场确认，Linux 侧看不到。
