@@ -211,11 +211,19 @@ else
 fi
 
 # ── 闭环核对：session 是否齐了、频道是否真的起来了 ──
+# 只在**默认 socket**（= 线上）上告警：演练常把 socket 指到临时目录，那里的频道数跟线上快照
+# 比毫无意义 —— 2026-10-02 15:57 就被一条这样的演练误报成了 restore-incomplete。
+DEFAULT_SOCK="/tmp/tmux-$(id -u)/default"
+CUR_SOCK="$(tmux display-message -p '#{socket_path}' 2>/dev/null || echo '')"
+IS_LIVE=1
+[ -n "$CUR_SOCK" ] && [ "$CUR_SOCK" != "$DEFAULT_SOCK" ] && IS_LIVE=0
 miss_after="$(missing_sessions)"
 want_channels="$(channels_in_snapshot)"
 have_channels="$(count_live_channels)"
 log "[nexus-restore] 核对：session 缺 $miss_after / 频道 $have_channels 在跑（快照期望 $want_channels）"
-if [ "$miss_after" != "0" ] || { [ "$want_channels" -gt 0 ] && [ "$have_channels" -lt "$want_channels" ]; }; then
+if [ "$IS_LIVE" = "0" ]; then
+  log "[nexus-restore] 非默认 socket（$CUR_SOCK）→ 演练环境，跳过闭环告警"
+elif [ "$miss_after" != "0" ] || { [ "$want_channels" -gt 0 ] && [ "$have_channels" -lt "$want_channels" ]; }; then
   err "[nexus-restore] ⚠ 恢复不完整：缺 $miss_after session，频道 $have_channels/$want_channels"
   audit_append restore-incomplete "\"missingSessions\":$miss_after,\"channels\":$have_channels,\"want\":$want_channels,\"snapshot\":\"$(basename "$SNAPSHOT")\""
   [ "${NEXUS_RESTORE_DRY_RUN:-0}" != "1" ] && notify_wechat "开机恢复不完整：缺 $miss_after 个 session、频道 $have_channels/$want_channels。打开面板 → 救援终端（或点「恢复会话」）。"

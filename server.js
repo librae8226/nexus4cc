@@ -318,7 +318,11 @@ function viaOf(name, recent) {
   const key = String(name)
   const inMem = recentApiTouches.get(key)
   if (inMem && Date.now() - inMem < 10000) return 'api'
-  if (recent && recent.has(key)) return 'api'
+  if (recent) {
+    if (recent.has(key)) return 'api'
+    // 频道级动作（target 形如 session:window）同样能解释该 session 的窗口数变化
+    for (const t of recent.keys()) if (t.startsWith(`${key}:`)) return 'api'
+  }
   return 'unknown(命令行/外部)'
 }
 
