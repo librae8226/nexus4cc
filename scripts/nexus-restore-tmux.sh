@@ -170,6 +170,12 @@ if [ "$miss_after" != "0" ] || { [ "$want_channels" -gt 0 ] && [ "$have_channels
   [ "${NEXUS_RESTORE_DRY_RUN:-0}" != "1" ] && notify_wechat "开机恢复不完整：缺 $miss_after 个 session、频道 $have_channels/$want_channels。打开面板 → 救援终端（或点「恢复会话」）。"
 else
   audit_append restore-ok "\"missingSessions\":0,\"channels\":$have_channels,\"snapshot\":\"$(basename "$SNAPSHOT")\""
+  # 开机（非手动）且确实恢复了东西 → 推一条结果到微信：真机宕机验证时，即使我的会话没回来，
+  # 你也能在手机上知道「机器起来了、恢复了多少」
+  s_after_c="$(count_sessions)"; w_after_c="$(count_windows)"
+  if [ "$MANUAL" != "1" ] && { [ "$s_after_c" -gt "$s_before" ] || [ "$w_after_c" -gt "$w_before" ]; }; then
+    notify_wechat "开机恢复完成：session ${s_before}→${s_after_c}、频道 ${w_before}→${w_after_c}、claude ${have_channels}/${want_channels}（快照 $(basename "$SNAPSHOT")）。面板：http://<tailnet-ip>:59000"
+  fi
 fi
 
 if [ "$MANUAL" = "1" ]; then
