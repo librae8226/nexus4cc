@@ -296,9 +296,30 @@ function deviceOf(ua = '') {
   if (/curl|python|node|axios|wget|Claude/i.test(ua)) return `脚本(${ua.slice(0, 20)})`
   return ua ? '浏览器' : '未知'
 }
-function viaOf(name) {
-  const t = recentApiTouches.get(String(name))
-  return t && Date.now() - t < 10000 ? 'api' : 'unknown(命令行/外部)'
+// 判「这次变更是不是 Nexus 自己干的」：先看进程内 10 秒内的触碰，再回看审计文件的近况
+// （对账是每 60s 一轮，10 秒窗口会把「面板 40 秒前的操作」误判成命令行 —— 2026-10-02 实测踩到，
+//  正是「谁删的」这类困惑的来源，所以窗口要放宽到 3 分钟，且以审计文件为准）。
+const MUTATING_ACTIONS = new Set(['session-created', 'session-deleted', 'session-renamed', 'channel-created', 'channel-deleted', 'channel-renamed', 'history-cleared'])
+function auditRecentTargets(windowMs = 180000) {
+  const map = new Map()
+  try {
+    const lines = readFileSync(AUDIT_FILE, 'utf8').trim().split('\n').slice(-300)
+    for (const l of lines) {
+      let e
+      try { e = JSON.parse(l) } catch { continue }
+      if (!e.target || !MUTATING_ACTIONS.has(e.action)) continue
+      const t = Date.parse(e.ts)
+      if (!Number.isNaN(t) && Date.now() - t <= windowMs) map.set(String(e.target), t)
+    }
+  } catch { /* 还没有审计文件 */ }
+  return map
+}
+function viaOf(name, recent) {
+  const key = String(name)
+  const inMem = recentApiTouches.get(key)
+  if (inMem && Date.now() - inMem < 10000) return 'api'
+  if (recent && recent.has(key)) return 'api'
+  return 'unknown(命令行/外部)'
 }
 
 function audit(action, req, extra = {}) {
@@ -336,13 +357,14 @@ function readInventory() {
 }
 function reconcileInventory(note) {
   const cur = readInventory()
+  const recent = auditRecentTargets()
   if (lastInventory) {
     for (const [name, wins] of cur) {
-      if (!lastInventory.has(name)) audit('session-added', null, { target: name, windows: wins, via: viaOf(name), note })
-      else if (lastInventory.get(name) !== wins) audit('session-windows-changed', null, { target: name, from: lastInventory.get(name), to: wins, via: viaOf(name), note })
+      if (!lastInventory.has(name)) audit('session-added', null, { target: name, windows: wins, via: viaOf(name, recent), note })
+      else if (lastInventory.get(name) !== wins) audit('session-windows-changed', null, { target: name, from: lastInventory.get(name), to: wins, via: viaOf(name, recent), note })
     }
     for (const [name, wins] of lastInventory) {
-      if (!cur.has(name)) audit('session-removed', null, { target: name, windows: wins, via: viaOf(name), note })
+      if (!cur.has(name)) audit('session-removed', null, { target: name, windows: wins, via: viaOf(name, recent), note })
     }
   }
   lastInventory = cur
