@@ -32,6 +32,7 @@ Anchor: `docs/NORTH-STAR.md` — 修改任何文档前先对照锚点三原则
 
 ```
 server.js                  # 唯一后端入口：Express + WS + PTY
+walkie.js                  # 对讲机模式后端（F-24）：频道清单/直达发送/精炼/回复追踪
 deploy/systemd/
   nexus-tmux.service       # tmux server 的 systemd 服务（开机起 server + 触发会话恢复）
 scripts/
@@ -65,6 +66,9 @@ frontend/src/
   SessionFAB.tsx           # 移动端浮动操作按钮
   GhostShield.tsx          # 覆盖层守卫（防止意外 keyboard 弹出）
   toolbarDefaults.ts       # 按键定义与出厂配置
+  walkie/                  # 对讲机模式（F-24）：双旋钮 + 按住说话，实验特性
+    WalkieApp.tsx          #   根状态机；ChannelDial.tsx 双旋钮；speech.ts 语音转写
+    api.ts / tts.ts / mode.ts / walkie.css
   windowStatus.ts          # 窗口状态检测（Terminal + TabBar 共享）
   icons.tsx                # 图标组件
   mobileInput.ts           # 移动端键盘映射
@@ -79,6 +83,7 @@ docs/
   ARCHITECTURE.md          # 架构现状
   QUICKSTART.md            # 快速开始指南
   SESSION-PERSISTENCE.md   # 会话持久化方案
+  WALKIE.md                # 对讲机模式（F-24）：设计取舍 + 两个 APK 的构建方式
   HISTORY_MODE_REDESIGN.md # 历史模式重设计（设计阶段）
   story.md                 # 项目故事/背景
   pm2-setup.md             # PM2 部署指南
