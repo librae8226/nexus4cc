@@ -25,6 +25,9 @@ e2e-screenshots/
 screenshots/
 *.pdf
 
+# Crash dumps（node SIGABRT 等产生的 core.<pid>，通常几十 MB）
+core.[0-9]*
+
 # PM2
 ecosystem.config.cjs
 

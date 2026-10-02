@@ -36,6 +36,27 @@ try {
 // 注：上面那段 .env 加载在前，故 .env 里显式写的 LANG 优先级更高。
 process.env.LANG ||= 'C.UTF-8';
 
+// ── 清理 PM2 注入的 IPC / 进程管理变量 ─────────────────────────────────────
+// PM2 拉起本进程时会在 process.env 里塞进 NODE_CHANNEL_FD、pm_id 等。Nexus 首次
+// 启动 tmux server 时，这些变量会被 tmux 冻结进 global environment，此后每个 pane
+// 都继承，而重启 Nexus 并不会刷新已经在跑的 tmux server。
+// 其中 NODE_CHANNEL_FD 最致命：pane 里没有对应的 fd 3 可连，普通 node 进程
+// 启动后会立刻 SIGABRT（exit 134，core dumped）。nexus-run-claude.sh 正是用
+// `node -e` 读 profile 配置，于是脚本在打印 banner 前就被 set -e 干掉，
+// claude 只剩「fallback 到 zsh」，用户手动输入 claude 也救不回来。
+// 这里在 spawn 任何子进程之前从 env 里摘掉，避免继续污染 tmux / 交互式 shell。
+const PM2_LEAKED_ENV = [
+  'NODE_CHANNEL_FD',
+  'NODE_CHANNEL_SERIALIZATION_MODE',
+  'NODE_APP_INSTANCE',
+  'instance_var',
+  'pm_id',
+  'PM2_HOME',
+  'PM2_USAGE',
+  'PM2_JSON_PROCESSING',
+];
+for (const key of PM2_LEAKED_ENV) delete process.env[key];
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // 持久化数据目录（通过 Docker volume 挂载，重建容器不丢失）
@@ -181,6 +202,21 @@ function buildLaunchEnv() {
 
   const proxyExports = Object.entries(proxyVars).map(([k, v]) => `export ${k}='${v}'`).join('; ');
   return { proxyVars, proxyPrefix: proxyExports ? `${proxyExports}; ` : '' };
+}
+
+// 已在跑的 tmux server 可能早就把 PM2 变量冻进了 global environment（重启 Nexus
+// 不会刷新它），所以启动时再主动清一遍，让历史遗留的 server 自愈。还没有 tmux
+// server 时直接返回：稍后会由 nexus-restore 用当前（已清理的）环境新建。
+function sanitizeTmuxGlobalEnv() {
+  try {
+    execFileSync('tmux', ['list-sessions'], { stdio: 'pipe' });
+  } catch {
+    return;
+  }
+  for (const key of PM2_LEAKED_ENV) {
+    try { execFileSync('tmux', ['set-environment', '-g', '-u', key], { stdio: 'pipe' }); } catch { /* 变量不存在等 */ }
+  }
+  console.log('[Nexus] tmux global env sanitized');
 }
 
 // ── CORS 白名单（独立 origin 客户端，如 Android APK）──────────────────────
@@ -1783,6 +1819,8 @@ server.listen(Number(PORT), HOST, () => {
   // 宕机恢复：若是全新 tmux 服务器（宿主机重启后），先恢复上次会话快照，再做默认 bootstrap。
   // 脚本自带幂等与 NEXUS_RESTORED 标记保护，Nexus 普通重启不会覆盖在跑的会话。
   // 详见 docs/SESSION-PERSISTENCE.md。
+  // 恢复前先清掉历史遗留在 tmux global env 里的 PM2 变量，否则新 pane 一出生就是坏的。
+  sanitizeTmuxGlobalEnv();
   try {
     execSync(`bash "${join(__dirname, 'scripts', 'nexus-restore-tmux.sh')}"`, { stdio: 'inherit', timeout: 90000 });
   } catch (e) { console.warn('[Nexus] tmux restore on boot failed:', e.message); }
