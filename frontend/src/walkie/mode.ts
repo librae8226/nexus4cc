@@ -37,6 +37,12 @@ async function probeBuildDefault(): Promise<UiMode | null> {
 }
 
 export async function resolveMode(): Promise<UiMode> {
+  // 无条件先探一次出厂默认 —— **不能**因为 localStorage 有值就跳过。
+  // 那个值是"上次停在哪"，而 buildDefaultMode() 决定的是"经典界面里要不要显示
+  // 回对讲机的浮标"。跳过探针的后果：在对讲机包里手动切到经典 → 下次启动读到
+  // classic 就不探了 → 浮标不渲染 → 再也回不去对讲机界面。
+  const baked = await probeBuildDefault()
+
   const q = new URLSearchParams(location.search).get('ui')
   if (q === 'walkie' || q === 'classic') {
     try { localStorage.setItem(LS_KEY, q) } catch { /* 隐私模式 */ }
@@ -46,7 +52,7 @@ export async function resolveMode(): Promise<UiMode> {
     const saved = localStorage.getItem(LS_KEY)
     if (saved === 'walkie' || saved === 'classic') return saved
   } catch { /* 隐私模式 */ }
-  return (await probeBuildDefault()) ?? 'classic'
+  return baked ?? 'classic'
 }
 
 export function rememberMode(m: UiMode): void {
