@@ -231,6 +231,19 @@
     "notes": "说明",
     "notesDesc": "配置文件存储在 .claude-data/ 目录"
   },
+  "rescue": {
+    "title": "救援模式",
+    "tmuxDown": "tmux server 不可用（状态：{{state}}，unit：{{unit}}）—— 会话可能没恢复回来。",
+    "missing": "有 {{n}} 个会话没恢复回来：{{list}}",
+    "shell": "救援 Shell",
+    "agent": "启动 recovery agent",
+    "run": "一键救援",
+    "running": "救援中…",
+    "shellTitle": "救援 Shell",
+    "agentTitle": "Recovery Agent",
+    "noTmux": "不依赖 tmux",
+    "close": "关闭"
+  },
   "sessionMgr": {
     "title": "会话管理",
     "noProject": "未选择项目",

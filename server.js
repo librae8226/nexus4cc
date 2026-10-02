@@ -14,34 +14,21 @@ import { readdir, stat as statAsync } from 'fs/promises';
 import https from 'node:https';
 import multer from 'multer';
 
-// ── 清理从 pane / PM2 泄漏进来的环境变量（必须在 .env 加载之前）───────────────
-// 两个来源，同一类事故 —— PM2 的环境会被 tmux 冻结进 global environment，
-// 之后每个 pane 都继承，而重启 Nexus 不会刷新已经在跑的 tmux server：
-//  1) PM2 以 fork 模式拉起 Nexus 时注入 NODE_CHANNEL_FD=3 / pm_id / PM2_* 等。
-//     pane 里没有对应的 fd 3 可连，普通 node 进程启动即 SIGABRT（exit 134，
-//     core dumped），nexus-run-claude.sh 里的 `node -e` 首当其冲 → claude 起不来。
-//  2) PM2 若是在某个 tmux pane 里被 `pm2 save` 的，pane 的 TMUX / TMUX_PANE /
-//     TMUX_SESSION / TERM_PROGRAM 会被冻进 ~/.pm2/dump.pm2，每次开机 resurrect
-//     重新注入。其中 TMUX 最致命：它等价于给 tmux 硬指定 socket 路径（同 -S），
-//     而 tmux 在显式路径下不会创建 socket 目录。宿主机重启后 /tmp 是全新 tmpfs、
-//     /tmp/tmux-1000 不存在，于是每个 tmux 调用都以
-//       error creating /tmp/tmux-1000/default (No such file or directory)
-//     失败 → boot 恢复整条链路放弃（「tmux 服务器启动失败，跳过恢复」）→ Nexus
-//     起来了却「活不过来」：空面板，前端「恢复会话」恒报 tmux 不可用。
-//     要等别的进程先把 /tmp/tmux-1000 建出来才自愈 —— 2026-10-02 卡了 21 分钟。
-// 用「前缀 + 显式项」匹配、而不是写死几个键：PM2 升级会加新变量，写死名单必然漏
-// （TMUX 这一组就是这么漏掉的 —— 上午修了 NODE_CHANNEL_FD、下午才轮到它）。
-// 刻意不用 'TMUX*' 前缀：TMUX_TMPDIR 是用户可以显式配置的合法变量，不能连坐。
-// 放在 .env 之前，保证 .env 里显式写的配置优先于泄漏值。
-// 详见 docs/SESSION-PERSISTENCE.md §12。
-const PANE_LEAKED_ENV = ['TMUX', 'TMUX_PANE', 'TMUX_SESSION', 'TERM_PROGRAM'];
-const isLeakedEnvKey = (k) =>
-  PANE_LEAKED_ENV.includes(k) ||
+// ── 剥掉 PM2 注入的 IPC / 进程管理变量（必须在 .env 加载之前）─────────────────
+// PM2 以 fork 模式拉起 Nexus 时会注入 NODE_CHANNEL_FD=3 / NODE_CHANNEL_SERIALIZATION_MODE
+// / pm_id / PM2_* 等。它们会跟着 Nexus 的**子进程**走（node-pty 终端、救援 shell、
+// 它创建的交互式 shell）；其中 NODE_CHANNEL_FD 最致命：子进程里没有对应的 fd 3 可连，
+// 普通 node 进程启动即 SIGABRT（exit 134，core dumped）。
+// 这是「别把 PM2 的家务事传给子进程」的卫生问题，与 tmux 归属无关 —— tmux server 的
+// 环境现在由 nexus-tmux.service 显式定义（deploy/systemd/nexus-tmux.service），pane 不再
+// 继承 Nexus 的 env，所以这里**不再**需要处理 TMUX/TMUX_PANE/TMUX_SESSION 那组补丁。
+// 用前缀匹配而不是写死键名：PM2 升级会加新变量。放在 .env 之前，.env 里显式配置优先。
+const PM2_IPC_KEY = (k) =>
   k.startsWith('PM2_') ||
   k.startsWith('NODE_CHANNEL') ||
   k === 'NODE_APP_INSTANCE' || k === 'instance_var' || k === 'pm_id';
 for (const key of Object.keys(process.env)) {
-  if (isLeakedEnvKey(key)) delete process.env[key];
+  if (PM2_IPC_KEY(key)) delete process.env[key];
 }
 
 // 加载 .env 文件（如果存在）
@@ -66,8 +53,7 @@ try {
 // 注：上面那段 .env 加载在前，故 .env 里显式写的 LANG 优先级更高。
 process.env.LANG ||= 'C.UTF-8';
 
-// PM2 注入的 IPC / 进程管理变量（NODE_CHANNEL_FD、pm_id、PM2_* …）已在文件顶部
-// 用 isLeakedEnvKey() 连同 pane 会话变量一起摘掉，见上面的说明。
+// （PM2 注入的 IPC / 进程管理变量已在文件顶部用 PM2_IPC_KEY() 摘掉，见上面说明。）
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -216,28 +202,36 @@ function buildLaunchEnv() {
   return { proxyVars, proxyPrefix: proxyExports ? `${proxyExports}; ` : '' };
 }
 
-// 已在跑的 tmux server 可能早就把上面那批变量冻进了 global environment（重启 Nexus
-// 不会刷新它），所以启动时主动清一遍，让历史遗留的 server 自愈：先把 global env 全
-// 读出来，再用同一套 isLeakedEnvKey() 判定，只删该删的（对照写死的 PM2 名单，这样
-// 也能清掉残留的 TMUX / TMUX_PANE / TERM_PROGRAM）。还没有 tmux server 时直接返回：
-// 稍后会由 nexus-restore 用当前（已清理的）环境新建。
-function sanitizeTmuxGlobalEnv() {
-  let dump;
+// ── tmux server 的归属与就绪判定 ──────────────────────────────────────────────
+// server 归 nexus-tmux.service 管（deploy/systemd/nexus-tmux.service）：它负责起 server、
+// 建 socket 目录、定义 server 的环境、并在（重）启动后触发快照恢复。
+// Nexus 只**消费**：调 tmux 之前先确认 server 在，绝不在 server 缺席时自己 new-session ——
+// 那会造出一个不受 systemd 管理、环境随调用者而定的「野生 server」（2026-10-02 事故根因）。
+let tmuxState = 'starting'; // starting | ready | broken
+function tmuxServerUp() {
   try {
-    dump = execFileSync('tmux', ['show-environment', '-g'], { encoding: 'utf8' });
+    execFileSync('tmux', ['show-environment', '-g'], { stdio: 'pipe' });
+    tmuxState = 'ready';
+    return true;
   } catch {
-    return;
+    return false;
   }
-  const removed = [];
-  for (const line of dump.split('\n')) {
-    const key = line.trim().replace(/^-/, '').split('=')[0];
-    if (!key || !isLeakedEnvKey(key)) continue;
-    try {
-      execFileSync('tmux', ['set-environment', '-g', '-u', key], { stdio: 'pipe' });
-      removed.push(key);
-    } catch { /* 变量不存在等 */ }
-  }
-  if (removed.length) console.log(`[Nexus] tmux global env sanitized: ${removed.join(', ')}`);
+}
+
+// ── 救援模式：tmux 不可用时的兜底 ─────────────────────────────────────────────
+// 目标（用户要求）：最坏情况下 Nexus 网页必须能打开，且里面能启动一个专职 recovery 的
+// agent。判据简单到不可能失败 —— server 不在、或快照里的 session 没恢复回来。
+let rescueNotifiedAt = 0;
+function notifyRescueOnce(reason) {
+  const now = Date.now();
+  if (now - rescueNotifiedAt < 30 * 60 * 1000) return; // 30 分钟去重，不刷屏
+  rescueNotifiedAt = now;
+  const push = '/home/librae/work/wechat-agent/push.mjs';
+  if (!existsSync(push)) return;
+  try {
+    execFileSync('node', [push, `【nexus】进入救援模式：${reason}。打开 Nexus 面板 → 救援终端 → 启动 recovery agent。`], { timeout: 8000, stdio: 'pipe' });
+    console.log(`[rescue] 已微信推送：${reason}`);
+  } catch (e) { console.warn('[rescue] 微信推送失败（不影响救援）:', e.message); }
 }
 
 // ── CORS 白名单（独立 origin 客户端，如 Android APK）──────────────────────
@@ -346,6 +340,10 @@ app.post('/api/windows', authMiddleware, (req, res) => {
 
   // 确保 tmux session 存在
   try {
+    if (!tmuxServerUp()) {
+      tmuxState = 'broken';
+      return res.status(503).json({ error: 'tmux server 未就绪（归 nexus-tmux.service 管理），请用救援终端或 POST /api/rescue/run', rescue: true });
+    }
     execSync(`tmux has-session -t ${tmuxSession} 2>/dev/null || tmux new-session -d -s ${tmuxSession} -n shell "${INTERACTIVE_SHELL}"`);
   } catch {}
 
@@ -392,6 +390,10 @@ app.post('/api/sessions', authMiddleware, (req, res) => {
 
   // 确保 tmux session 存在
   try {
+    if (!tmuxServerUp()) {
+      tmuxState = 'broken';
+      return res.status(503).json({ error: 'tmux server 未就绪（归 nexus-tmux.service 管理），请用救援终端或 POST /api/rescue/run', rescue: true });
+    }
     execSync(`tmux has-session -t ${tmuxSession} 2>/dev/null || tmux new-session -d -s ${tmuxSession} -n shell "${INTERACTIVE_SHELL}"`);
   } catch {}
 
@@ -1244,12 +1246,10 @@ app.get('/api/session-cwd', authMiddleware, (req, res) => {
   res.json({ cwd, relative })
 })
 
-// ── 会话恢复（Chrome-style restore）──
+// ── 会话恢复（Chrome-style restore）+ 救援 ──
 let restoreInFlight = false
+let rescueInFlight = false
 const RESURRECT_DIR = join(process.env.HOME || '', '.tmux', 'resurrect')
-// 崩溃「待恢复」标记：nexus-restore-tmux.sh 检测到全新 tmux 服务器（上次崩溃/重启）时写入，
-// 全部 session 恢复完成后清除。available 严格= 有待恢复标记 且 有富快照。
-const RESTORE_PENDING_FILE = join(DATA_DIR, 'restore-pending.json')
 
 /** 返回最新一份「含 nexus-run-claude 频道」的快照；无则 null。与 nexus-restore-tmux.sh 选择器同规则。 */
 function findRestoreSnapshot() {
@@ -1274,20 +1274,37 @@ function findRestoreSnapshot() {
   return null
 }
 
+// 快照里还有多少 session 不在当前 tmux 上（>0 = 有东西可恢复）。
+// 这是「可恢复」的唯一判据：事实就是「快照里有、线上没有」，与谁触发无关 ——
+// 不再依赖「全新服务器」这类启发式标记。
+function missingSessions() {
+  const snap = findRestoreSnapshot()
+  if (!snap) return { snapshot: null, missing: 0, list: [] }
+  let all = []
+  try {
+    const txt = readFileSync(join(RESURRECT_DIR, snap.file), 'utf8')
+    all = [...new Set(txt.split('\n').filter((l) => l.startsWith('window\t')).map((l) => l.split('\t')[1]))].filter(Boolean)
+  } catch { return { snapshot: snap, missing: 0, list: [] } }
+  const list = all.filter((s) => {
+    try { execFileSync('tmux', ['has-session', '-t', s], { stdio: 'pipe' }); return false } catch { return true }
+  })
+  return { snapshot: snap, missing: list.length, list }
+}
+
 // GET /api/restore/status — 前端决定是否亮「恢复」入口
 app.get('/api/restore/status', authMiddleware, (req, res) => {
-  const snap = findRestoreSnapshot()
+  const { snapshot, missing } = missingSessions()
   let projects = 0
   let channels = 0
   try { projects = Number(execSync('tmux list-sessions 2>/dev/null | wc -l').toString().trim()) || 0 } catch {}
   try { channels = Number(execSync('tmux list-windows -a 2>/dev/null | wc -l').toString().trim()) || 0 } catch {}
-  const pending = existsSync(RESTORE_PENDING_FILE)
   res.json({
-    available: pending && !!snap,
-    pending,
-    snapshot: snap?.file || null,
-    snapshotTime: snap?.time || null,
-    claudeChannels: snap?.claudeChannels || 0,
+    available: missing > 0 && !!snapshot,
+    missingSessions: missing,
+    tmuxState,
+    snapshot: snapshot?.file || null,
+    snapshotTime: snapshot?.time || null,
+    claudeChannels: snapshot?.claudeChannels || 0,
     currentProjects: projects,
     currentChannels: channels,
     busy: restoreInFlight,
@@ -1316,6 +1333,44 @@ app.post('/api/restore', authMiddleware, (req, res) => {
     const msg = em ? em[1] : err ? err.message : 'restore 执行失败'
     console.error(`[restore-manual] failed: ${msg}`)
     res.status(500).json({ error: msg })
+  })
+})
+
+// ── 救援（break-glass）──
+// 最坏情况下（tmux 起不来 / 会话没恢复回来）面板仍然可用，并给出两条自救路径：
+//   1. 救援终端（不依赖 tmux，见 /ws?rescue=1）——里面可以直接跑 recovery agent
+//   2. POST /api/rescue/run —— 一键跑 scripts/nexus-rescue.sh（零 root 的 break-glass）
+app.get('/api/rescue/status', authMiddleware, (req, res) => {
+  const { snapshot, missing, list } = missingSessions()
+  let unit = 'unknown'
+  try {
+    unit = execFileSync('systemctl', ['is-active', 'nexus-tmux'], { encoding: 'utf8', stdio: 'pipe' }).trim()
+  } catch (e) {
+    unit = String((e && (e.stdout || e.message)) || '').trim() || 'inactive'
+  }
+  const socketDir = `/tmp/tmux-${typeof process.getuid === 'function' ? process.getuid() : 1000}`
+  res.json({
+    tmux: { state: tmuxState, up: tmuxState === 'ready', socketDir, socketDirExists: existsSync(socketDir) },
+    unit,
+    snapshot: snapshot?.file || null,
+    snapshotTime: snapshot?.time || null,
+    claudeChannels: snapshot?.claudeChannels || 0,
+    missingSessions: missing,
+    missingList: list,
+    busy: restoreInFlight || rescueInFlight,
+    freeMemMB: Math.round(os.freemem() / 1024 / 1024),
+  })
+})
+
+app.post('/api/rescue/run', authMiddleware, (req, res) => {
+  if (rescueInFlight) return res.status(409).json({ error: '救援正在进行中，请稍候' })
+  rescueInFlight = true
+  const script = join(__dirname, 'scripts', 'nexus-rescue.sh')
+  exec(`bash "${script}"`, { timeout: 180000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+    rescueInFlight = false
+    const out = String(stdout || '').trim() || String(stderr || '').trim() || (err ? err.message : '')
+    console.log(`[rescue] ${err ? 'failed: ' + err.message : 'done'}`)
+    res.json({ ok: !err, output: out.slice(-8000) })
   })
 })
 
@@ -1469,7 +1524,11 @@ app.post('/api/projects/:name/channels', authMiddleware, (req, res) => {
     }
   }
 
-  // 确保 session 存在
+  // 确保 session 存在（server 归 nexus-tmux.service；缺席时绝不自己造，交给救援）
+  if (!tmuxServerUp()) {
+    tmuxState = 'broken'
+    return res.status(503).json({ error: 'tmux server 未就绪（归 nexus-tmux.service 管理）', rescue: true })
+  }
   try {
     execFileSync('tmux', ['has-session', '-t', sessionName], { stdio: 'pipe' })
   } catch {
@@ -1647,7 +1706,63 @@ function ptyKey(session, windowIndex) {
   return `${session}:${windowIndex}`;
 }
 
+// ── 救援 PTY：不依赖 tmux 的终端 ─────────────────────────────────────────────
+// tmux 一旦坏掉，Nexus 里其它终端全都是 `tmux attach-session`，等于全废。这个 PTY 直接
+// 跑 zsh（或直接跑 recovery agent），是「最坏情况下网页仍然可用、还能起一个修东西的
+// agent」的那条命脉。前端从 /ws?rescue=1[&agent=1] 接进来。
+const RESCUE_PROMPT = [
+  '机器刚重启或出现异常，tmux 里的会话没有恢复到 Nexus 里。你的唯一任务是把它们恢复回来：',
+  '1) 先跑 `bash /home/librae/work/nexus/scripts/nexus-rescue.sh`，把输出读完；',
+  '2) 若 tmux server 不在，查 `systemctl status nexus-tmux` 与 `journalctl -u nexus-tmux -n 50`；',
+  '3) 恢复脚本是幂等的，可以重复跑；细节见 docs/SESSION-PERSISTENCE.md 的救援一节；',
+  '4) 不要重启机器、不要 kill-server。做完把「恢复了哪些 session、还缺什么、你判断的根因」讲清楚。',
+].join(' ');
+
+function spawnRescuePty(key, agent) {
+  const env = { ...process.env, LANG: 'C.UTF-8', TERM: 'xterm-256color' };
+  let cmd, args;
+  if (agent) {
+    cmd = 'bash';
+    args = [join(__dirname, 'nexus-run-claude.sh'), process.env.NEXUS_RESCUE_PROFILE || 'anthropic', __dirname];
+    env.NEXUS_INITIAL_PROMPT = RESCUE_PROMPT;
+  } else {
+    cmd = INTERACTIVE_SHELL === 'zsh' ? '/usr/bin/zsh' : '/bin/bash';
+    args = ['-l'];
+  }
+
+  let ptyProc = null;
+  try {
+    ptyProc = pty.spawn(cmd, args, { name: 'xterm-256color', cols: 120, rows: 30, cwd: __dirname, env });
+  } catch (err) {
+    console.error(`[rescue] pty.spawn 失败（${cmd} ${args.join(' ')}）: ${err.message}`);
+  }
+
+  const entry = { pty: ptyProc, clients: new Set(), clientSizes: new Map(), lastOutput: '', lastActivity: Date.now(), rescue: true, agent: !!agent };
+  if (ptyProc) {
+    ptyProc.onData((data) => {
+      const ent = ptyMap.get(key);
+      if (!ent) return;
+      ent.lastOutput = (ent.lastOutput + data).slice(-10000);
+      ent.lastActivity = Date.now();
+      for (const ws of ent.clients) if (ws.readyState === 1) ws.send(data);
+    });
+    ptyProc.onExit(({ exitCode }) => {
+      console.log(`[rescue] PTY ${key} exited with code ${exitCode}`);
+      ptyMap.delete(key); // 救援终端退出就退出，不自动重开（用户自己再点）
+    });
+  }
+  return entry;
+}
+
 function ensureWindowPty(session, windowIndex) {
+  // tmux server 不在：不给用户一个死终端，直接给救援 shell（它不依赖 tmux）
+  if (!tmuxServerUp()) {
+    tmuxState = 'broken';
+    const rkey = ptyKey(session, windowIndex);
+    if (!ptyMap.has(rkey)) ptyMap.set(rkey, spawnRescuePty(rkey, false));
+    return { key: rkey, entry: ptyMap.get(rkey) };
+  }
+
   // Validate session exists as a real tmux session (execFileSync avoids shell expansion)
   let safeSession = session;
   try {
@@ -1746,7 +1861,17 @@ wss.on('connection', (ws, req) => {
     return;
   }
 
-  const { key, entry } = ensureWindowPty(session, windowIndex);
+  // 救援终端：/ws?rescue=1（shell）或 /ws?rescue=1&agent=1（recovery agent）——
+  // 不经过 tmux，专门用在 tmux 不可用 / 会话没恢复回来的时候。
+  let key, entry;
+  if (url.searchParams.get('rescue') === '1') {
+    const isAgent = url.searchParams.get('agent') === '1';
+    key = isAgent ? 'rescue:agent' : 'rescue:shell';
+    if (!ptyMap.has(key)) ptyMap.set(key, spawnRescuePty(key, isAgent));
+    entry = ptyMap.get(key);
+  } else {
+    ({ key, entry } = ensureWindowPty(session, windowIndex));
+  }
   entry.clients.add(ws);
   console.log(`Client connected to ${key} (clients: ${entry.clients.size})`);
 
@@ -1762,7 +1887,7 @@ wss.on('connection', (ws, req) => {
 
   ws.on('message', (msg) => {
     const ent = ptyMap.get(key);
-    if (!ent) return;
+    if (!ent || !ent.pty) return;
     const str = typeof msg === 'string' ? msg : msg.toString();
     let isResize = false;
     try {
@@ -1837,18 +1962,36 @@ server.listen(Number(PORT), HOST, () => {
   console.log(`tmux session: ${TMUX_SESSION}`);
   console.log(`workspace: ${WORKSPACE_ROOT}`);
   console.log(`claude: ${CLAUDE_BIN || '(未找到，回退到 PATH 上的 claude)'}`);
-  // 宕机恢复：若是全新 tmux 服务器（宿主机重启后），先恢复上次会话快照，再做默认 bootstrap。
-  // 脚本自带幂等与 NEXUS_RESTORED 标记保护，Nexus 普通重启不会覆盖在跑的会话。
-  // 详见 docs/SESSION-PERSISTENCE.md。
-  // 恢复前先清掉历史遗留在 tmux global env 里的 PM2 变量，否则新 pane 一出生就是坏的。
-  sanitizeTmuxGlobalEnv();
-  try {
-    execSync(`bash "${join(__dirname, 'scripts', 'nexus-restore-tmux.sh')}"`, { stdio: 'inherit', timeout: 90000 });
-  } catch (e) { console.warn('[Nexus] tmux restore on boot failed:', e.message); }
-  // 启动时确保默认 tmux session 存在，窗口名使用 WORKSPACE_ROOT 的目录名
-  try {
-    const defaultWindowName = WORKSPACE_ROOT.replace(/^\/+|\/+$/, '').split('/').pop() || '~'
-    execSync(`tmux has-session -t ${TMUX_SESSION} 2>/dev/null || tmux new-session -d -s ${TMUX_SESSION} -n "${defaultWindowName}" -c "${WORKSPACE_ROOT}" "${INTERACTIVE_SHELL}"`);
-    console.log(`tmux session '${TMUX_SESSION}' ready`);
-  } catch (e) { console.warn('tmux session init failed:', e.message); }
+  // tmux server 归 nexus-tmux.service 管：起服务器、建 socket 目录、定义 server 的 env、
+  // 并在（重）启动后触发快照恢复。Nexus 不再自己起 server / 清 tmux global env / 触发恢复。
+  // 这里只做两件事（异步、不阻塞 listen，更不 exit —— 面板必须永远能打开）：
+  //   1. 探测就绪，就绪后兜底确保默认 session 在
+  //   2. 不就绪 / 快照有 session 没恢复 → 进救援模式（面板横幅 + 微信提醒 + 救援终端）
+  (async () => {
+    const deadline = Date.now() + 30000;
+    let up = false;
+    while (Date.now() < deadline) {
+      if (tmuxServerUp()) { up = true; break; }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    if (!up) {
+      tmuxState = 'broken';
+      console.error('[Nexus] tmux server 30s 内未就绪 —— 进入救援模式（面板仍可用：救援终端 / 一键救援）');
+      notifyRescueOnce('tmux server 未就绪');
+      return;
+    }
+    console.log('[Nexus] tmux server 就绪');
+    try {
+      const defaultWindowName = WORKSPACE_ROOT.replace(/^\/+|\/+$/, '').split('/').pop() || '~'
+      execSync(`tmux has-session -t ${TMUX_SESSION} 2>/dev/null || tmux new-session -d -s ${TMUX_SESSION} -n "${defaultWindowName}" -c "${WORKSPACE_ROOT}" "${INTERACTIVE_SHELL}"`);
+      console.log(`tmux session '${TMUX_SESSION}' ready`);
+    } catch (e) { console.warn('tmux session init failed:', e.message); }
+    try {
+      const { missing } = missingSessions();
+      if (missing > 0) {
+        console.warn(`[Nexus] 快照里有 ${missing} 个 session 不在线上：面板可一键恢复，或 POST /api/rescue/run`);
+        notifyRescueOnce(`有 ${missing} 个 session 未恢复`);
+      }
+    } catch (e) { console.warn('missingSessions 检查失败:', e.message); }
+  })();
 });

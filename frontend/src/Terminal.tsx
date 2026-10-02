@@ -10,6 +10,8 @@ import '@xterm/xterm/css/xterm.css'
 import Toolbar from './Toolbar'
 import SessionFAB from './SessionFAB'
 import GhostShield from './GhostShield'
+import RescueBanner from './RescueBanner'
+import RescueConsole from './RescueConsole'
 import { SettingsMenu, ServerPanel } from './SettingsMenu'
 import { Icon } from './icons'
 import { getWindowStatus, STATUS_DOT_COLOR, STATUS_DOT_TITLE } from './windowStatus'
@@ -221,6 +223,8 @@ export default function Terminal({ token }: Props) {
   // 设置面板已经长到一屏放不下，再把服务器切换塞进去会让「设置」本身变难用。
   const [showSettingsMenu, setShowSettingsMenu] = useState(false)
   const [showServerPanel, setShowServerPanel] = useState(false)
+  // 救援终端（不依赖 tmux）：tmux 挂了 / 会话没恢复回来时的入口，见 RescueBanner。
+  const [rescueConsole, setRescueConsole] = useState<null | 'shell' | 'agent'>(null)
   // 终端页里三个入口（齿轮、⋯ 菜单、服务器面板）都从这一个值派生。
   // 判定规则本身定义在 baseUrl.needsServerConfig()，不在这里重写。
   const [showServer] = useState(needsServerConfig)
@@ -1830,6 +1834,7 @@ export default function Terminal({ token }: Props) {
         ? { height: vvHeight ?? '100dvh' }
         : { position: 'fixed', top: 0, left: 0, right: 0, height: vvHeight ?? '100dvh' }
       }>
+      <RescueBanner token={token} onOpenConsole={(agent) => setRescueConsole(agent ? 'agent' : 'shell')} />
       <textarea
         ref={inputRef}
         className="fixed top-0 left-0 w-px h-px opacity-[0.01] text-base pointer-events-none -z-10"
@@ -2535,6 +2540,13 @@ export default function Terminal({ token }: Props) {
             </div>
           ))}
         </div>
+      )}
+      {rescueConsole && (
+        <RescueConsole
+          token={token}
+          agent={rescueConsole === 'agent'}
+          onClose={() => setRescueConsole(null)}
+        />
       )}
     </div>
   )

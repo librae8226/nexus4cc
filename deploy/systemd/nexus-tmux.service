@@ -1,0 +1,50 @@
+[Unit]
+Description=Nexus tmux server (deterministic session host)
+Documentation=file:///home/librae/work/nexus/docs/SESSION-PERSISTENCE.md
+# /tmp 是 tmp.mount 挂的 tmpfs，每次开机都是空的 —— socket 目录必须在它之后就绪。
+After=tmp.mount
+# 只排序、不 Requires：tmux 起不来时不能拖住 pm2/Nexus，否则连救援网页都打不开。
+# 同属 multi-user.target，同一事务里 Before= 足以保证「tmux 先于 PM2 apps 起来」。
+Before=pm2-librae.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=librae
+Group=librae
+WorkingDirectory=/home/librae
+# PATH 与 pm2-librae.service 保持一致（fnm 的 node 在恢复脚本里要用来读 profile）
+Environment=HOME=/home/librae
+Environment=PATH=/home/librae/.local/share/fnm/node-versions/v24.21.0/installation/bin:/home/librae/.local/share/fnm:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
+Environment=LANG=C.UTF-8
+Environment=LC_ALL=C.UTF-8
+Environment=SHELL=/usr/bin/zsh
+Environment=TERM=screen-256color
+Environment=TMPDIR=/tmp
+Environment=TMUX_SESSION=main
+
+# socket 目录的兜底保证。以 librae 身份跑：若 /tmp/tmux-1000 是 root 占的，
+# 这里会**响亮地失败**（unit failed → 面板进救援模式），而不是静默地绕过去。
+ExecStartPre=/usr/bin/install -d -m 700 -o librae -g librae /tmp/tmux-1000
+
+# 前台守 server：`tmux -D` 在无 tty 的 systemd 下会报 "open terminal failed: not a terminal"
+# （2026-10-02 演练实测），`Type=forking` 又只能靠猜 MainPID，于是用一个小监督脚本：
+# 它起 server（detached，不需要 tty）并前台盯住，server 死了就以非零退出交给 Restart=。
+ExecStart=/home/librae/work/nexus/scripts/tmux-server-supervise.sh
+
+# 等就绪 → 保证默认 session 存在 → 后台拉开快照恢复（恢复慢，不能拖住 unit 激活，
+# 否则 pm2/wechat-agent 要跟着等）。细节见 scripts/tmux-server-ready.sh。
+ExecStartPost=/home/librae/work/nexus/scripts/tmux-server-ready.sh
+
+# 停机前补一张快照，再收服务器：干净关机最多丢几分钟的窗口结构。
+ExecStop=-/usr/bin/tmux run-shell /home/librae/.tmux/plugins/tmux-resurrect/scripts/save.sh
+ExecStop=-/usr/bin/tmux kill-server
+
+TimeoutStartSec=45
+TimeoutStopSec=30
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

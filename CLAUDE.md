@@ -18,6 +18,11 @@ Anchor: `docs/NORTH-STAR.md` — 修改任何文档前先对照锚点三原则
 
 ## Architecture Constraints
 
+- **tmux server 不属于 Nexus**：由 `nexus-tmux.service` 管理（环境、socket 目录、恢复触发都在那里）。
+  Nexus 里任何地方都不得 ad-hoc 起 server（`new-session`），要经 `tmuxServerUp()` 守卫 —— 否则会造出
+  不受 systemd 管的野生 server。隔离/演练必须 `env -u TMUX -u TMUX_PANE TMUX_TMPDIR=<dir>`
+  （tmux 不认 `TMPDIR`），拆服务器只用显式 `tmux -S <path> kill-server`。
+
 - **多 PTY 架构**（F-11）：每个 `tmux session:window` 独立 PTY 实例，`ptyMap` 管理
 - **前端 dist 由 Vite 构建**，server.js 静态伺服 `frontend/dist/` + `public/`
 - **no database**：会话状态从 tmux 实时读取，持久化只用 JSON 文件
@@ -27,6 +32,13 @@ Anchor: `docs/NORTH-STAR.md` — 修改任何文档前先对照锚点三原则
 
 ```
 server.js                  # 唯一后端入口：Express + WS + PTY
+deploy/systemd/
+  nexus-tmux.service       # tmux server 的 systemd 服务（开机起 server + 触发会话恢复）
+scripts/
+  tmux-server-supervise.sh # unit 的 ExecStart：前台守 server，死了交给 Restart=always
+  tmux-server-ready.sh     # unit 的 ExecStartPost：等就绪 + 保证 main + 后台触发恢复
+  nexus-restore-tmux.sh    # 把快照里缺的 session/channel 补回来（幂等、只增不改）
+  nexus-rescue.sh          # break-glass 救援（零 root：补目录 → 起 server → 恢复 → 诊断）
 capacitor.config.json      # Android 壳配置（webDir=frontend/dist）
 android/                   # Capacitor Android 工程（F-23）
   Dockerfile               #   构建环境（Android SDK 在容器里，宿主机零污染）

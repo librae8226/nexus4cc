@@ -153,9 +153,17 @@ elif [ -n "${NEXUS_RESUME:-}" ] && [[ "$BASE_URL" != *kimi* ]]; then
     _resume_arg="--continue"
     echo "[Nexus] 宕机恢复：接续最近对话 (claude --continue)"
 fi
+# ── 预置开场白（救援 agent 用）──
+#   NEXUS_INITIAL_PROMPT="..."  → 作为 claude 的第一条用户消息（仅首次启动带上）
+_prompt_arg=""
+if [ -n "${NEXUS_INITIAL_PROMPT:-}" ]; then
+    _prompt_arg="$NEXUS_INITIAL_PROMPT"
+    echo "[Nexus] 带预置任务启动（救援模式）"
+fi
 while true; do
-    "$CLAUDE_BIN" $_resume_arg --dangerously-skip-permissions || true
+    "$CLAUDE_BIN" $_resume_arg --dangerously-skip-permissions $_prompt_arg || true
     _resume_arg=""   # 仅首次接续，手动重启(r)为全新会话
+    _prompt_arg=""   # 预置开场白也只带一次
     echo ""
     echo "[Nexus] Claude exited.  r=restart  b=shell  q=quit window"
     read -r REPLY

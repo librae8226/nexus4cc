@@ -332,3 +332,58 @@ nexus 子进程 env 与新建 pane 的 env 里 `NODE_CHANNEL_FD` / `PM2_*` / `pm
 - 同一天还踩到选择器误判：崩溃后重建的 `main` 里已跑着 claude，continuum 存下**只含这一条
   频道**的近空快照并成为最新 → 被当成「有频道的快照」选中，恢复出来仍是空的。已改为
   优先 ≥2 条频道的快照（见 §11）。
+
+## 13. 权威划分：tmux server 归 systemd（2026-10-02 重构）
+
+**一句话**：以前「谁先调用 tmux 谁顺手把 server 建出来」，于是 server 带着那个调用者的环境
+出生（PM2 的 `NODE_CHANNEL_FD`、`$TMUX`、pane 的会话变量、甚至 `JWT_SECRET` 全被冻进 tmux 的
+global env，所有 pane 继承）；现在 **server 是一个 systemd 服务**，环境由 unit 显式写死。
+
+| 事物 | 归属 | 保证 |
+|---|---|---|
+| tmux server 存在 / socket 目录 / server 的环境 | `nexus-tmux.service`（`deploy/systemd/nexus-tmux.service`，系统级，`User=librae`） | `After=tmp.mount` + `ExecStartPre` 建 `/tmp/tmux-1000`(0700)；`Restart=always/2s`，server 死了自动拉起 |
+| 会话结构 + claude 接续 | 同一 unit 的 `ExecStartPost` → `scripts/tmux-server-ready.sh` → 后台跑 `scripts/nexus-restore-tmux.sh` | 服务器（重）启动就恢复；**中途 server 死亡也能自愈**（Nexus 启动钩子做不到） |
+| 停机前的最后一张快照 | unit 的 `ExecStop`（先 `run-shell save.sh` 再 `kill-server`） | 干净关机最多丢几分钟 |
+| 面板 / 就绪判定 / 救援 | Nexus（纯消费者） | 起服务后异步探测 tmux；不可用/有 session 没恢复 → 面板亮救援横幅 + 微信推送 |
+| 4 个 PM2 服务 | `pm2-librae.service`（`Before=` 关系把它排在 tmux 之后；drop-in 把 `Restart` 收紧为 `always`） | 一次开机全回来 |
+
+**Nexus 不再做的事**（这些代码已删）：自己起 server、清 tmux global env、触发恢复、拿「全新服务器」
+启发式判断该不该恢复。改判据为事实：**快照里有、线上没有 → 可恢复**（`missing_sessions()`）。
+
+**为什么 unit 的 ExecStart 是 `scripts/tmux-server-supervise.sh` 而不是 `tmux -D`**：
+`tmux -D` 不许带命令（等价于「起会话并显示」），systemd 没有 tty → 报
+`open terminal failed: not a terminal`（隔离演练实测）。`Type=forking` + `new-session -d` 则只能
+靠猜 MainPID，server 死掉未必触发 `Restart=`。监督脚本起 server（detached，不需要 tty）后前台
+盯住它，server 一没就以非零退出 → systemd 重启整个 unit → ExecStartPost 再恢复一次。
+
+**运维铁律（血泪版）**
+- **不要在任何地方 ad-hoc 起 tmux server**（`tmux new-session`）：socket 目录/server 缺席时它会造出
+  一个不受 systemd 管的野生 server，环境随调用者而定。Nexus 的建 session 接口已加
+  `tmuxServerUp()` 守卫（缺席返回 503 + `rescue:true`），新代码请沿用。
+- **tmux 的 socket 只认 `$TMUX` 和 `$TMUX_TMPDIR`；它不认 `TMPDIR`**。所以：
+  - 凡是「隔离/演练」，必须 `env -u TMUX -u TMUX_PANE TMUX_TMPDIR=<dir>`；只设 `TMPDIR` 会静默打在
+    线上 socket 上（2026-10-02 我用它清空过全机 session，第 3 次同类事故）。
+  - 拆一个隔离 server 一律用显式 `tmux -S <path> kill-server`，**任何情况下都不要在带 `$TMUX` 的
+    shell 里敲 `kill-server`**。
+- **不要在 tmux pane 里 `pm2 save`**：pane 的会话变量会被冻进 `dump.pm2`，每次 resurrect 都注入。
+- `/proc/<pid>/environ` 是 exec 时的初始 env，进程内 `delete process.env.X` 不体现在上面 —— 验证要看
+  **子进程**的 environ。
+
+**验证状态（2026-10-02）**
+- 已验证：隔离演练（unit 的确切 env + 真实 ExecStartPost 帮手 + dry-run 恢复）——server 无 tty 起得来、
+  **global env 干净**（无 PM2/claude/密钥污染）、快照 5 个 session 都恢复进隔离 socket、线上会话与快照
+  文件数未变、server 被杀后监督脚本以非零退出 ✓。
+- 未验证（首次真重启即验收）：unit 在真机上被 systemd 启动（`Type=exec` + `Before=pm2-librae.service`）、
+  `ExecStop` 的快照、以及「开机 → 会话自动回来」的端到端。
+- 观察点：开机后看 `systemctl status nexus-tmux`、`journalctl -u nexus-tmux`、
+  `tail logs/tmux-restore.log`、`tmux ls`（应 ≥5 session）。
+- 已知未解释：隔离演练里 resume 那步偶尔报「session 不存在」（同一份代码在线上默认 socket 下多次实测
+  正常）。首次真重启时留意 `logs/tmux-restore.log` 里 resume 是否真的接上 claude。
+
+**救援模式（最坏情况的兜底，用户硬要求）**
+- 只要 Nexus 能起（它**永不 exit**，探测失败也照常监听），面板就可用，并亮「救援模式」横幅。
+- 三条自救路径：**救援 Shell**（`/ws?rescue=1`，node-pty 直起 zsh，**不依赖 tmux**）、
+  **Recovery Agent**（`/ws?rescue=1&agent=1`，同一裸 PTY 里拉起 claude 并带预置任务：
+  先跑 `scripts/nexus-rescue.sh`、再按输出处置）、**一键救援**（`POST /api/rescue/run`）。
+- `scripts/nexus-rescue.sh` 零 root：补 socket 目录 → server 不在就手起 → 跑 manual 恢复 → 打印诊断。
+- 进救援模式会经 wechat-agent 推一条微信（30 分钟去重）。

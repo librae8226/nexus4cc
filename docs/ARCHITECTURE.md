@@ -24,6 +24,11 @@ tmux attach-session -t <session>:<window>
 
 ### 启动流程
 
+**前置：tmux server 归 `nexus-tmux.service`（systemd 系统服务，见 `deploy/systemd/`）**——
+它负责起 server、建 `/tmp/tmux-1000`、定义 server 的环境、并在（重）启动后跑
+`scripts/nexus-restore-tmux.sh` 恢复会话快照。Nexus 只消费，不自己起 server（详见
+`docs/SESSION-PERSISTENCE.md` §13）。
+
 1. 加载 `.env`（手动解析，无 dotenv 依赖）
 2. 验证 `JWT_SECRET` 和 `ACC_PASSWORD_HASH`（缺失则 exit(1)）
 3. 确保 `data/` 和 `data/configs/` 存在
@@ -85,6 +90,9 @@ tmux attach-session -t <session>:<window>
 | GET | `*` | 无 | SPA fallback → index.html |
 
 ### PTY 层（ptyMap 多实例）
+
+> 另有一路**不依赖 tmux** 的救援 PTY：`/ws?rescue=1`（裸 zsh）与 `/ws?rescue=1&agent=1`
+> （带预置任务的 recovery agent），tmux 坏掉时的唯一可用终端。
 
 ```javascript
 // 每个 "session:windowIndex" 独立 PTY 实例

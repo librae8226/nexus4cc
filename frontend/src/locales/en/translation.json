@@ -231,6 +231,19 @@
     "notes": "Notes",
     "notesDesc": "Configs are stored in .claude-data/"
   },
+  "rescue": {
+    "title": "Rescue mode",
+    "tmuxDown": "tmux server unavailable (state: {{state}}, unit: {{unit}}) — sessions may not be restored.",
+    "missing": "{{n}} session(s) not restored: {{list}}",
+    "shell": "Rescue shell",
+    "agent": "Start recovery agent",
+    "run": "Run rescue",
+    "running": "Rescuing…",
+    "shellTitle": "Rescue shell",
+    "agentTitle": "Recovery agent",
+    "noTmux": "tmux-free",
+    "close": "Close"
+  },
   "sessionMgr": {
     "title": "Session Manager",
     "noProject": "No project selected",
