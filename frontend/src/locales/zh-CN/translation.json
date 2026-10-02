@@ -241,6 +241,7 @@
   "rescue": {
     "title": "救援模式",
     "tmuxDown": "tmux server 不可用（状态：{{state}}，unit：{{unit}}）—— 会话可能没恢复回来。",
+    "missingChannels": "有 {{n}} 个频道没恢复回来：{{list}}",
     "missing": "有 {{n}} 个会话没恢复回来：{{list}}",
     "shell": "救援 Shell",
     "agent": "启动 recovery agent",

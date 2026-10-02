@@ -408,3 +408,33 @@ global env，所有 pane 继承）；现在 **server 是一个 systemd 服务**�
 
 **排查口径**：先看 `data/audit.log` —— 有 API 记录 = 面板/脚本；只有 `via=unknown` = 命令行；
 两者都没有 = 不是 Nexus 也不是 tmux 层面的事（去 `journalctl -u nexus-tmux` / 内核日志）。
+
+## 15. 健壮性审查：又发现 4 个缝隙（2026-10-02 晚）
+
+架构换成 systemd 权威之后，我拿「断电/重启」当假想敌又审了一遍，实测挖出 4 个真缝隙
+（前 3 个已修，第 4 个只是可见性，改动是刻意的）：
+
+1. **保存端不可靠（最严重，已修）**：continuum 的「每 5 分钟自动快照」挂在 `status-right` 上，
+   靠状态栏重绘触发 —— 没人看/不活跃就不存。当天快照时间线实测出现 `13:37→13:47`、
+   `14:03→15:08`（**65 分钟**）的空档。断电时「恢复出来的是最长一小时前的结构」。
+   修法：新增 `nexus-tmux-snapshot.timer`（每 5 分钟，`OnCalendar=*:2/5`，`Persistent=true`）
+   + `scripts/tmux-snapshot.sh`（`tmux run-shell save.sh`；顺带 `last` 悬空自愈；
+   保存后最新快照仍 >12 分钟就以非零退出，让 `journalctl -u nexus-tmux-snapshot` 上能看见）。
+   **保存从此与有没有人看无关。**
+2. **接续 claude 早于代理（已修）**：所有 profile 的 BASE_URL 都在墙外（deepseek/moonshot/
+   openrouter/官方），claude 频道都要经本机 mihomo（7890）。而 tmux unit 排在 pm2 之前
+   → 恢复脚本接续 claude 时代理可能还没起来，claude 首次请求失败、pane 掉回 zsh。
+   修法：`nexus-restore-tmux.sh` 里接续前 `wait_proxy`（探 `127.0.0.1:7890`，最多 60s）。
+3. **恢复后无人核对结果（已修）**：以前 `RESTORE_OK` 只表示「脚本跑完了」。现在脚本收尾做闭环：
+   核 `missing_sessions` 与「实际在跑的频道数 vs 快照里的频道数」，不齐就写审计
+   （`restore-incomplete`）+ 推微信；齐了写 `restore-ok`。首次接续 0 个频道时还会隔 5s 重试一次
+   （防 session 瞬时不可见的竞态）。
+4. **「session 在、频道丢了」看不见（已修，但只做可见性）**：判据原来只到 session 级。
+   今天 home-librae 正是这种半残状态（session 被面板重建为空壳）。现在 `/api/restore/status`
+   与 `/api/rescue/status` 多返回 `missingChannels` / `missingChannelsList`，面板横幅会显示
+   「有 N 个频道没恢复回来」并可一键恢复。**但自动恢复的闸门故意仍留在 session 级** ——
+   否则「你故意删掉的频道」会在每次重启时复活。想要频道级自动恢复的话，改
+   `nexus-restore-tmux.sh` 的闸门一行即可（`missing_sessions` → 再加 `missing_channels`）。
+
+**审查结论**：结构层（谁拥有 server、环境、开机顺序、自愈）已经稳；这次补的是**保存端的
+确定性**与**结果闭环**。仍然未验证的是「真机重启」那一次（下一次重启即验收）。

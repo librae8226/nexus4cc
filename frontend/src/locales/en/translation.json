@@ -241,6 +241,7 @@
   "rescue": {
     "title": "Rescue mode",
     "tmuxDown": "tmux server unavailable (state: {{state}}, unit: {{unit}}) — sessions may not be restored.",
+    "missingChannels": "{{n}} channel(s) not restored: {{list}}",
     "missing": "{{n}} session(s) not restored: {{list}}",
     "shell": "Rescue shell",
     "agent": "Start recovery agent",

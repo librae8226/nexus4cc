@@ -1371,28 +1371,50 @@ function findRestoreSnapshot() {
 // 不再依赖「全新服务器」这类启发式标记。
 function missingSessions() {
   const snap = findRestoreSnapshot()
-  if (!snap) return { snapshot: null, missing: 0, list: [] }
-  let all = []
+  if (!snap) return { snapshot: null, missing: 0, list: [], missingChannels: 0, channelsList: [] }
+  const sessions = new Set()
+  const snapWins = new Map() // session -> Set(窗口名)
   try {
     const txt = readFileSync(join(RESURRECT_DIR, snap.file), 'utf8')
-    all = [...new Set(txt.split('\n').filter((l) => l.startsWith('window\t')).map((l) => l.split('\t')[1]))].filter(Boolean)
-  } catch { return { snapshot: snap, missing: 0, list: [] } }
-  const list = all.filter((s) => {
+    for (const line of txt.split('\n')) {
+      if (!line.startsWith('window\t')) continue
+      const cols = line.split('\t')
+      const sess = cols[1]
+      const name = String(cols[3] || '').replace(/^[:+-]/, '')
+      if (!sess) continue
+      sessions.add(sess)
+      if (!snapWins.has(sess)) snapWins.set(sess, new Set())
+      if (name) snapWins.get(sess).add(name)
+    }
+  } catch { return { snapshot: snap, missing: 0, list: [], missingChannels: 0, channelsList: [] } }
+  const list = [...sessions].filter((s) => {
     try { execFileSync('tmux', ['has-session', '-t', s], { stdio: 'pipe' }); return false } catch { return true }
   })
-  return { snapshot: snap, missing: list.length, list }
+  // 频道级：session 在、但快照里的窗口名不在线上 —— 就是 2026-10-02 home-librae 那种「半残」状态
+  // （只按 session 判会漏掉它，面板上也看不见）。改名会误报一次，可接受。
+  const channelsList = []
+  for (const [sess, names] of snapWins) {
+    if (list.includes(sess)) continue // 整个 session 都缺，已计入 list
+    let live = new Set()
+    try {
+      live = new Set(execFileSync('tmux', ['list-windows', '-t', sess, '-F', '#{window_name}'], { encoding: 'utf8', stdio: 'pipe' }).trim().split('\n').filter(Boolean))
+    } catch { continue }
+    for (const n of names) if (!live.has(n)) channelsList.push(`${sess}:${n}`)
+  }
+  return { snapshot: snap, missing: list.length, list, missingChannels: channelsList.length, channelsList }
 }
 
 // GET /api/restore/status — 前端决定是否亮「恢复」入口
 app.get('/api/restore/status', authMiddleware, (req, res) => {
-  const { snapshot, missing } = missingSessions()
+  const { snapshot, missing, missingChannels } = missingSessions()
   let projects = 0
   let channels = 0
   try { projects = Number(execSync('tmux list-sessions 2>/dev/null | wc -l').toString().trim()) || 0 } catch {}
   try { channels = Number(execSync('tmux list-windows -a 2>/dev/null | wc -l').toString().trim()) || 0 } catch {}
   res.json({
-    available: missing > 0 && !!snapshot,
+    available: (missing > 0 || missingChannels > 0) && !!snapshot,
     missingSessions: missing,
+    missingChannels,
     tmuxState,
     snapshot: snapshot?.file || null,
     snapshotTime: snapshot?.time || null,
@@ -1435,7 +1457,7 @@ app.post('/api/restore', authMiddleware, (req, res) => {
 //   1. 救援终端（不依赖 tmux，见 /ws?rescue=1）——里面可以直接跑 recovery agent
 //   2. POST /api/rescue/run —— 一键跑 scripts/nexus-rescue.sh（零 root 的 break-glass）
 app.get('/api/rescue/status', authMiddleware, (req, res) => {
-  const { snapshot, missing, list } = missingSessions()
+  const { snapshot, missing, list, missingChannels, channelsList } = missingSessions()
   let unit = 'unknown'
   try {
     unit = execFileSync('systemctl', ['is-active', 'nexus-tmux'], { encoding: 'utf8', stdio: 'pipe' }).trim()
@@ -1451,6 +1473,8 @@ app.get('/api/rescue/status', authMiddleware, (req, res) => {
     claudeChannels: snapshot?.claudeChannels || 0,
     missingSessions: missing,
     missingList: list,
+    missingChannels,
+    missingChannelsList: channelsList,
     busy: restoreInFlight || rescueInFlight,
     freeMemMB: Math.round(os.freemem() / 1024 / 1024),
   })
@@ -1764,12 +1788,14 @@ app.delete('/api/sessions/:id', authMiddleware, (req, res) => {
       // Last window: create a new shell first to keep the session alive
       exec(`tmux new-window -t ${session} -n shell "${INTERACTIVE_SHELL}"`, () => {
         exec(`tmux kill-window -t ${session}:${index}`, (err) => {
+          audit('channel-deleted', req, { target: `${session}:${index}`, result: err ? `failed: ${err.message}` : 'ok' })
           if (err) return res.status(500).json({ error: err.message })
           res.json({ ok: true })
         })
       })
     } else {
       exec(`tmux kill-window -t ${session}:${index}`, (err) => {
+        audit('channel-deleted', req, { target: `${session}:${index}`, result: err ? `failed: ${err.message}` : 'ok' })
         if (err) return res.status(500).json({ error: err.message })
         res.json({ ok: true })
       })

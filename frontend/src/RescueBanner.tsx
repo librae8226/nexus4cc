@@ -16,6 +16,8 @@ interface RescueStatus {
   claudeChannels: number
   missingSessions: number
   missingList: string[]
+  missingChannels: number
+  missingChannelsList?: string[]
   busy: boolean
 }
 
@@ -60,7 +62,7 @@ export default function RescueBanner({ token, onOpenConsole }: Props) {
 
   if (!status) return null
   const down = !status.tmux.up
-  const missing = status.missingSessions > 0
+  const missing = status.missingSessions > 0 || status.missingChannels > 0
   if (!down && !missing) return null
 
   return (
@@ -70,7 +72,9 @@ export default function RescueBanner({ token, onOpenConsole }: Props) {
         <span className="flex-1 min-w-[12rem]">
           {down
             ? t('rescue.tmuxDown', { state: status.tmux.state, unit: status.unit })
-            : t('rescue.missing', { n: status.missingSessions, list: status.missingList.join(', ') })}
+            : status.missingSessions > 0
+              ? t('rescue.missing', { n: status.missingSessions, list: status.missingList.join(', ') })
+              : t('rescue.missingChannels', { n: status.missingChannels, list: (status.missingChannelsList || []).join(', ') })}
         </span>
         <button className="bg-transparent border-none underline cursor-pointer p-0" style={{ color: '#fed7aa' }} onClick={() => onOpenConsole(false)}>
           {t('rescue.shell')}

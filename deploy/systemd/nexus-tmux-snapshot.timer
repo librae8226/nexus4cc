@@ -1,0 +1,14 @@
+[Unit]
+Description=Nexus tmux snapshot every 5 minutes (client-independent)
+Documentation=file:///home/librae/work/nexus/docs/SESSION-PERSISTENCE.md
+
+[Timer]
+# :02 :07 :12 … 避开整点（本机其它定时任务都在 :00），别堆在同一秒
+OnCalendar=*:2/5
+# 关机/休眠错过的窗口，开机后补跑一次
+Persistent=true
+AccuracySec=30s
+Unit=nexus-tmux-snapshot.service
+
+[Install]
+WantedBy=timers.target

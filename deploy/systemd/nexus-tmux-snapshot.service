@@ -1,0 +1,15 @@
+[Unit]
+Description=Nexus tmux snapshot (client-independent save)
+Documentation=file:///home/librae/work/nexus/docs/SESSION-PERSISTENCE.md
+# 只要求 tmux unit 已经「尝试」过启动；tmux 不在时脚本自己会以非零退出并说清楚原因。
+After=nexus-tmux.service
+
+[Service]
+Type=oneshot
+User=librae
+Group=librae
+WorkingDirectory=/home/librae
+Environment=HOME=/home/librae
+Environment=PATH=/home/librae/.local/share/fnm/node-versions/v24.21.0/installation/bin:/home/librae/.local/share/fnm:/usr/local/bin:/usr/bin:/bin
+Environment=LANG=C.UTF-8
+ExecStart=/home/librae/work/nexus/scripts/tmux-snapshot.sh

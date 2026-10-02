@@ -39,6 +39,7 @@ scripts/
   tmux-server-ready.sh     # unit 的 ExecStartPost：等就绪 + 保证 main + 后台触发恢复
   nexus-restore-tmux.sh    # 把快照里缺的 session/channel 补回来（幂等、只增不改）
   nexus-rescue.sh          # break-glass 救援（零 root：补目录 → 起 server → 恢复 → 诊断）
+  tmux-snapshot.sh         # 独立于客户端的快照触发器（nexus-tmux-snapshot.timer 每 5 分钟调）
 capacitor.config.json      # Android 壳配置（webDir=frontend/dist）
 android/                   # Capacitor Android 工程（F-23）
   Dockerfile               #   构建环境（Android SDK 在容器里，宿主机零污染）

@@ -27,7 +27,8 @@ tmux attach-session -t <session>:<window>
 **前置：tmux server 归 `nexus-tmux.service`（systemd 系统服务，见 `deploy/systemd/`）**——
 它负责起 server、建 `/tmp/tmux-1000`、定义 server 的环境、并在（重）启动后跑
 `scripts/nexus-restore-tmux.sh` 恢复会话快照。Nexus 只消费，不自己起 server（详见
-`docs/SESSION-PERSISTENCE.md` §13）。
+`docs/SESSION-PERSISTENCE.md` §13）。另一支 `nexus-tmux-snapshot.timer` 每 5 分钟独立存一次
+快照（不依赖有没有客户端在看重绘状态栏，§15）。
 
 1. 加载 `.env`（手动解析，无 dotenv 依赖）
 2. 验证 `JWT_SECRET` 和 `ACC_PASSWORD_HASH`（缺失则 exit(1)）

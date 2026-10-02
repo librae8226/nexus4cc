@@ -77,6 +77,41 @@ missing_sessions(){
 count_sessions(){ tmux list-sessions 2>/dev/null | wc -l; }
 count_windows(){ tmux list-windows -a -F x 2>/dev/null | wc -l; }
 
+# 快照里有多少个 claude 频道（= 期望值）
+channels_in_snapshot(){ awk -F'\t' '$1=="pane" && $11 ~ /nexus-run-claude\.sh/ {n++} END{print n+0}' "$SNAPSHOT"; }
+# 线上有多少个 pane 的进程树下跑着 claude / nexus-run-claude（= 实际值）
+count_live_channels(){
+  local n=0 pid
+  for pid in $(tmux list-panes -a -F '#{pane_pid}' 2>/dev/null); do
+    ps -ax -o ppid=,args= 2>/dev/null | awk -v p="$pid" '$1 == p' \
+      | grep -qE '(^|/)claude([[:space:]]|$)|nexus-run-claude' && n=$((n+1))
+  done
+  echo "$n"
+}
+
+# ── 结果闭环：别只说「结构恢复完成」，要核对真的恢复了 ──
+# 与 server.js 的审计同格式，面板「操作日志」里能一起看到。
+audit_append(){
+  mkdir -p "$HOME/work/nexus/data" 2>/dev/null || true
+  printf '{"ts":"%s","action":"%s","source":"restore-script"%s}\n' \
+    "$(date -Is)" "$1" "${2:+,$2}" >> "$HOME/work/nexus/data/audit.log" 2>/dev/null || true
+}
+notify_wechat(){
+  local p="$HOME/work/wechat-agent/push.mjs"
+  [ -f "$p" ] && node "$p" "【nexus】$1" >/dev/null 2>&1 || true
+}
+
+# claude 频道要经本机 mihomo（HTTP_PROXY=127.0.0.1:7890）出网。开机时 tmux unit 排在 pm2
+# 之前，代理可能还没起来 —— 不等就接续，claude 首次请求会直接失败、pane 掉回 zsh。
+wait_proxy(){
+  local i
+  for i in $(seq 1 30); do
+    (exec 3<>/dev/tcp/127.0.0.1/7890) 2>/dev/null && { exec 3>&-; return 0; }
+    sleep 2
+  done
+  return 1
+}
+
 s_before="$(count_sessions)"; w_before="$(count_windows)"
 missing="$(missing_sessions)"
 
@@ -98,17 +133,43 @@ fi
 
 # 结构恢复只还原 shell + 可见文字，不会重启 claude：再把 claude 频道接续起来。
 sleep 2
+run_resume(){
+  if [ "${NEXUS_RESTORE_DRY_RUN:-0}" = "1" ]; then
+    bash "$RESUME_SCRIPT" --dry-run "$SNAPSHOT" 2>&1 || true
+  else
+    bash "$RESUME_SCRIPT" "$SNAPSHOT" 2>&1 || true
+  fi
+}
+
 RESUME_OUT=""
 if [ -f "$RESUME_SCRIPT" ]; then
-  if [ "${NEXUS_RESTORE_DRY_RUN:-0}" = "1" ]; then
-    log "[nexus-restore] DRY-RUN：不发送任何按键"
-    RESUME_OUT="$(bash "$RESUME_SCRIPT" --dry-run "$SNAPSHOT" 2>&1 || true)"
-  else
-    RESUME_OUT="$(bash "$RESUME_SCRIPT" "$SNAPSHOT" 2>&1 || true)"
-  fi
+  [ "${NEXUS_RESTORE_DRY_RUN:-0}" != "1" ] && { wait_proxy && log "[nexus-restore] 代理已就绪" || err "[nexus-restore] 代理 60s 未就绪，仍尝试接续（claude 可能首请求失败）"; }
+  RESUME_OUT="$(run_resume)"
   printf '%s\n' "$RESUME_OUT" >&2
+  # 一次都没接上、但快照里确实有频道 → 大概率是 session 瞬时不可见的竞态，隔几秒重试一次
+  if [ "${NEXUS_RESTORE_DRY_RUN:-0}" != "1" ] \
+     && [ "$(printf '%s\n' "$RESUME_OUT" | grep -cE '→ --(resume|continue)')" = "0" ] \
+     && [ "$(channels_in_snapshot)" -gt 0 ]; then
+    log "[nexus-restore] 首次接续 0 个频道，5s 后重试一次"
+    sleep 5
+    RESUME_OUT="$RESUME_OUT$(printf '\n%s' "$(run_resume)")"
+    printf '%s\n' "$RESUME_OUT" >&2
+  fi
 else
   err "[nexus-restore] 缺 nexus-resume-claude.sh"
+fi
+
+# ── 闭环核对：session 是否齐了、频道是否真的起来了 ──
+miss_after="$(missing_sessions)"
+want_channels="$(channels_in_snapshot)"
+have_channels="$(count_live_channels)"
+log "[nexus-restore] 核对：session 缺 $miss_after / 频道 $have_channels 在跑（快照期望 $want_channels）"
+if [ "$miss_after" != "0" ] || { [ "$want_channels" -gt 0 ] && [ "$have_channels" -lt "$want_channels" ]; }; then
+  err "[nexus-restore] ⚠ 恢复不完整：缺 $miss_after session，频道 $have_channels/$want_channels"
+  audit_append restore-incomplete "\"missingSessions\":$miss_after,\"channels\":$have_channels,\"want\":$want_channels,\"snapshot\":\"$(basename "$SNAPSHOT")\""
+  [ "${NEXUS_RESTORE_DRY_RUN:-0}" != "1" ] && notify_wechat "开机恢复不完整：缺 $miss_after 个 session、频道 $have_channels/$want_channels。打开面板 → 救援终端（或点「恢复会话」）。"
+else
+  audit_append restore-ok "\"missingSessions\":0,\"channels\":$have_channels,\"snapshot\":\"$(basename "$SNAPSHOT")\""
 fi
 
 if [ "$MANUAL" = "1" ]; then
