@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <!-- 覆盖 main 里的 app_name/title_activity_main：风味包的应用名。
+         放在风味源集（不是 main）里，cap sync 重写 main/strings.xml 时不会碰它。 -->
+    <string name="app_name">Nexus 对讲机</string>
+    <string name="title_activity_main">Nexus 对讲机</string>
+</resources>

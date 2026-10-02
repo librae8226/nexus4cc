@@ -49,6 +49,33 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // ── 两个风味包：经典 Nexus / 对讲机（F-24）────────────────────────────
+    // 对讲机是个实验，不想动现有那个包 —— 但也不想维护第二份 Android 工程
+    // （gradle 壳子、图标、签名、Capacitor 配置全都要跟着同步，迟早不一致）。
+    // 所以用 product flavor：同一份代码、同一份 web 产物，只差 applicationId、
+    // 名字、图标底色，和一个 assets/public/ui-mode.json（前端启动时读它决定
+    // 默认进哪个界面，见 frontend/src/walkie/mode.ts）。
+    //
+    // 两个包 applicationId 不同 ⇒ 可以同时装在手机上，数据互不干扰
+    // （localStorage 是按包隔离的），FileProvider authority 也跟着 applicationId
+    // 派生，不会撞。
+    //
+    // 构建：
+    //   android/build-apk.sh assembleWalkieRelease   # 只出对讲机包
+    //   android/build-apk.sh assembleClassicRelease  # 只出经典包
+    //   android/build-apk.sh assembleRelease         # 两个都出
+    flavorDimensions "ui"
+    productFlavors {
+        classic {
+            dimension "ui"
+            applicationId "com.librae.nexus"
+        }
+        walkie {
+            dimension "ui"
+            applicationId "com.librae.nexus.walkie"
+        }
+    }
+
     buildTypes {
         release {
             // 没签名配置时不静默产出未签名包 —— 那种包装上会失败，且报错离原因很远。

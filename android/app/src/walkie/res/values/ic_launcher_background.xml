@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 同一个前景图，换个深色底：桌面上两个 Nexus 一眼能分开 -->
+    <color name="ic_launcher_background">#0F172A</color>
+</resources>
