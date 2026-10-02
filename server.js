@@ -14,19 +14,35 @@ import { readdir, stat as statAsync } from 'fs/promises';
 import https from 'node:https';
 import multer from 'multer';
 
-// ── 清理从 tmux pane 泄漏进来的会话变量（必须在 .env 加载之前）──────────────
-// PM2 若是在某个 tmux pane 里被 `pm2 save` 的，pane 的会话变量会被冻进
-// ~/.pm2/dump.pm2，此后每次开机 resurrect 都重新注入。其中 TMUX 最致命：它等于
-// 给 tmux 硬指定 socket 路径（同 -S），而 tmux 在显式 socket 路径下不会自己创建
-// socket 目录。宿主机重启后 /tmp 是全新 tmpfs、/tmp/tmux-1000 不存在，于是每个
-// tmux 调用都以 error creating /tmp/tmux-1000/default (No such file or directory)
-// 失败 → boot 恢复整条链路放弃（「tmux 服务器启动失败，跳过恢复」）→ Nexus 起来了
-// 却「活不过来」：空面板，且前端「恢复会话」只会一直报 tmux 不可用。
-// 需要靠别的进程先建出 /tmp/tmux-1000 才能自愈 —— 2026-10-02 事故即如此。
-// 放在 .env 之前，保证 .env 里显式写的 TMUX_SESSION 优先于 pane 泄漏值。
+// ── 清理从 pane / PM2 泄漏进来的环境变量（必须在 .env 加载之前）───────────────
+// 两个来源，同一类事故 —— PM2 的环境会被 tmux 冻结进 global environment，
+// 之后每个 pane 都继承，而重启 Nexus 不会刷新已经在跑的 tmux server：
+//  1) PM2 以 fork 模式拉起 Nexus 时注入 NODE_CHANNEL_FD=3 / pm_id / PM2_* 等。
+//     pane 里没有对应的 fd 3 可连，普通 node 进程启动即 SIGABRT（exit 134，
+//     core dumped），nexus-run-claude.sh 里的 `node -e` 首当其冲 → claude 起不来。
+//  2) PM2 若是在某个 tmux pane 里被 `pm2 save` 的，pane 的 TMUX / TMUX_PANE /
+//     TMUX_SESSION / TERM_PROGRAM 会被冻进 ~/.pm2/dump.pm2，每次开机 resurrect
+//     重新注入。其中 TMUX 最致命：它等价于给 tmux 硬指定 socket 路径（同 -S），
+//     而 tmux 在显式路径下不会创建 socket 目录。宿主机重启后 /tmp 是全新 tmpfs、
+//     /tmp/tmux-1000 不存在，于是每个 tmux 调用都以
+//       error creating /tmp/tmux-1000/default (No such file or directory)
+//     失败 → boot 恢复整条链路放弃（「tmux 服务器启动失败，跳过恢复」）→ Nexus
+//     起来了却「活不过来」：空面板，前端「恢复会话」恒报 tmux 不可用。
+//     要等别的进程先把 /tmp/tmux-1000 建出来才自愈 —— 2026-10-02 卡了 21 分钟。
+// 用「前缀 + 显式项」匹配、而不是写死几个键：PM2 升级会加新变量，写死名单必然漏
+// （TMUX 这一组就是这么漏掉的 —— 上午修了 NODE_CHANNEL_FD、下午才轮到它）。
+// 刻意不用 'TMUX*' 前缀：TMUX_TMPDIR 是用户可以显式配置的合法变量，不能连坐。
+// 放在 .env 之前，保证 .env 里显式写的配置优先于泄漏值。
 // 详见 docs/SESSION-PERSISTENCE.md §12。
 const PANE_LEAKED_ENV = ['TMUX', 'TMUX_PANE', 'TMUX_SESSION', 'TERM_PROGRAM'];
-for (const key of PANE_LEAKED_ENV) delete process.env[key];
+const isLeakedEnvKey = (k) =>
+  PANE_LEAKED_ENV.includes(k) ||
+  k.startsWith('PM2_') ||
+  k.startsWith('NODE_CHANNEL') ||
+  k === 'NODE_APP_INSTANCE' || k === 'instance_var' || k === 'pm_id';
+for (const key of Object.keys(process.env)) {
+  if (isLeakedEnvKey(key)) delete process.env[key];
+}
 
 // 加载 .env 文件（如果存在）
 try {
@@ -50,26 +66,8 @@ try {
 // 注：上面那段 .env 加载在前，故 .env 里显式写的 LANG 优先级更高。
 process.env.LANG ||= 'C.UTF-8';
 
-// ── 清理 PM2 注入的 IPC / 进程管理变量 ─────────────────────────────────────
-// PM2 拉起本进程时会在 process.env 里塞进 NODE_CHANNEL_FD、pm_id 等。Nexus 首次
-// 启动 tmux server 时，这些变量会被 tmux 冻结进 global environment，此后每个 pane
-// 都继承，而重启 Nexus 并不会刷新已经在跑的 tmux server。
-// 其中 NODE_CHANNEL_FD 最致命：pane 里没有对应的 fd 3 可连，普通 node 进程
-// 启动后会立刻 SIGABRT（exit 134，core dumped）。nexus-run-claude.sh 正是用
-// `node -e` 读 profile 配置，于是脚本在打印 banner 前就被 set -e 干掉，
-// claude 只剩「fallback 到 zsh」，用户手动输入 claude 也救不回来。
-// 这里在 spawn 任何子进程之前从 env 里摘掉，避免继续污染 tmux / 交互式 shell。
-const PM2_LEAKED_ENV = [
-  'NODE_CHANNEL_FD',
-  'NODE_CHANNEL_SERIALIZATION_MODE',
-  'NODE_APP_INSTANCE',
-  'instance_var',
-  'pm_id',
-  'PM2_HOME',
-  'PM2_USAGE',
-  'PM2_JSON_PROCESSING',
-];
-for (const key of PM2_LEAKED_ENV) delete process.env[key];
+// PM2 注入的 IPC / 进程管理变量（NODE_CHANNEL_FD、pm_id、PM2_* …）已在文件顶部
+// 用 isLeakedEnvKey() 连同 pane 会话变量一起摘掉，见上面的说明。
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -218,19 +216,28 @@ function buildLaunchEnv() {
   return { proxyVars, proxyPrefix: proxyExports ? `${proxyExports}; ` : '' };
 }
 
-// 已在跑的 tmux server 可能早就把 PM2 变量冻进了 global environment（重启 Nexus
-// 不会刷新它），所以启动时再主动清一遍，让历史遗留的 server 自愈。还没有 tmux
-// server 时直接返回：稍后会由 nexus-restore 用当前（已清理的）环境新建。
+// 已在跑的 tmux server 可能早就把上面那批变量冻进了 global environment（重启 Nexus
+// 不会刷新它），所以启动时主动清一遍，让历史遗留的 server 自愈：先把 global env 全
+// 读出来，再用同一套 isLeakedEnvKey() 判定，只删该删的（对照写死的 PM2 名单，这样
+// 也能清掉残留的 TMUX / TMUX_PANE / TERM_PROGRAM）。还没有 tmux server 时直接返回：
+// 稍后会由 nexus-restore 用当前（已清理的）环境新建。
 function sanitizeTmuxGlobalEnv() {
+  let dump;
   try {
-    execFileSync('tmux', ['list-sessions'], { stdio: 'pipe' });
+    dump = execFileSync('tmux', ['show-environment', '-g'], { encoding: 'utf8' });
   } catch {
     return;
   }
-  for (const key of PM2_LEAKED_ENV) {
-    try { execFileSync('tmux', ['set-environment', '-g', '-u', key], { stdio: 'pipe' }); } catch { /* 变量不存在等 */ }
+  const removed = [];
+  for (const line of dump.split('\n')) {
+    const key = line.trim().replace(/^-/, '').split('=')[0];
+    if (!key || !isLeakedEnvKey(key)) continue;
+    try {
+      execFileSync('tmux', ['set-environment', '-g', '-u', key], { stdio: 'pipe' });
+      removed.push(key);
+    } catch { /* 变量不存在等 */ }
   }
-  console.log('[Nexus] tmux global env sanitized');
+  if (removed.length) console.log(`[Nexus] tmux global env sanitized: ${removed.join(', ')}`);
 }
 
 // ── CORS 白名单（独立 origin 客户端，如 Android APK）──────────────────────
