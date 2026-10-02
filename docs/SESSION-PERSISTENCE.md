@@ -463,3 +463,53 @@ GRUB `TIMEOUT=5`（引导菜单不会卡着等人）。Nexus 永不 exit（探�
 「AC Power Recovery / Restore on AC Power Loss」是否为 Power On，以及有没有 UPS。
 最近三次开机日志看不出问题，但这一条只能到 BIOS 里确认（或加 UPS）。**这是「任何情况」定义下
 的头号待办。**
+
+## 17. 事故记录 — 2026-10-02 重启后「每个 channel 都是 shell」
+
+**现象**：15:57 reboot 后，6 个 claude 频道全部掉成空 shell（结构在、内容在，就是 claude
+没被拉起来）。用户从手机点了 3 次「恢复会话」，每次都回 ok，但毫无变化。
+
+**可复核的证据**：
+
+| 证据 | 内容 |
+|---|---|
+| `data/audit.log` 15:57:23 | `restore-incomplete` `missingSessions:0, channels:0, want:6` |
+| `logs/tmux-restore.log` | 6 行 `window 名不匹配（快照='channel' 当前='zsh'），跳过` |
+| `tmux list-windows -a -F '#{window_name} #{automatic-rename}'` | 8 个恢复出来的窗口全是 `zsh` + `autorename=1`（= 全局默认，窗口上根本没人设过这个选项） |
+
+**根因是三环串起来的**：
+
+1. resurrect 的 `restore_all_panes` 建窗用 `new-window -c <dir>`（**不带命令**），tmux 因此保留
+   `automatic-rename=on`，窗口名当场被改写成 shell 名 —— 8 个窗口一起变成 `zsh`。
+2. resurrect 后面那句 `restore_window_properties` 本该把名字改回来 + `set-option automatic-rename off`
+   （快照第 8 字段就是 `off`，说明 Nexus 建的窗本来就关着它），但那行写作
+   `restore_window_properties >/dev/null 2>&1` —— **stderr 被丢弃**，这次它整批没生效、毫无声音。
+   （同名命令 `rename-window` / `set-window-option automatic-rename off` 在 tmux 3.5a 上手工执行
+   均 rc=0 生效，所以是这一环第三方函数自身的问题，未继续深追。）
+3. `nexus-resume-claude.sh` 有一道**安全守卫**：快照窗口名 ≠ 当前窗口名就跳过（防止窗口序号错位时
+   把对话注入到用户新开的窗）。名字全塌成 `zsh` 后这道守卫把 6 个频道**全部**跳过 → 0 接续。
+
+**闭环为什么没拦住**：「恢复会话」按钮返回的 `RESTORE_OK` 是假的 —— 脚本里
+`missing_sessions = 0` 的分支在结构齐时直接 `exit 0`，压根没走到频道核对。用户点 3 次都是
+「缺 0 个 session，无需恢复」。审计/微信那侧的 `restore-incomplete` 是对的，但按钮给了相反的信号。
+
+**修（`scripts/nexus-restore-tmux.sh`）**：
+
+1. 新增 `restore_window_names()`：结构恢复后、接续 claude 前，按快照补窗口名 + 关
+   `automatic-rename`。**频道名是 Nexus 自己的不变量（TabBar 显示的就是它），不再外包给第三方函数。**
+   安全边界：只动「自动改名产物」（当前名 == 该 window 活动 pane 的当前命令，即没人挑过这名字）；
+   名字是特意起的 → 一律不碰，只记一条日志。
+2. `missing == 0` 不再无条件退出：session 齐但频道不齐 → 继续接续；两者都齐才算完。
+
+**验证**：
+
+- 隔离 server 演练（`TMUX_TMPDIR` + `env -u TMUX`，未碰线上）：4 种情形逐一验过 ——
+  自动改名产物改名成功 ✓ / 特意起的名字保持不动并报警 ✓ / 名字已对但 auto 还开着只补关选项 ✓ /
+  快照里有、现场没有的 session 静默跳过 ✓。
+- 线上：手工补名后跑 `nexus-resume-claude.sh`，6 个 claude 频道 + wechat 的 `channel-view`
+  窗全部回来（11/11 pane 逐个核对进程树）。
+- **未验证**：真机重启那一次（留待下次自然重启验收）。**不要为了验收去 kill 线上 tmux** ——
+  这台机器上常驻 9 个 claude 频道。
+
+**遗留**：快照选择器的「健康」判据（≥2 条 claude 频道）偏弱 —— 故障中途存下的 3 频道快照
+（16:02 那份）也会被当成健康恢复源。等下一份健康快照落地即自愈；彻底修法另议。

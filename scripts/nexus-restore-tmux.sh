@@ -112,27 +112,78 @@ wait_proxy(){
   return 1
 }
 
+# ── 补窗口名：按快照把窗口名（= 频道名）和 automatic-rename 修正回来 ──
+# 为什么必须有这一步：resurrect 的 restore_all_panes 建窗时用 `new-window -c <dir>`（不带
+# 命令），tmux 因此保留 automatic-rename=on，窗口名当场被改写成 shell 名（zsh）；它后面那句
+# restore_window_properties 本应改名 + 关 automatic-rename，但该函数的 stderr 被丢弃
+# （restore.sh 内 `restore_window_properties >/dev/null 2>&1`）。2026-10-02 reboot 那次它整批
+# 静默失效：8 个窗口全叫 zsh，resume 的「窗口名对齐」守卫据此把 6 个频道全部跳过 ——
+# 现象就是「每个 channel 都是 shell」。频道名是 Nexus 自己的不变量（TabBar 就显示它），
+# 不该外包给第三方函数，这里幂等修回。
+#
+# 安全边界：只动「自动改名产物」（当前名 == 该 window 活动 pane 的当前命令，即没人挑过这名字）。
+# 名字是特意起的 → 一律不碰，只记一条日志。快照里记 automatic-rename=off 的（Nexus 建的频道
+# 都是）才补关该选项，否则只改名，避免把用户自己留着的自动改名关掉。
+restore_window_names(){
+  local s w snap_name snap_auto cur_name cur_auto cur_cmd fixed=0
+  while IFS=$'\t' read -r s w snap_name snap_auto; do
+    [ -n "$s" ] && [ -n "$w" ] && [ -n "$snap_name" ] || continue
+    tmux has-session -t "$s" 2>/dev/null || continue
+    cur_name="$(tmux display-message -p -t "$s:$w" '#{window_name}' 2>/dev/null || true)"
+    [ -n "$cur_name" ] || continue
+    if [ "$cur_name" = "$snap_name" ]; then
+      # 名字已对，只把快照记过的 automatic-rename off 补齐，否则 tmux 随后还会改写它
+      cur_auto="$(tmux display-message -p -t "$s:$w" '#{automatic-rename}' 2>/dev/null || true)"
+      if [ "$snap_auto" = "off" ] && [ "$cur_auto" != "0" ]; then
+        tmux set-window-option -t "$s:$w" automatic-rename off 2>/dev/null || true
+        fixed=$((fixed+1))
+      fi
+      continue
+    fi
+    cur_auto="$(tmux display-message -p -t "$s:$w" '#{automatic-rename}' 2>/dev/null || true)"
+    cur_cmd="$(tmux display-message -p -t "$s:$w" '#{pane_current_command}' 2>/dev/null || true)"
+    if [ "$cur_auto" = "1" ] && [ "$cur_name" = "$cur_cmd" ]; then
+      if tmux rename-window -t "$s:$w" "$snap_name" 2>/dev/null; then
+        [ "$snap_auto" = "off" ] && tmux set-window-option -t "$s:$w" automatic-rename off 2>/dev/null || true
+        fixed=$((fixed+1))
+        log "[nexus-restore] 补窗口名 $s:$w '$cur_name'(自动改名产物) → '$snap_name'"
+      fi
+      continue
+    fi
+    err "[nexus-restore] $s:$w 窗口名不符且非自动改名产物（快照='$snap_name' 当前='$cur_name'），保持不动"
+  done < <(awk -F'\t' '$1=="window"{n=$4; sub(/^:/,"",n); sub(/^-/,"",n); print $2"\t"$3"\t"n"\t"$8}' "$SNAPSHOT" 2>/dev/null)
+  [ "$fixed" -gt 0 ] && log "[nexus-restore] 窗口名修正 $fixed 处"
+  return 0
+}
+
 s_before="$(count_sessions)"; w_before="$(count_windows)"
 missing="$(missing_sessions)"
+want_channels="$(channels_in_snapshot)"
 
-if [ "$missing" = "0" ]; then
-  log "[nexus-restore] 快照里的 session 都在跑，无需恢复（快照 $(basename "$SNAPSHOT")）"
+if [ "$missing" != "0" ]; then
+  log "[nexus-restore] 快照 $(basename "$SNAPSHOT")：缺 $missing 个 session，开始恢复…"
+
+  # 经 tmux run-shell 调 restore.sh：restore.sh 用 $TMUX 推导目标 socket，run-shell 由服务器
+  # 执行命令并注入正确的 $TMUX（直接 exec 会因 $TMUX 为空而失败）。
+  if tmux run-shell "$RESURRECT_RESTORE"; then
+    log "[nexus-restore] 结构恢复完成"
+  else
+    err "[nexus-restore] 结构恢复调用返回非零，继续"
+  fi
+  # 结构恢复只还原 shell + 可见文字，不会重启 claude：留一点时间等窗口落定再接续。
+  sleep 2
+elif [ "$(count_live_channels)" -ge "$want_channels" ]; then
+  log "[nexus-restore] 快照里的 session 都在跑、频道 $want_channels/$want_channels 也齐，无需恢复（快照 $(basename "$SNAPSHOT")）"
   [ "$MANUAL" = "1" ] && printf 'RESTORE_OK restored_sessions=0 channels=0 resumed=0 snapshot=%s\n' "$(basename "$SNAPSHOT")"
   exit 0
-fi
-
-log "[nexus-restore] 快照 $(basename "$SNAPSHOT")：缺 $missing 个 session，开始恢复…"
-
-# 经 tmux run-shell 调 restore.sh：restore.sh 用 $TMUX 推导目标 socket，run-shell 由服务器
-# 执行命令并注入正确的 $TMUX（直接 exec 会因 $TMUX 为空而失败）。
-if tmux run-shell "$RESURRECT_RESTORE"; then
-  log "[nexus-restore] 结构恢复完成"
 else
-  err "[nexus-restore] 结构恢复调用返回非零，继续"
+  # 结构齐 ≠ 频道理：channel 掉回 shell 是常态故障（重启后代理没起、claude 崩掉等）。
+  # 这时候直接退出会让「恢复会话」按钮报 ok 却什么都不做 —— 2026-10-02 就是这么踩到的。
+  log "[nexus-restore] session 都在跑，但频道只有 $(count_live_channels)/$want_channels 在跑 —— 继续接续 claude…"
 fi
 
-# 结构恢复只还原 shell + 可见文字，不会重启 claude：再把 claude 频道接续起来。
-sleep 2
+# 接续前先把窗口名按快照修正回来：resume 的「窗口名对齐」守卫依赖它。
+restore_window_names
 run_resume(){
   if [ "${NEXUS_RESTORE_DRY_RUN:-0}" = "1" ]; then
     bash "$RESUME_SCRIPT" --dry-run "$SNAPSHOT" 2>&1 || true
