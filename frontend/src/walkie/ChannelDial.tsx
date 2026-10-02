@@ -19,8 +19,8 @@ import { shortProject } from './api'
 const stepFor = (n: number) => Math.max(30, Math.min(62, 320 / Math.max(n, 1)))
 /** 偏离正上方超过这个角度就不画了 —— 在背面，画了只是浪费 */
 const VISIBLE_DEG = 104
-/** 内外圈的分界（以半个旋钮直径为 1）：外圈标签在 0.88，内圈在 0.58，取中间 */
-const RING_SPLIT = 0.73
+/** 内外圈的分界（以半个旋钮直径为 1）：外圈标签在 0.75，内圈在 0.58，取中间 */
+const RING_SPLIT = 0.665
 
 interface Props {
   projects: WalkieProject[]
@@ -208,7 +208,9 @@ export default function ChannelDial({ projects, projIdx, chanIdx, onChange }: Pr
 
       {renderTicks(
         projects.map((p) => ({ label: shortProject(p.name), key: p.name, cls: '' })),
-        outerVal, outerStep, 'outer', 0.44, projIdx,
+        // 外圈标签放在刻度环**内侧**（0.375 vs 环在 0.44）：否则正上方那个标签
+        // 会被顶部的指针三角压住半边
+        outerVal, outerStep, 'outer', 0.375, projIdx,
       )}
       {renderTicks(
         channels.map((c) => ({ label: c.name, key: `${c.index}-${c.name}`, cls: c.kind === 'other' ? ' is-shell' : '' })),

@@ -237,7 +237,7 @@
   font-size: 10px;
   letter-spacing: .12em;
   color: var(--nexus-muted);
-  text-transform: uppercase;
+  /* 不要 uppercase：这里会放 project/channel 名，大写会把名字改样 */
   margin-bottom: 6px;
   display: flex;
   align-items: center;

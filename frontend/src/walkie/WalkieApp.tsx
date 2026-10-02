@@ -261,6 +261,9 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
       setPhase('review')
       return
     }
+    // 已发出的就清出文本框：否则「发送」会一直亮着，一点就重复发同一句。
+    // 发出去的内容由下面的「已发出」卡片负责显示。
+    setDraft(''); setRawText(''); setRefined(false)
     startPoll(`${project.name}:${channel.index}`, project.name, channel.index, text)
   }, [token, project, channel, refining, startPoll])
 
@@ -415,8 +418,10 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
 
       <div className="walkie-controls">
         <div className={`walkie-ptt-row${canSend ? ' has-text' : ''}`}>
-          {/* 输入法兜底入口常驻 —— 尤其在没有语音识别的环境里，它是唯一的路 */}
-          {!canSend && (
+          {/* 输入法兜底入口。只在"手上没话要说"的两个状态出现：
+              说话中说这个没意义；已在看回复或等回复时，用「再问一句」起新的一轮，
+              而不是把回复从眼前顶掉。 */}
+          {!canSend && (phase === 'idle' || phase === 'review') && (
             <button type="button" className="walkie-key" onClick={focusDraft} title="用输入法输入">
               <IconKeyboard />
             </button>
