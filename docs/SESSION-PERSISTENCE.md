@@ -311,6 +311,16 @@ DSH 探针脚本、或用户自己开 tmux），nexus 后续调用就立刻恢�
 2. `nexus-restore-tmux.sh` 开头 `unset TMUX*` 并 `mkdir -p $TMPDIR/tmux-$UID`（0700），
    让 boot 与手动一键恢复都不再依赖「tmux 自己会建目录」。
 
+**重启验证（2026-10-02 当天实测）**：`pm2 restart nexus` 后启动日志出现
+`[Nexus] tmux global env sanitized: TERM_PROGRAM, TMUX, TMUX_PANE, TMUX_SESSION`；
+tmux global env 里的 `TMUX=/tmp/tmux-1000/default,90240,6`（已死的旧 server pid）等全部清除；
+nexus 子进程 env 与新建 pane 的 env 里 `NODE_CHANNEL_FD` / `PM2_*` / `pm_id` 均已消失。
+另记两个 tmux 行为，排查时别被误导：
+- **socket 目录建不出来时 `tmux` 仍 exit 0**（只在 stderr 报 error creating），
+  所以「命令返回成功」不能当健康判据，要看 `has-session` / `show-environment`。
+- `/proc/<pid>/environ` 是 **exec 时的初始 env 块**，进程内 `delete process.env.X`
+  不会反映在它上面 —— 验证 env 清理要看该进程**派生出的子进程**的 environ。
+
 **运维注意**：
 - **不要在有 `$TMUX` 的 shell 里 `pm2 save`**；确需如此用
   `env -u TMUX -u TMUX_PANE -u TMUX_SESSION pm2 save`。
