@@ -257,6 +257,7 @@ Nexus 启动时自动恢复（§4.4）在 WSL2 启动竞态下可能失败（202
 
 - **快照选择器**：`nexus-restore-tmux.sh` 不再盲信 `last`，改为挑「最新一份含
   `nexus-run-claude.sh` 频道」的快照（近空快照被拒绝），并把它指为 `last` 再恢复。
+  2026-10-02 补强：优先「≥2 条频道」的健康快照，只含单条频道的近空快照降级为兜底（§12）。
 - **手动触发**：`nexus-restore-tmux.sh --manual` 绕过 fresh-server 标记门，可在活服务器上
   随时幂等恢复（已存在 session/window 跳过、不覆盖在跑进程），打印 `RESTORE_OK` 结果行。
 - **API**：`GET /api/restore/status`（`pending` + `available`、快照丰富度、busy、freeMem）、
@@ -270,3 +271,54 @@ Nexus 启动时自动恢复（§4.4）在 WSL2 启动竞态下可能失败（202
 - 对话接续仍由 `nexus-resume-claude.sh` 完成（pane 标题 ↔ `~/.claude/projects/*.jsonl` 模糊匹配）。
 
 设计见 `docs/superpowers/specs/2026-09-04-nexus-restore-design.md`（gitignored 工作文档）。
+
+## 12. 事故记录 — 2026-10-02 重启后 Nexus 起不来（stale `$TMUX` 进 PM2 env）
+
+**症状**：宿主机重启后 Nexus 进程在跑、面板能打开，但**一个 session 都恢复不出来**，
+「恢复会话」按了只回 `[restore-manual] failed: tmux 不可用`。`~/.pm2/logs/nexus-error.log`：
+
+```
+[nexus-restore] tmux 服务器启动失败，跳过恢复（将在无历史状态下启动）
+error creating /tmp/tmux-1000/default (No such file or directory)
+error connecting to /tmp/tmux-1000/default (No such file or directory)
+```
+
+这一次卡了 **21 分钟**（11:47 开机 → 12:08:52 才出现 tmux server），全程 Nexus 等于废掉。
+
+**根因**：PM2 曾在某个 tmux pane 里执行 `pm2 save`，pane 的会话变量被写进
+`~/.pm2/dump.pm2`：`nexus` / `dsh-web` / `wechat-agent` 三个 app 的 env 里都带着
+`TMUX=/tmp/tmux-1000/default,<旧 pid>,<idx>`、`TMUX_PANE`、`TMUX_SESSION`、
+`TERM_PROGRAM=tmux`、`TERM=screen-256color`。开机 `pm2 resurrect` 会把它们原样注入。
+
+而 **`$TMUX` 等价于 `tmux -S <socket>`：显式指定 socket 路径时 tmux 不会创建 socket 目录**
+（只有隐式路径 `$TMPDIR/tmux-$UID` 才会自动建）。`/tmp` 是 tmpfs，每次开机都是空的，
+`/tmp/tmux-1000` 不存在 → nexus 的每个 tmux 调用都以那句 `error creating …` 失败：
+
+```bash
+# 复现（宿主机重启后的状态）
+TMUX=/tmp/tmux-1000/default,999,0 tmux new-session -d -s x
+# error creating /tmp/tmux-1000/default (No such file or directory)
+```
+
+**自愈条件**：只要有任何**不带** stale `$TMUX` 的进程先建出 `/tmp/tmux-1000`（当天的
+DSH 探针脚本、或用户自己开 tmux），nexus 后续调用就立刻恢复正常 —— 所以表现为
+「随机卡一段时间后自己好了」。
+
+**修复**（双保险）：
+1. `server.js` 启动最前面（**.env 加载之前**，好让 .env 的 `TMUX_SESSION` 优先）摘掉
+   `TMUX` / `TMUX_PANE` / `TMUX_SESSION`。这是根治点：只要 nexus 自己不吃这口毒，
+   dump.pm2 里有没有脏变量都无所谓。
+2. `nexus-restore-tmux.sh` 开头 `unset TMUX*` 并 `mkdir -p $TMPDIR/tmux-$UID`（0700），
+   让 boot 与手动一键恢复都不再依赖「tmux 自己会建目录」。
+
+**运维注意**：
+- **不要在有 `$TMUX` 的 shell 里 `pm2 save`**；确需如此用
+  `env -u TMUX -u TMUX_PANE -u TMUX_SESSION pm2 save`。
+- 存量脏变量还在 `dump.pm2` 里（`dsh-web` / `wechat-agent` 也中招），要彻底清掉需在干净
+  shell 里 `pm2 restart <app> --update-env` 后 `pm2 save`。
+- 同类事故史：§10（2026-07-25 WSL2 启动竞态）、以及 2026-10-02 上午刚修掉的
+  `NODE_CHANNEL_FD` 注入（PM2 变量进 tmux global env，pane 里 node 直接 SIGABRT）。
+  同一族问题：**PM2 的 env 会被冻进 tmux**。
+- 同一天还踩到选择器误判：崩溃后重建的 `main` 里已跑着 claude，continuum 存下**只含这一条
+  频道**的近空快照并成为最新 → 被当成「有频道的快照」选中，恢复出来仍是空的。已改为
+  优先 ≥2 条频道的快照（见 §11）。

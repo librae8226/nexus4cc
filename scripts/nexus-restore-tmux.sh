@@ -23,6 +23,16 @@ RESUME_SCRIPT="$(cd "$(dirname "$0")" && pwd)/nexus-resume-claude.sh"
 log(){ printf '%s\n' "$*"; }
 err(){ printf '%s\n' "$*" >&2; }
 
+# ── socket 目录兜底（见 docs/SESSION-PERSISTENCE.md §12）──
+# $TMUX 存在时 tmux 把它当显式 socket 路径（同 -S），此时它不会创建 socket 目录；
+# 宿主机重启后 /tmp 是全新 tmpfs，目录不在 → 每个 tmux 调用都以
+# 「error creating /tmp/tmux-1000/default (No such file or directory)」失败。
+# 这里先摘掉调用方可能带进来的 pane 会话变量，再自己把目录建出来（幂等）。
+unset TMUX TMUX_PANE TMUX_SESSION 2>/dev/null || true
+SOCKET_DIR="${TMUX_TMPDIR:-${TMPDIR:-/tmp}}/tmux-$(id -u)"
+mkdir -p "$SOCKET_DIR" 2>/dev/null || true
+chmod 700 "$SOCKET_DIR" 2>/dev/null || true
+
 # ── 崩溃「待恢复」标记：boot 检测到全新 tmux 服务器（=上次崩溃/重启）时写入；
 #    全部 session 恢复完成后清除。前端据此决定「恢复会话」按钮灰/亮（严格：崩溃过才可点）。
 NEXUS_DATA="$(cd "$(dirname "$0")/../data" 2>/dev/null && pwd)"
@@ -49,14 +59,21 @@ if [ ! -x "$RESURRECT_RESTORE" ]; then
   exit 0
 fi
 
-# ── 快照选择器：最新一份含 nexus-run-claude 频道的快照（拒绝崩溃后近空快照）──
-SNAPSHOT=""
+# ── 快照选择器：优先「健康」快照（≥2 条 claude 频道），退而取最新含频道的一份 ──
+# 只按「含一条频道」筛不够：崩溃后 Nexus 会立刻重建 main 并跑起 claude，continuum 随即
+# 存下只含这一条频道的近空快照（2026-10-02 13:00 那份即是），它会压过一分钟前还完好的
+# 多 session 快照 —— 这正是「快照退化棘轮」。
+SNAPSHOT=""; FALLBACK=""
 for f in $(ls -t "$RESURRECT_DIR"/tmux_resurrect_*.txt 2>/dev/null); do
   [ -f "$f" ] || continue
-  if grep -q $'^pane\t.*nexus-run-claude\.sh' "$f"; then
+  n="$(grep -c $'^pane\t.*nexus-run-claude\.sh' "$f" 2>/dev/null || true)"
+  [ "${n:-0}" -eq 0 ] && continue
+  [ -z "$FALLBACK" ] && FALLBACK="$f"
+  if [ "${n:-0}" -ge 2 ]; then
     SNAPSHOT="$f"; break
   fi
 done
+[ -z "$SNAPSHOT" ] && SNAPSHOT="$FALLBACK"
 if [ -z "$SNAPSHOT" ]; then
   err "[nexus-restore] 无含 claude 频道的快照，跳过"
   [ "$MANUAL" = "1" ] && printf 'RESTORE_ERR 无含 claude 频道的快照\n'

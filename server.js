@@ -14,6 +14,20 @@ import { readdir, stat as statAsync } from 'fs/promises';
 import https from 'node:https';
 import multer from 'multer';
 
+// ── 清理从 tmux pane 泄漏进来的会话变量（必须在 .env 加载之前）──────────────
+// PM2 若是在某个 tmux pane 里被 `pm2 save` 的，pane 的会话变量会被冻进
+// ~/.pm2/dump.pm2，此后每次开机 resurrect 都重新注入。其中 TMUX 最致命：它等于
+// 给 tmux 硬指定 socket 路径（同 -S），而 tmux 在显式 socket 路径下不会自己创建
+// socket 目录。宿主机重启后 /tmp 是全新 tmpfs、/tmp/tmux-1000 不存在，于是每个
+// tmux 调用都以 error creating /tmp/tmux-1000/default (No such file or directory)
+// 失败 → boot 恢复整条链路放弃（「tmux 服务器启动失败，跳过恢复」）→ Nexus 起来了
+// 却「活不过来」：空面板，且前端「恢复会话」只会一直报 tmux 不可用。
+// 需要靠别的进程先建出 /tmp/tmux-1000 才能自愈 —— 2026-10-02 事故即如此。
+// 放在 .env 之前，保证 .env 里显式写的 TMUX_SESSION 优先于 pane 泄漏值。
+// 详见 docs/SESSION-PERSISTENCE.md §12。
+const PANE_LEAKED_ENV = ['TMUX', 'TMUX_PANE', 'TMUX_SESSION', 'TERM_PROGRAM'];
+for (const key of PANE_LEAKED_ENV) delete process.env[key];
+
 // 加载 .env 文件（如果存在）
 try {
   const envPath = join(dirname(fileURLToPath(import.meta.url)), '.env');
