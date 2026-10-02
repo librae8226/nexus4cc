@@ -1,0 +1,13 @@
+[Unit]
+Description=Nexus page watchdog every minute
+Documentation=file:///home/librae/work/nexus/docs/SESSION-PERSISTENCE.md
+
+[Timer]
+# 开机 3 分钟后开始（那时 resurrect / tmux unit / nexus 都已就位），之后每分钟一次
+OnBootSec=3min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=nexus-watchdog.service
+
+[Install]
+WantedBy=timers.target

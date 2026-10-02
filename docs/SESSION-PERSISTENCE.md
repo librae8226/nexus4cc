@@ -438,3 +438,28 @@ global env，所有 pane 继承）；现在 **server 是一个 systemd 服务**�
 
 **审查结论**：结构层（谁拥有 server、环境、开机顺序、自愈）已经稳；这次补的是**保存端的
 确定性**与**结果闭环**。仍然未验证的是「真机重启」那一次（下一次重启即验收）。
+
+## 16. 底线保证：页面可达 + 页内能起 recovery agent（2026-10-02）
+
+**用户的定义（比「会话能恢复」严）**：无论任何情况宕机，都要能 ① 通过 tailscale 打开 Nexus
+页面，② 在页面里启动至少一个 recovery 用途的 AI agent。据此又查了一遍，补了三处会破功的地方：
+
+1. **recovery agent 曾经连不上模型**：nexus 自己的 env 带着 `HTTP_PROXY=127.0.0.1:7890`，
+   而最坏情况正是 PM2 挂了 → mihomo 也没了 → agent「连模型都连不上」。
+   修：`spawnRescuePty` 给 agent **摘掉全部 proxy 变量走直连**，并把默认 profile 从
+   `anthropic`（官方接口本来就得靠代理）换成墙内直连可达的 `deepseek`；预置任务里补一句
+   「若还有服务没起来：`pm2 resurrect` / `pm2 start ecosystem.config.cjs`，mihomo 不在就先起它」。
+2. **页面本身没人看门**：新增 `nexus-watchdog.timer`（开机 3 分钟后、每分钟）+ `scripts/nexus-watchdog.sh`：
+   只关心 59000 在不在 —— 连续 3 次探活失败 → `pm2 restart nexus`；**nexus 不在 PM2 列表**
+   （dump.pm2 被断电写坏时 resurrect 会一个都拉不起来）→ 从 `ecosystem.config.cjs` 重新拉起。
+   动作写审计 + 微信。带 `NEXUS_WATCHDOG_DRY_RUN=1` 演练开关（已实测故障判定路径，线上未受影响）。
+3. **pane 崩溃产生 core 转储**（38MB/个，今天在仓库里攒了 116MB）：tmux unit 加 `LimitCORE=0`。
+
+**已实测（本机）**：页面在 tailnet IP（100.117.237.10:59000）与 LAN IP（192.168.3.243:59000）
+都是 200；iptables 无拦截；`sshd` active（tailnet 上还有一条不依赖网页的兜底：ssh 进去手起）。
+GRUB `TIMEOUT=5`（引导菜单不会卡着等人）。Nexus 永不 exit（探测失败照常监听）。
+
+**唯一无法从 Linux 侧保证的**：**断电后机器自己不开机** —— 取决于 BIOS/UEFI 的
+「AC Power Recovery / Restore on AC Power Loss」是否为 Power On，以及有没有 UPS。
+最近三次开机日志看不出问题，但这一条只能到 BIOS 里确认（或加 UPS）。**这是「任何情况」定义下
+的头号待办。**

@@ -45,6 +45,8 @@ TimeoutStartSec=45
 TimeoutStopSec=30
 Restart=always
 RestartSec=2
+# pane 里的 node/claude 崩溃不再产生 core.<pid>（38MB/个，今天在仓库里攒了 116MB）
+LimitCORE=0
 
 [Install]
 WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=Nexus page watchdog (keep the panel reachable)
+Documentation=file:///home/librae/work/nexus/docs/SESSION-PERSISTENCE.md
+After=pm2-librae.service
+
+[Service]
+Type=oneshot
+User=librae
+Group=librae
+WorkingDirectory=/home/librae
+Environment=HOME=/home/librae
+Environment=PM2_HOME=/home/librae/.pm2
+Environment=PATH=/home/librae/.local/share/fnm/node-versions/v24.21.0/installation/bin:/home/librae/.local/share/fnm:/usr/local/bin:/usr/bin:/bin
+Environment=LANG=C.UTF-8
+ExecStart=/home/librae/work/nexus/scripts/nexus-watchdog.sh

@@ -1841,6 +1841,7 @@ const RESCUE_PROMPT = [
   '1) 先跑 `bash /home/librae/work/nexus/scripts/nexus-rescue.sh`，把输出读完；',
   '2) 若 tmux server 不在，查 `systemctl status nexus-tmux` 与 `journalctl -u nexus-tmux -n 50`；',
   '3) 恢复脚本是幂等的，可以重复跑；细节见 docs/SESSION-PERSISTENCE.md 的救援一节；',
+  '3b) 若还有服务没起来：pm2 resurrect，或 pm2 start /home/librae/work/nexus/ecosystem.config.cjs；mihomo（clash-meta）不在就先起它；',
   '4) 不要重启机器、不要 kill-server。做完把「恢复了哪些 session、还缺什么、你判断的根因」讲清楚。',
 ].join(' ');
 
@@ -1848,8 +1849,13 @@ function spawnRescuePty(key, agent) {
   const env = { ...process.env, LANG: 'C.UTF-8', TERM: 'xterm-256color' };
   let cmd, args;
   if (agent) {
+    // 救援 agent 必须**不依赖本机代理**：最坏情况是 PM2 挂了 → mihomo 也没了，
+    // 而 127.0.0.1:7890 连不上 = 「agent 连模型都连不上」，命脉在最需要时断掉。
+    // 所以：① 摘掉所有 proxy 变量走直连；② 默认用墙内直连可达的 profile（deepseek），
+    // 而不是官方 anthropic（官方接口在这台机器上本来就得靠代理）。
+    for (const k of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'NEXUS_PROXY', 'CLAUDE_PROXY']) delete env[k];
     cmd = 'bash';
-    args = [join(__dirname, 'nexus-run-claude.sh'), process.env.NEXUS_RESCUE_PROFILE || 'anthropic', __dirname];
+    args = [join(__dirname, 'nexus-run-claude.sh'), process.env.NEXUS_RESCUE_PROFILE || 'deepseek', __dirname];
     env.NEXUS_INITIAL_PROMPT = RESCUE_PROMPT;
   } else {
     cmd = INTERACTIVE_SHELL === 'zsh' ? '/usr/bin/zsh' : '/bin/bash';
