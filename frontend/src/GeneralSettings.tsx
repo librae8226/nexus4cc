@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import AuditLog from './AuditLog'
 import { useTranslation } from 'react-i18next'
 import GhostShield from './GhostShield'
 import { Icon } from './icons'
@@ -205,6 +206,9 @@ export default function GeneralSettings({ token, themeMode, onToggleTheme, onClo
               </p>
             )}
           </div>
+
+          {/* 操作日志：谁（面板/脚本/命令行）在什么时候动了什么 */}
+          <AuditLog token={token} />
 
           {/* About section */}
           <div className="border-t border-nexus-border pt-4">

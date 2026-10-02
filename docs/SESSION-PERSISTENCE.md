@@ -387,3 +387,24 @@ global env，所有 pane 继承）；现在 **server 是一个 systemd 服务**�
   先跑 `scripts/nexus-rescue.sh`、再按输出处置）、**一键救援**（`POST /api/rescue/run`）。
 - `scripts/nexus-rescue.sh` 零 root：补 socket 目录 → server 不在就手起 → 跑 manual 恢复 → 打印诊断。
 - 进救援模式会经 wechat-agent 推一条微信（30 分钟去重）。
+
+## 14. 操作审计：谁在什么时候动了什么（2026-10-02）
+
+**动机**：当天排查时最费劲的不是技术，而是「这个 session 是谁删的」——面板操作、shell 里
+直接敲 tmux、系统自动行为混在一起，而 pm2 日志连时间戳都没有。事后问用户才知道是他删的。
+
+**两层记账**（都在 `server.js`，落盘 `data/audit.log`，1MB 单代轮转，同时打 stdout）：
+1. **API 审计**：凡经 Nexus 的变更逐条记 actor：
+   `login-ok/login-fail`、`session-created`、`session-deleted`、`session-renamed`、
+   `channel-created`、`channel-renamed`、`history-cleared`、`fs-deleted`、`restore`、`rescue`。
+   例：`{"action":"session-deleted","target":"tmp","result":"ok","actor":{"ip":"127.0.0.1","device":"脚本(curl/8.14.1)"}}`
+   —— **有 actor 就是经接口/面板/脚本干的**。
+2. **状态对账**：每 60s 比对 tmux 的 session/窗口清单，发现增减就记 `session-added` /
+   `session-removed` / `session-windows-changed`，并标注 `via`：
+   `via=api`（10 秒内有对应 API 调用）或 **`via=unknown(命令行/外部)`** —— 后者就是
+   「有人绕过 Nexus、直接在 shell 里动了 tmux」。
+外加 `tmux-ready` / `tmux-broken` 两个生命周期事件（带当时的 session 清单）。
+**入口**：Settings → 操作日志（`GET /api/audit?lines=N`），也是排查时该看的第一现场。
+
+**排查口径**：先看 `data/audit.log` —— 有 API 记录 = 面板/脚本；只有 `via=unknown` = 命令行；
+两者都没有 = 不是 Nexus 也不是 tmux 层面的事（去 `journalctl -u nexus-tmux` / 内核日志）。

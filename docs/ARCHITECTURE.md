@@ -51,6 +51,7 @@ tmux attach-session -t <session>:<window>
 | GET | `/api/sessions/:id/scrollback` | Bearer | 获取完整滚动缓冲区 |
 | GET | `/api/session-cwd` | Bearer | 获取当前 pane 工作目录 |
 | GET | `/api/tmux-sessions` | Bearer | 列出全部 tmux session 名 |
+| GET | `/api/audit` | Bearer | 操作审计日志（谁/何时/动了什么；`via=api` vs `via=unknown(命令行)`） |
 | **项目 / Channel** | | | |
 | GET | `/api/projects` | Bearer | 列出 project-channel 树 |
 | POST | `/api/projects` | Bearer | 创建 project |

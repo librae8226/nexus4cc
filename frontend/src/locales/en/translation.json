@@ -231,6 +231,13 @@
     "notes": "Notes",
     "notesDesc": "Configs are stored in .claude-data/"
   },
+  "audit": {
+    "title": "Audit log",
+    "refresh": "Refresh",
+    "loading": "Loading…",
+    "hint": "via=api means the panel/API did it; via=unknown means someone touched tmux from a shell",
+    "empty": "No entries yet"
+  },
   "rescue": {
     "title": "Rescue mode",
     "tmuxDown": "tmux server unavailable (state: {{state}}, unit: {{unit}}) — sessions may not be restored.",

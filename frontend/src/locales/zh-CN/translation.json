@@ -231,6 +231,13 @@
     "notes": "说明",
     "notesDesc": "配置文件存储在 .claude-data/ 目录"
   },
+  "audit": {
+    "title": "操作日志",
+    "refresh": "刷新",
+    "loading": "读取中…",
+    "hint": "via=api 是面板/接口干的；via=unknown(命令行/外部) 说明有人在 shell 里直接动过",
+    "empty": "还没有记录"
+  },
   "rescue": {
     "title": "救援模式",
     "tmuxDown": "tmux server 不可用（状态：{{state}}，unit：{{unit}}）—— 会话可能没恢复回来。",

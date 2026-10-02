@@ -9,7 +9,7 @@ import os from 'node:os';
 import { exec, spawn, execSync, execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join, normalize, isAbsolute, basename } from 'path';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, statSync, rmdirSync, renameSync, cpSync, rmSync } from 'fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, statSync, rmdirSync, renameSync, cpSync, rmSync } from 'fs';
 import { readdir, stat as statAsync } from 'fs/promises';
 import https from 'node:https';
 import multer from 'multer';
@@ -278,16 +278,101 @@ function authMiddleware(req, res, next) {
   }
 }
 
+// ── 操作审计日志（谁、什么时候、动了什么）────────────────────────────────────
+// 动机（2026-10-02 排查实录）：最大的困惑是「这个 session 是谁删的」——面板操作、shell 里
+// 直接敲 tmux、系统自己触发混在一起，pm2 日志还全都没有时间戳。于是分两层记账：
+//   1) **API 审计**：凡经 Nexus 的变更（登录、建/删项目与频道、改文件、恢复、救援）逐条记
+//      actor（IP + 设备类型）+ 目标 + 结果。看得到 actor = 面板/脚本干的。
+//   2) **状态对账**：每 60s 对比 tmux 的 session/窗口清单，发现增减就记一条，并标注
+//      via=api（10 秒内有对应 API 调用）还是 via=unknown(命令行/外部) —— 后者就是
+//      「有人在 shell 里直接动过」的意思。
+// 落盘 data/audit.log（JSONL，1MB 单代轮转），同时打到 stdout（带时间戳，补 pm2 日志的缺口）。
+const AUDIT_FILE = join(DATA_DIR, 'audit.log')
+const AUDIT_MAX_BYTES = 1024 * 1024
+const recentApiTouches = new Map() // 目标名 → 最近一次 API 触碰时间
+
+function deviceOf(ua = '') {
+  if (/iPhone|iPad|Android|Mobile/i.test(ua)) return '手机'
+  if (/curl|python|node|axios|wget|Claude/i.test(ua)) return `脚本(${ua.slice(0, 20)})`
+  return ua ? '浏览器' : '未知'
+}
+function viaOf(name) {
+  const t = recentApiTouches.get(String(name))
+  return t && Date.now() - t < 10000 ? 'api' : 'unknown(命令行/外部)'
+}
+
+function audit(action, req, extra = {}) {
+  const ts = new Date().toISOString()
+  const entry = { ts, action, ...extra }
+  if (req) {
+    entry.actor = {
+      ip: String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').split(',')[0].trim(),
+      device: deviceOf(req.headers['user-agent']),
+    }
+  }
+  if (entry.target) recentApiTouches.set(String(entry.target), Date.now())
+  try {
+    if (existsSync(AUDIT_FILE) && statSync(AUDIT_FILE).size > AUDIT_MAX_BYTES) renameSync(AUDIT_FILE, `${AUDIT_FILE}.1`)
+    appendFileSync(AUDIT_FILE, JSON.stringify(entry) + '\n')
+  } catch (e) { console.warn('[audit] 写盘失败:', e.message) }
+  const bits = [new Date().toTimeString().slice(0, 8), action] // 本地时间；文件里仍是 ISO
+  if (entry.target) bits.push(`target=${entry.target}`)
+  if (entry.via) bits.push(`via=${entry.via}`)
+  if (entry.result) bits.push(entry.result)
+  if (entry.actor?.device) bits.push(`by=${entry.actor.device}`)
+  console.log(`[audit] ${bits.join(' ')}`)
+}
+
+// 状态对账：面板操作会先留下 API 审计；对不上号的变更就是命令行/外部进程干的。
+let lastInventory = null
+function readInventory() {
+  try {
+    return new Map(
+      execFileSync('tmux', ['list-sessions', '-F', '#{session_name} #{session_windows}'], { encoding: 'utf8', stdio: 'pipe' })
+        .trim().split('\n').filter(Boolean)
+        .map((l) => [l.split(' ')[0], Number(l.split(' ')[1]) || 0])
+    )
+  } catch { return new Map() }
+}
+function reconcileInventory(note) {
+  const cur = readInventory()
+  if (lastInventory) {
+    for (const [name, wins] of cur) {
+      if (!lastInventory.has(name)) audit('session-added', null, { target: name, windows: wins, via: viaOf(name), note })
+      else if (lastInventory.get(name) !== wins) audit('session-windows-changed', null, { target: name, from: lastInventory.get(name), to: wins, via: viaOf(name), note })
+    }
+    for (const [name, wins] of lastInventory) {
+      if (!cur.has(name)) audit('session-removed', null, { target: name, windows: wins, via: viaOf(name), note })
+    }
+  }
+  lastInventory = cur
+  return cur
+}
+setInterval(() => reconcileInventory('periodic'), 60000);
+
+// GET /api/audit — 读最近 N 条审计（面板「操作日志」用，也是我排查时的第一现场）
+app.get('/api/audit', authMiddleware, (req, res) => {
+  const n = Math.min(Number(req.query.lines) || 200, 1000)
+  let lines = []
+  try {
+    lines = readFileSync(AUDIT_FILE, 'utf8').trim().split('\n').slice(-n)
+      .map((l) => { try { return JSON.parse(l) } catch { return { ts: '', action: 'raw', detail: l } } })
+  } catch { /* 还没有日志 */ }
+  res.json({ lines })
+})
+
 // POST /api/auth/login
 app.post('/api/auth/login', async (req, res) => {
   const { password } = req.body || {};
   if (!password) return res.status(400).json({ error: 'password required' });
   try {
     const ok = await bcrypt.compare(password, ACC_PASSWORD_HASH);
-    if (!ok) return res.status(401).json({ error: 'unauthorized' });
+    if (!ok) { audit('login-fail', req, { result: 'unauthorized' }); return res.status(401).json({ error: 'unauthorized' }); }
     const token = jwt.sign({}, JWT_SECRET, { expiresIn: '30d' });
+    audit('login-ok', req, { result: 'ok' });
     res.json({ token });
   } catch (err) {
+    audit('login-error', req, { result: err.message });
     res.status(500).json({ error: 'internal error' });
   }
 });
@@ -357,6 +442,7 @@ app.post('/api/windows', authMiddleware, (req, res) => {
   const cmd = `tmux new-window -t ${tmuxSession} -c "${cwd}" -n "${name}" "${shellCmd}"`;
   exec(cmd, (err) => {
     if (err) return res.status(500).json({ error: err.message });
+    audit('channel-created', req, { target: tmuxSession, channel: name, cwd, profile: profile || null })
     res.json({ name, cwd, shell_type, profile: profile || null, session: tmuxSession });
   });
 });
@@ -407,6 +493,7 @@ app.post('/api/sessions', authMiddleware, (req, res) => {
   const cmd = `tmux new-window -t ${tmuxSession} -c "${cwd}" -n "${name}" "${shellCmd}"`;
   exec(cmd, (err) => {
     if (err) return res.status(500).json({ error: err.message });
+    audit('channel-created', req, { target: tmuxSession, channel: name, cwd, profile: profile || null })
     res.json({ name, cwd, shell_type, profile: profile || null, session: tmuxSession });
   });
 });
@@ -759,6 +846,7 @@ app.delete('/api/workspace/entry', authMiddleware, (req, res) => {
       return res.status(404).json({ error: 'not found' })
     }
     rmSync(p, { recursive: true, force: true })
+    audit('fs-deleted', req, { target: p })
     res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -1037,6 +1125,7 @@ app.delete('/api/files/all', authMiddleware, (req, res) => {
         const filePath = join(dirPath, file.name)
         try {
           unlinkSync(filePath)
+          audit('fs-deleted', req, { target: filePath })
           deletedCount++
         } catch {}
       }
@@ -1060,6 +1149,7 @@ app.delete('/api/files/content', authMiddleware, (req, res) => {
   try {
     if (existsSync(normalized)) {
       unlinkSync(normalized)
+      audit('fs-deleted', req, { target: normalized })
       res.json({ ok: true })
     } else {
       res.status(404).json({ error: 'file not found' })
@@ -1081,6 +1171,7 @@ app.post('/api/sessions/:id/rename', authMiddleware, (req, res) => {
   if (!safeName) return res.status(400).json({ error: 'name required' })
   try {
     execFileSync('tmux', ['rename-window', '-t', `${session}:${index}`, '--', safeName], { stdio: 'pipe' })
+    audit('channel-renamed', req, { target: `${session}:${index}`, name: safeName })
     res.json({ ok: true, name: safeName })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -1094,6 +1185,7 @@ app.delete('/api/sessions/:id/history', authMiddleware, (req, res) => {
   const session = req.query.session || TMUX_SESSION
   try {
     execFileSync('tmux', ['clear-history', '-t', `${session}:${index}`], { stdio: 'pipe' })
+    audit('history-cleared', req, { target: `${session}:${index}` })
     res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -1326,11 +1418,13 @@ app.post('/api/restore', authMiddleware, (req, res) => {
         const [k, v] = pair.split('=')
         kv[k] = Number.isNaN(Number(v)) ? v : Number(v)
       }
+      audit('restore', req, { result: 'ok', detail: ok[1] })
       console.log(`[restore-manual] ${ok[1]}`)
       return res.json({ ok: true, ...kv })
     }
     const em = String(stdout).match(/^RESTORE_ERR (.+)$/m) || String(stderr).match(/^RESTORE_ERR (.+)$/m)
     const msg = em ? em[1] : err ? err.message : 'restore 执行失败'
+    audit('restore', req, { result: 'failed', detail: msg })
     console.error(`[restore-manual] failed: ${msg}`)
     res.status(500).json({ error: msg })
   })
@@ -1369,6 +1463,7 @@ app.post('/api/rescue/run', authMiddleware, (req, res) => {
   exec(`bash "${script}"`, { timeout: 180000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
     rescueInFlight = false
     const out = String(stdout || '').trim() || String(stderr || '').trim() || (err ? err.message : '')
+    audit('rescue', req, { result: err ? `failed: ${err.message}` : 'ok' })
     console.log(`[rescue] ${err ? 'failed: ' + err.message : 'done'}`)
     res.json({ ok: !err, output: out.slice(-8000) })
   })
@@ -1475,6 +1570,7 @@ app.post('/api/projects', authMiddleware, (req, res) => {
     return res.status(500).json({ error: 'failed to create project: ' + err.message })
   }
 
+  audit('session-created', req, { target: finalName, cwd })
   res.json({ name: finalName, path: cwd, shell_type, profile: profile || null })
 })
 
@@ -1546,6 +1642,7 @@ app.post('/api/projects/:name/channels', authMiddleware, (req, res) => {
       '-n', channelName,
       shellCmd,
     ], { stdio: 'pipe' })
+    audit('channel-created', req, { target: sessionName, channel: channelName, cwd, profile: profile || null })
     res.json({ name: channelName, cwd, shell_type, profile: profile || null, project: sessionName })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -1612,6 +1709,8 @@ app.post('/api/projects/:name/rename', authMiddleware, (req, res) => {
   // 执行重命名
   try {
     execFileSync('tmux', ['rename-session', '-t', oldName, '--', sanitizedNewName], { stdio: 'pipe' })
+
+    audit('session-renamed', req, { target: oldName, name: sanitizedNewName })
     res.json({ ok: true, oldName, newName: sanitizedNewName })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -1629,6 +1728,7 @@ app.delete('/api/projects/:name', authMiddleware, (req, res) => {
   }
   // kill session
   exec(`tmux kill-session -t ${sessionName}`, (err) => {
+    audit('session-deleted', req, { target: sessionName, result: err ? `failed: ${err.message}` : 'ok' })
     if (err) return res.status(500).json({ error: err.message })
     res.json({ ok: true })
   })
@@ -1977,10 +2077,12 @@ server.listen(Number(PORT), HOST, () => {
     if (!up) {
       tmuxState = 'broken';
       console.error('[Nexus] tmux server 30s 内未就绪 —— 进入救援模式（面板仍可用：救援终端 / 一键救援）');
+      audit('tmux-broken', null, { result: 'probe-timeout' });
       notifyRescueOnce('tmux server 未就绪');
       return;
     }
     console.log('[Nexus] tmux server 就绪');
+    audit('tmux-ready', null, { sessions: [...reconcileInventory('boot').keys()].join(',') });
     try {
       const defaultWindowName = WORKSPACE_ROOT.replace(/^\/+|\/+$/, '').split('/').pop() || '~'
       execSync(`tmux has-session -t ${TMUX_SESSION} 2>/dev/null || tmux new-session -d -s ${TMUX_SESSION} -n "${defaultWindowName}" -c "${WORKSPACE_ROOT}" "${INTERACTIVE_SHELL}"`);
