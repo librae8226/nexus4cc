@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import Terminal from './Terminal'
 import ServerSettings from './ServerSettings'
+import WalkieApp from './walkie/WalkieApp'
+import { buildDefaultMode, rememberMode, resolveMode, type UiMode } from './walkie/mode'
 import { getApiBase, needsServerConfig, getActiveProfile, setActiveProfileUsername } from './baseUrl'
 
 const STORAGE_KEY = 'nexus_token'
@@ -22,6 +24,11 @@ export default function App() {
   // 一次性判定即可：登录页存活期间不会有人往里加 profile（加了也只能从这个
   // 组件加，而它没渲染就没有入口）。规则见 baseUrl.needsServerConfig()。
   const [showServer] = useState(needsServerConfig)
+  // 界面模式（经典终端 / 对讲机）。判定规则见 walkie/mode.ts。
+  // 初值 null = 还没判定完，先什么都不渲染，避免先闪一下经典终端再跳走。
+  const [mode, setMode] = useState<UiMode | null>(null)
+  useEffect(() => { void resolveMode().then(setMode) }, [])
+  const switchMode = (m: UiMode) => { rememberMode(m); setMode(m) }
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -63,7 +70,22 @@ export default function App() {
   }
 
   if (token) {
-    return <Terminal token={token} />
+    if (mode === null) return <div className="w-full h-full bg-nexus-bg" />
+    if (mode === 'walkie') {
+      return <WalkieApp token={token} onExit={() => switchMode('classic')} />
+    }
+    return (
+      <>
+        <Terminal token={token} />
+        {/* 只有在「出厂默认就是对讲机」的 APK 里才给回程入口 —— 浏览器用户
+            从没见过对讲机，别凭空多一个按钮出来。 */}
+        {buildDefaultMode() === 'walkie' && (
+          <button type="button" className="walkie-fab" onClick={() => switchMode('walkie')}>
+            🎙 对讲机
+          </button>
+        )}
+      </>
+    )
   }
 
   return (

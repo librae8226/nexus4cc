@@ -1,0 +1,430 @@
+/* walkie.css — 对讲机模式的样式
+   只用已有的 --nexus-* 主题变量，深色/浅色主题都跟着走。 */
+
+.walkie-root {
+  /* 闲置时旋钮是主角，占满剩下的空间；手里有内容时再收小让位给文字。
+     两个值分别是「空手」和「有内容」，见下面的 .has-content。 */
+  --walkie-dial: min(78vw, 320px);
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  width: 100%;
+  background: var(--nexus-bg);
+  color: var(--nexus-text);
+  overflow: hidden;
+  /* 按住说话时整页不该被选中/长按菜单打断 */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* 手里有内容时把旋钮收小、让出中间的大块版面给文字 */
+.walkie-root.has-content { --walkie-dial: min(48vw, 180px); }
+
+/* 旋钮的容器：
+   闲置时独占剩余高度，把旋钮垂直居中（否则中间会空一大片，旋钮孤零零吊在顶上）；
+   有内容时收成自然高度，把空间交给下面的文字区。 */
+.walkie-dial-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* 有内容时旋钮顶到最上面，给指针三角留出头顶的余地，别贴着顶栏 */
+.walkie-root.has-content .walkie-dial-wrap { flex: 0 0 auto; padding: 8px 0 8px; }
+
+.walkie-dial-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.walkie-hint {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--nexus-muted);
+  text-align: center;
+  padding: 0 30px;
+}
+
+/* ── 顶栏 ───────────────────────────────────────────── */
+.walkie-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px 4px;
+  flex: 0 0 auto;
+}
+.walkie-top-title {
+  font-size: 13px;
+  letter-spacing: .14em;
+  color: var(--nexus-text-2);
+  text-transform: uppercase;
+}
+.walkie-top-actions { display: flex; gap: 8px; align-items: center; }
+.walkie-chip {
+  background: transparent;
+  border: 1px solid var(--nexus-border);
+  color: var(--nexus-text-2);
+  border-radius: 999px;
+  font-size: 12px;
+  padding: 5px 11px;
+  cursor: pointer;
+}
+.walkie-chip:active { background: var(--nexus-bg-2); }
+.walkie-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--nexus-success);
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* ── 旋钮 ───────────────────────────────────────────── */
+.walkie-dial {
+  position: relative;
+  width: var(--walkie-dial);
+  height: var(--walkie-dial);
+  flex: 0 0 auto;
+  touch-action: none;          /* 关键：否则触摸拖动会被浏览器当成滚动吃掉 */
+  transition: width .26s ease, height .26s ease;
+}
+.walkie-ring {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+/* 外圈：一圈实线 + 靠外缘的「滚花」（repeating-conic-gradient 画放射细线再 mask 成环）。
+   滚花是"这是个可以拧的旋钮"的视觉暗示，实线才是刻度环的边界。
+   注意 mask 必须写 closest-side：默认的 farthest-corner 会让半径按半对角线算，
+   93% 的位置直接落在圆外，整圈会被裁光（第一版就是这么写的，肉眼看不见）。 */
+.walkie-ring-outer {
+  inset: 6%;
+  border: 1px solid var(--nexus-border);
+  opacity: .9;
+}
+.walkie-ring-outer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: repeating-conic-gradient(from 0deg,
+    var(--nexus-muted) 0deg .9deg, transparent .9deg 7.5deg);
+  -webkit-mask: radial-gradient(circle closest-side, transparent 0 87%, #000 87% 100%);
+  mask: radial-gradient(circle closest-side, transparent 0 87%, #000 87% 100%);
+  opacity: .5;
+}
+/* 内圈：一条实线，标出"频道环"的边界 */
+.walkie-ring-inner {
+  inset: 21%;
+  border: 1px solid var(--nexus-border);
+  opacity: .55;
+}
+
+/* 正上方的指针：标记「这一格是选中的」 */
+.walkie-dial::before {
+  content: '';
+  position: absolute;
+  top: -1px; left: 50%;
+  transform: translateX(-50%);
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 9px solid var(--nexus-accent);
+  pointer-events: none;
+}
+
+.walkie-tick {
+  position: absolute;
+  left: 50%; top: 50%;
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  font: inherit;
+  color: var(--nexus-text-2);
+  white-space: nowrap;
+  cursor: pointer;
+  max-width: 44%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  will-change: transform, opacity;
+}
+/* 外圈=项目、内圈=频道，用字号和字距把两层区分开，不然看着像同一层 */
+.walkie-tick-outer { font-size: 11.5px; letter-spacing: .05em; opacity: .9; }
+.walkie-tick-inner { font-size: 13px; }
+.walkie-tick.is-active {
+  color: var(--nexus-accent);
+  font-weight: 700;
+  text-shadow: 0 0 14px color-mix(in srgb, var(--nexus-accent) 55%, transparent);
+}
+.walkie-tick-outer.is-active { font-size: 13px; letter-spacing: .02em; }
+.walkie-tick-inner.is-active { font-size: 14px; }
+/* 非 claude 的频道（纯 shell）—— 发过去会被当命令执行，视觉上先警告 */
+.walkie-tick.is-shell { color: var(--nexus-warning); }
+.walkie-tick.is-shell::after { content: ' ⚠'; }
+
+.walkie-hub {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: calc(var(--walkie-dial) * 0.30);
+  height: calc(var(--walkie-dial) * 0.30);
+  border-radius: 50%;
+  /* 中心做成一颗"旋钮帽"：径向渐变 + 内阴影，跟周围的平面拉开层次 */
+  background:
+    radial-gradient(circle at 50% 32%,
+      color-mix(in srgb, var(--nexus-bg) 30%, var(--nexus-bg-2)),
+      var(--nexus-bg-2) 72%);
+  border: 1px solid var(--nexus-border);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--nexus-text) 10%, transparent),
+    inset 0 -6px 14px color-mix(in srgb, #000 22%, transparent),
+    0 4px 16px color-mix(in srgb, #000 18%, transparent);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  pointer-events: none;
+  overflow: hidden;
+  transition: width .26s ease, height .26s ease;
+}
+.walkie-hub-ch { font-size: 9px; letter-spacing: .12em; color: var(--nexus-accent); }
+.walkie-hub-name {
+  font-size: 13px; font-weight: 700; max-width: 92%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.walkie-hub-project { font-size: 9px; color: var(--nexus-muted); max-width: 92%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.walkie-root.has-content .walkie-hub-name { font-size: 11px; }
+
+/* ── 舞台（转写 / 回复）───────────────────────────────── */
+.walkie-stage {
+  /* 闲置时只占自身高度（就一行提示），把空间让给居中的旋钮；
+     有内容时才长开来吃满剩余高度。 */
+  flex: 0 1 auto;
+  min-height: 0;
+  margin: 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.walkie-root.has-content .walkie-stage { flex: 1 1 auto; }
+.walkie-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--nexus-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 0 24px;
+  line-height: 1.7;
+}
+
+.walkie-card {
+  background: var(--nexus-bg-2);
+  border: 1px solid var(--nexus-border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  animation: walkie-in .18s ease-out;
+}
+@keyframes walkie-in { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+
+.walkie-card-label {
+  font-size: 10px;
+  letter-spacing: .12em;
+  color: var(--nexus-muted);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.walkie-draft {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  color: var(--nexus-text);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.5;
+  min-height: 62px;
+  max-height: 30dvh;
+}
+.walkie-draft::placeholder { color: var(--nexus-muted); }
+
+.walkie-reply {
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.walkie-reply code {
+  background: var(--nexus-bg);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: .92em;
+}
+
+.walkie-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.walkie-mini {
+  background: transparent;
+  border: 1px solid var(--nexus-border);
+  color: var(--nexus-text-2);
+  border-radius: 8px;
+  font-size: 12px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.walkie-mini:active { background: var(--nexus-bg); }
+.walkie-mini[disabled] { opacity: .45; }
+.walkie-note { font-size: 11px; color: var(--nexus-muted); }
+
+/* 等待中的跳动点 */
+.walkie-wait { display: flex; align-items: center; gap: 8px; color: var(--nexus-text-2); font-size: 13px; }
+.walkie-wait i {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--nexus-accent);
+  animation: walkie-bounce 1s infinite ease-in-out;
+}
+.walkie-wait i:nth-child(2) { animation-delay: .15s }
+.walkie-wait i:nth-child(3) { animation-delay: .3s }
+@keyframes walkie-bounce { 0%,80%,100% { opacity: .25; transform: translateY(0) } 40% { opacity: 1; transform: translateY(-3px) } }
+
+/* ── 底部控制区 ─────────────────────────────────────── */
+.walkie-controls {
+  flex: 0 0 auto;
+  padding: 10px 14px calc(14px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 按住说话那一行。没有文本时是个居中的大圆钮，有文本时缩到左边、右边让给发送键。 */
+.walkie-ptt-row { position: relative; display: flex; align-items: center; gap: 12px; justify-content: center; }
+.walkie-ptt-row.has-text { justify-content: flex-start; }
+
+/* 输入法兜底入口：绝对定位在左边，这样中间的 PTT 圆钮是真正居中的 */
+.walkie-key {
+  position: absolute;
+  left: 0; top: 50%;
+  transform: translateY(-50%);
+  width: 44px; height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--nexus-border);
+  background: transparent;
+  color: var(--nexus-text-2);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.walkie-key svg { width: 22px; height: 22px; }
+.walkie-key:active { background: var(--nexus-bg-2); }
+
+.walkie-ptt {
+  position: relative;
+  flex: 0 0 auto;
+  width: 96px; height: 96px;
+  margin: 0 auto;
+  border-radius: 50%;
+  /* 大圆钮要一眼看出"能按"：一层微亮的径向渐变 + accent 描边 + 落影 */
+  border: 1px solid color-mix(in srgb, var(--nexus-accent) 35%, var(--nexus-border));
+  background:
+    radial-gradient(circle at 50% 30%,
+      color-mix(in srgb, var(--nexus-accent) 12%, var(--nexus-bg-2)),
+      var(--nexus-bg-2) 70%);
+  color: var(--nexus-text);
+  box-shadow: 0 6px 22px color-mix(in srgb, #000 32%, transparent);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 11px;
+  letter-spacing: .08em;
+  cursor: pointer;
+  touch-action: none;
+  transition: transform .12s ease, background .12s ease, box-shadow .12s ease;
+}
+.walkie-ptt-row.has-text .walkie-ptt { width: 64px; height: 64px; margin: 0; }
+.walkie-ptt-row.has-text .walkie-ptt span { display: none; }
+.walkie-ptt svg { width: 26px; height: 26px; }
+.walkie-ptt-row.has-text .walkie-ptt svg { width: 22px; height: 22px; }
+
+.walkie-ptt.is-live {
+  background: var(--nexus-error);
+  transform: scale(1.06);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--nexus-error) 22%, transparent), 0 0 32px color-mix(in srgb, var(--nexus-error) 45%, transparent);
+}
+/* 收音时向外扩散的圈 */
+.walkie-ptt.is-live::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 2px solid var(--nexus-error);
+  animation: walkie-pulse 1.4s ease-out infinite;
+}
+@keyframes walkie-pulse {
+  from { transform: scale(.92); opacity: .8 }
+  to { transform: scale(1.35); opacity: 0 }
+}
+
+.walkie-send {
+  flex: 1 1 auto;
+  height: 64px;
+  border: none;
+  border-radius: 16px;
+  background: var(--nexus-accent);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  cursor: pointer;
+  transition: transform .12s ease, opacity .12s ease;
+}
+.walkie-send:active { transform: scale(.985); }
+.walkie-send[disabled] { opacity: .5; }
+
+.walkie-error {
+  margin: 0 14px 6px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nexus-error) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nexus-error) 45%, transparent);
+  color: var(--nexus-error);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* 回到经典界面的浮动入口（只在 APK 的对讲机包里出现） */
+.walkie-fab {
+  position: fixed;
+  right: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  z-index: 60;
+  border: 1px solid var(--nexus-border);
+  background: color-mix(in srgb, var(--nexus-bg-2) 88%, transparent);
+  backdrop-filter: blur(8px);
+  color: var(--nexus-text-2);
+  border-radius: 999px;
+  padding: 7px 13px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}

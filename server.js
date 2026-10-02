@@ -13,6 +13,7 @@ import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, rea
 import { readdir, stat as statAsync } from 'fs/promises';
 import https from 'node:https';
 import multer from 'multer';
+import { createWalkieRouter } from './walkie.js';
 
 // ── 剥掉 PM2 注入的 IPC / 进程管理变量（必须在 .env 加载之前）─────────────────
 // PM2 以 fork 模式拉起 Nexus 时会注入 NODE_CHANNEL_FD=3 / NODE_CHANNEL_SERIALIZATION_MODE
@@ -1842,6 +1843,11 @@ app.post('/api/sessions/:id/attach', authMiddleware, (req, res) => {
     res.json({ ok: true })
   })
 })
+
+// ========== F-24: 对讲机模式（实验特性）==========
+// 频道清单 / 直接发送 / 口语精炼 / 回复追踪四件事全在 walkie.js 里，
+// 这里只负责挂载并注入它需要的上下文（认证、数据目录、默认 session、审计）。
+app.use('/api/walkie', createWalkieRouter({ authMiddleware, dataDir: DATA_DIR, tmuxSession: TMUX_SESSION, audit }))
 
 // SPA fallback — 所有非 API 路由返回 index.html
 app.get('*', (req, res) => {
