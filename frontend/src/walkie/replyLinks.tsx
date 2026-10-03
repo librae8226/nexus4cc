@@ -32,6 +32,11 @@ const TOKEN_RE = new RegExp(
     '(`[^`\\n]{1,300}`)',                                            // 2 反引号
     `(^|[\\s(（【「"'])((${PATH_BODY}\\.(?:${EXT}))${LINE_SUFFIX})`, // 3a 已知后缀
     `(^|[\\s(（【「"'])(((?:\\.{1,2}/|/)[\\w.\\-\\u4e00-\\u9fa5/]+))`, // 3b 显式带目录
+    // 4/5 排在路径之后：`**docs/a.md**` 这种要先把路径认出来，再看外面的星号。
+    // 手机上没有 markdown 渲染器，不处理的话 `**重点**`、`## 标题` 是**原样**打在屏上的，
+    // 满屏的星号井号 —— 这是最伤"精致感"的一处，代价只有两条正则。
+    '(\\*\\*[^*\\n]{1,200}\\*\\*)',                                  // 4 粗体
+    '(^#{1,4}[ \\t][^\\n]{1,200})',                                  // 5 标题
   ].join('|'),
   'gim',
 )
@@ -61,7 +66,7 @@ export default function ReplyText({ text, onOpen }: ReplyTextProps): React.React
 
   let m: RegExpExecArray | null
   while ((m = TOKEN_RE.exec(text)) !== null) {
-    const [full, md, code, pre1, bare1, pre2, bare2] = m
+    const [full, md, code, pre1, bare1, pre2, bare2, bold, head] = m
     // 3a/3b 把前导字符一起吞了，渲染时要还回去
     const lead = pre1 ?? pre2 ?? ''
     const body = bare1 ?? bare2 ?? ''
@@ -107,6 +112,10 @@ export default function ReplyText({ text, onOpen }: ReplyTextProps): React.React
       } else {
         push(body)
       }
+    } else if (bold) {
+      push(<strong className="walkie-strong">{bold.slice(2, -2)}</strong>)
+    } else if (head) {
+      push(<strong className="walkie-strong">{head.replace(/^#{1,4}[ \t]+/, '')}</strong>)
     }
   }
   if (last < text.length) push(text.slice(last))

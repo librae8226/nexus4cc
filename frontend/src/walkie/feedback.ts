@@ -186,6 +186,107 @@ export function whoosh(): void {
   noise.start(t); noise.stop(t + dur)
 }
 
+/**
+ * 按下讲话键那一下 —— 电台的"静噪被打开"。
+ *
+ * 为什么单独一个音：这是整个应用里**最重**的一个动作（要开始说话了），
+ * 它不该只靠视觉。真机上按下去手感是"啪"的一下：一小段静电噪声**被硬切断**，
+ * 底下一记低频闷响。噪声用极短的 attack + 平台 + 断崖式收尾，收尾必须陡，
+ * 缓下来就变成"噗"而不是"啪"。
+ */
+export function squelch(): void {
+  const c = audio()
+  if (!c || !master || muted) return
+  const t = c.currentTime
+  const dur = 0.07
+  const len = Math.max(1, Math.floor(c.sampleRate * dur))
+  const buf = c.createBuffer(1, len, c.sampleRate)
+  const data = buf.getChannelData(0)
+  for (let i = 0; i < len; i++) {
+    const x = i / len
+    // 起得很快（前 4%），中间保持，最后 6% 直接断掉
+    const env = Math.min(1, x * 25) * (x > 0.94 ? (1 - x) / 0.06 : 1)
+    data[i] = (Math.random() * 2 - 1) * env
+  }
+  const noise = c.createBufferSource()
+  noise.buffer = buf
+  const bp = c.createBiquadFilter()
+  bp.type = 'bandpass'
+  bp.Q.value = 0.7
+  bp.frequency.setValueAtTime(1500, t)
+  bp.frequency.exponentialRampToValueAtTime(900, t + dur)
+  const g = c.createGain()
+  g.gain.value = 0.5
+  noise.connect(bp); bp.connect(g); g.connect(master)
+  noise.start(t); noise.stop(t + dur)
+
+  // 底下的闷响：给这一下"分量"，不然只有静电、没有"按下去"
+  const osc = c.createOscillator()
+  osc.type = 'sine'
+  osc.frequency.setValueAtTime(300, t)
+  osc.frequency.exponentialRampToValueAtTime(150, t + 0.05)
+  const og = c.createGain()
+  og.gain.setValueAtTime(0.3, t)
+  og.gain.exponentialRampToValueAtTime(0.0001, t + 0.06)
+  osc.connect(og); og.connect(master)
+  osc.start(t); osc.stop(t + 0.07)
+}
+
+/**
+ * Roger beep —— 对讲机的"通话结束"音，两个上扬的短音。
+ *
+ * 这是整台机器最有辨识度的一声：**松手（我说完了）和答完（他说完了）都用它**，
+ * 于是"一轮对话结束了"这件事变成听出来的，不用盯着屏幕等。
+ * 用它替代一段静默，也顺手把 TTS 播报的起头垫住。
+ */
+export function roger(): void {
+  const c = audio()
+  if (!c || !master || muted) return
+  const t = c.currentTime
+  for (const [at, freq, dur] of [[0, 980, 0.075], [0.095, 1420, 0.115]] as const) {
+    const osc = c.createOscillator()
+    osc.type = 'triangle'
+    osc.frequency.value = freq
+    const g = c.createGain()
+    const s = t + at
+    g.gain.setValueAtTime(0.0001, s)
+    g.gain.exponentialRampToValueAtTime(0.3, s + 0.006)
+    g.gain.setValueAtTime(0.3, s + dur - 0.03)
+    g.gain.exponentialRampToValueAtTime(0.0001, s + dur)
+    osc.connect(g); g.connect(master)
+    osc.start(s); osc.stop(s + dur + 0.01)
+  }
+}
+
+/**
+ * 精炼稿落进输入框的一声轻"嗒"。
+ *
+ * 精炼是**在你眼皮底下把你说的话换掉**，没有这一声，那行字是"悄悄"变的；
+ * 有了它，你立刻就注意到"哦，它整理过了"。比 tick 更闷、更轻，不抢节点音的戏。
+ */
+export function land(): void {
+  const c = audio()
+  if (!c || !master || muted) return
+  const t = c.currentTime
+  const dur = 0.03
+  const len = Math.max(1, Math.floor(c.sampleRate * dur))
+  const buf = c.createBuffer(1, len, c.sampleRate)
+  const data = buf.getChannelData(0)
+  for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-(i / len) * 34)
+  const noise = c.createBufferSource()
+  noise.buffer = buf
+  const bp = c.createBiquadFilter()
+  bp.type = 'bandpass'
+  bp.frequency.value = 1050
+  bp.Q.value = 1.4
+  const g = c.createGain()
+  g.gain.setValueAtTime(0.0001, t)
+  g.gain.exponentialRampToValueAtTime(0.26, t + 0.001)
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+  noise.connect(bp); bp.connect(g); g.connect(master)
+  noise.start(t); noise.stop(t + dur)
+}
+
 /** 吸附到位的低沉一点的一声 */
 export function thunk(): void {
   const c = audio()

@@ -18,6 +18,7 @@
  *   --attach <url:port> 不开新 tab，挂到已有 target 上（WebView 调试口用这个）
  *   --hold <sel> <ms>  按住某个元素 ms 毫秒（真触摸事件，能触发 getUserMedia 的用户手势）
  *   --tap <sel>        点一下某个元素
+ *   --drag <sel> <dx> <dy>  横向/纵向拖一段（分步派发真触摸移动，能测滚动吸附）
  *
  * 注意 --hold/--tap 走的是 CDP 的 Input.dispatchTouchEvent，是**可信**输入。
  * 用 JS dispatchEvent 造的合成事件不算用户手势，getUserMedia 会直接拒绝 —— 测不了录音。
@@ -34,7 +35,7 @@ const CDP = process.env.CDP_BASE || 'http://127.0.0.1:9222'
 
 function parseArgs(argv) {
   const [cmd, url, out] = argv
-  const opts = { mobile: false, wait: 1200, set: [], eval: [], keep: false, attach: '', hold: null, tap: null, shotAt: 0 }
+  const opts = { mobile: false, wait: 1200, set: [], eval: [], keep: false, attach: '', hold: null, tap: null, drag: null, shotAt: 0 }
   for (let i = 3; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--mobile') opts.mobile = true
@@ -42,6 +43,7 @@ function parseArgs(argv) {
     else if (a === '--attach') opts.attach = argv[++i]
     else if (a === '--hold') opts.hold = { sel: argv[++i], ms: Number(argv[++i]) }
     else if (a === '--tap') opts.tap = argv[++i]
+    else if (a === '--drag') opts.drag = { sel: argv[++i], dx: Number(argv[++i]), dy: Number(argv[++i]) }
     else if (a === '--shot-at') opts.shotAt = Number(argv[++i])
     else if (a === '--wait') opts.wait = Number(argv[++i])
     else if (a === '--set') opts.set.push(argv[++i])
@@ -171,6 +173,24 @@ async function main() {
     await touch('touchStart', pt); await sleep(60); await touch('touchEnd', pt)
     console.log(`tap ${opts.tap} @ ${Math.round(pt.x)},${Math.round(pt.y)}`)
     await sleep(600)
+  }
+
+  if (opts.drag) {
+    // 横向拖。分步派发：一步到底不产生中间 move 事件，滚动/吸附看不出来。
+    const pt = await centerOf(opts.drag.sel)
+    const steps = 24
+    await touch('touchStart', pt)
+    for (let i = 1; i <= steps; i++) {
+      await touch('touchMove', {
+        x: pt.x + (opts.drag.dx * i) / steps,
+        y: pt.y + (opts.drag.dy * i) / steps,
+      })
+      await sleep(12)
+    }
+    await sleep(120)
+    await touch('touchEnd', { x: pt.x + opts.drag.dx, y: pt.y + opts.drag.dy })
+    console.log(`drag ${opts.drag.sel} Δ${opts.drag.dx},${opts.drag.dy}`)
+    await sleep(700)          // 等吸附停稳 + 父组件提交
   }
 
   if (opts.hold) {
