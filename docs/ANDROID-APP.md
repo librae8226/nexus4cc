@@ -415,6 +415,18 @@ android/app/src/main/res/xml/network_security_config.xml
   } }
   ```
 - 于是现有发布流程（改两个 `package.json` → commit → tag）**自动产出正确版本的 APK**，不新增手工步骤。⚠ 预发布后缀（`4.9.0-rc1`）会让 `as int` 抛错，若将来要用需加保护。
+- ⚠️ **但 tag 不会自己产出 APK。** 改完版本号还要真的构建一次，并把两个 flavor 的 release 包
+  拷进 `android/dist/`（手工目录，已 gitignore）：
+
+  ```bash
+  cd frontend && npm run build && cd ..
+  android/build-apk.sh assembleRelease
+  cp android/app/build/outputs/apk/walkie/release/app-walkie-release.apk  android/dist/nexus-walkie-X.Y.Z.apk
+  cp android/app/build/outputs/apk/classic/release/app-classic-release.apk android/dist/nexus-classic-X.Y.Z.apk
+  ```
+
+  漏了这步的后果很隐蔽：`git tag`、`/api/version`、`package.json` 全都显示新版本，
+  只有 `android/dist/` 里躺着上一个版本的包 —— 装上去的也是旧代码。旧版本的包不删，留着回滚。
 - `CLAUDE.md` 的版本管理表补一行说明「Android 自动派生」，`docs/PRD.md` / `docs/ROADMAP.md` 补新交付渠道。
 
 ---
