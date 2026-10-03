@@ -10,11 +10,12 @@
 // SenseVoice 转写。音频不出本机，也不依赖任何云端服务。
 //
 // 【为什么能"边说边出字"】
-// 本机 ASR 的耗时几乎全是模型加载的固定开销（实测：1 秒的片段 1364ms，
-// 3 秒的片段 1402ms）。所以切成小段分别转几乎不额外花钱，文字就能一段一段冒出来。
-// 切段由 audio.ts 的静音检测负责 —— 只在能量低谷切，不会把词切坏。
+// 本机 ASR 常驻后解一小段只要几十毫秒（实测 3–5 秒音频 ~0.08s），所以切成小段
+// 分别转、边转边冒字，几乎不花钱。切段由 audio.ts 的静音检测负责，只在能量低谷切。
 //
-// 松手后只需要等**最后一段**落地（约 1.5 秒），前面几段在说话时就转完了。
+// 【但分段只是预览】每段各自看不见句子的另一半，长句还会在 maxSegmentS 处被硬切。
+// 所以松手时会**拿整段音频再转一次**，那一遍才是最终发出去的文字；
+// 它失败就退回分段拼出来的，绝不因为这一遍而丢字。
 
 import { captureSupported, startCapture, type AudioSegment, type Capture } from './audio'
 
@@ -98,7 +99,7 @@ export async function startDictation(
   return {
     stop: async () => {
       cb.onStatus?.('transcribing')
-      await capture.stop()
+      const whole = await capture.stop()
       // 等在飞的转写落地。给个上限，别让网络问题把"松手"卡死。
       const deadline = Date.now() + 40_000
       while (inflight > 0 && Date.now() < deadline) {
@@ -107,8 +108,19 @@ export async function startDictation(
           sleep(300),
         ])
       }
+      const live = parts.filter((p) => p !== null).join('').trim()
+
+      // 【第二遍，也是最终说了算的那一遍】把整段音频重新解码一次。
+      // 分段那几遍只是"边说边出字"的预览：它们各自看不见句子的另一半，
+      // 而且长句会在 maxSegmentS（9s）处被硬切在词中间。
+      let finalText = ''
+      if (whole) {
+        try {
+          finalText = (await transcribeSegment(token, { index: -1, wav: whole.wav, seconds: whole.seconds })).trim()
+        } catch { /* 整段这遍失败就用分段拼出来的，绝不因此丢掉文字 */ }
+      }
       cb.onStatus?.('idle')
-      const text = parts.filter((p) => p !== null).join('').trim()
+      const text = finalText || live
       // 一段都没转出来、而且确实报过错 —— 把那个错抛上去，别静默返回空串
       if (!text && firstError) throw new Error(firstError)
       return text

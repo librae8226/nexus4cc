@@ -9,10 +9,13 @@
 // 于是拿到的是裸样本，切段、算音量、编 WAV 全都随自己。顺便还省掉了
 // MediaRecorder 那套 MIME 协商（不同 WebView 支持的容器不一样，是个静默的坑）。
 //
-// 【为什么按静音切段、而不是固定时长】
-// 本机 ASR（SenseVoice）的耗时几乎全是固定开销：1 秒的片段和 3 秒的片段都是
-// ~1.4 秒（实测）。所以"切成小段分别转"几乎不额外花钱，还能让文字边说边冒出来。
-// 但切在原词中间会切坏字，所以只在**能量低谷**切 —— 说白了就是个最简 VAD。
+// 【切段是给"边说边出字"用的，不是最终结果】
+// 本机 ASR 常驻之后解一小段只要几十毫秒（实测 3–5 秒的音频 ~0.08s），所以切成
+// 小段分别转、边转边冒字，几乎不花钱。切段只在**能量低谷**切 —— 说白了就是个最简 VAD。
+//
+// 但分段解码有个绕不开的毛病：每段各自看不见句子的另一半，而且长句会在
+// maxSegmentS 处被**硬切**（那一刀常常落在词中间）。所以松手时会拿整段音频再转一次
+// （见 stop() 返回的 whole），那一遍才是最终发出去的文字；分段只是预览。
 //
 // 【代价】ScriptProcessorNode 是废弃 API，且跑在主线程。但它到处都有，而
 // AudioWorklet 要单独加载一个模块文件，在 WebView 里多一层不确定性。
@@ -35,13 +38,20 @@ export interface CaptureOptions {
 }
 
 export interface Capture {
-  stop: () => Promise<void>
+  /**
+   * 停止采集。返回**整段**录音（从第一声到最后一个字，掐掉首尾静音）——
+   * 松手后的"第二遍"用它再转一次，那是最终发出去的文字。
+   * 没录到有效声音时返回 null。
+   */
+  stop: () => Promise<{ wav: Blob; seconds: number } | null>
 }
 
 const DEFAULTS = {
   silenceHoldMs: 420,
   minSegmentS: 2.2,
-  maxSegmentS: 9,
+  // 硬切上限。松手后还有整段那一遍兜底，所以这里可以放宽一点 ——
+  // 切得越少，预览文字越接近最终文字，看起来就不"跳"。
+  maxSegmentS: 12,
 }
 
 /**
@@ -133,6 +143,14 @@ export async function startCapture(
   let stopped = false
   let floor: number | null = null   // 底噪估计（各块 RMS 的运行最小值）
 
+  // 整段留一份底稿，只为了松手后的第二遍解码。分段是给"边说边出字"用的预览，
+  // 最终发出去的是整段的结果 —— 一次解码看得见整句话的上下文，也不会在
+  // maxSegmentS 那一刻被硬切在词中间。
+  const all: Float32Array[] = []
+  let allLen = 0
+  let firstVoicedAt = -1     // 第一个"有声"样本的绝对下标
+  let lastVoicedAt = -1
+
   const flush = () => {
     const voiced = curVoiced
     if (!curLen) return
@@ -165,7 +183,13 @@ export async function startCapture(
 
     cur.push(new Float32Array(input))   // 必须拷一份，inputBuffer 会被复用
     curLen += input.length
-    if (voiced) curVoiced += input.length
+    if (voiced) {
+      curVoiced += input.length
+      if (firstVoicedAt < 0) firstVoicedAt = allLen
+      lastVoicedAt = allLen + input.length
+    }
+    all.push(cur[cur.length - 1])       // 同一份拷贝，不额外占内存
+    allLen += input.length
 
     if (!voiced) {
       quietRun++
@@ -186,6 +210,42 @@ export async function startCapture(
       for (const t of stream.getTracks()) { try { t.stop() } catch { /* 已经停了 */ } }
       flush()
       try { await ctx.close() } catch { /* 已经关了 */ }
+      const whole = wholeWav(all, allLen, rate, firstVoicedAt, lastVoicedAt)
+      all.length = 0
+      return whole
     },
   }
+}
+
+/** 首尾各留这一点静音：切在字上会让模型的注意力变差 */
+const PAD_S = 0.18
+
+/**
+ * 把整段录音拼成一个 WAV，掐掉首尾静音。
+ *
+ * 为什么值得单独做一遍：分段是**在 9 秒处硬切**的（maxSegmentS），一刀下去
+ * 常常落在词中间；而且每段各自解码，看不见句子另一半的上下文。
+ * 整段一次解码没这两个问题，而本机 ASR 常驻后解 5 秒音频只要 ~0.1 秒，贵得起。
+ */
+function wholeWav(
+  chunks: Float32Array[], total: number, rate: number, from: number, to: number,
+): { wav: Blob; seconds: number } | null {
+  if (!chunks.length || total <= 0 || from < 0 || to <= from) return null
+  const pad = Math.floor(PAD_S * rate)
+  const a = Math.max(0, from - pad)
+  const b = Math.min(total, to + pad)
+  const out = new Float32Array(b - a)
+  let at = 0
+  for (const c of chunks) {
+    const end = at + c.length
+    if (end > a && at < b) {
+      const s = Math.max(a, at) - at
+      const e = Math.min(b, end) - at
+      out.set(c.subarray(s, e), Math.max(0, at - a))
+    }
+    at = end
+    if (at >= b) break
+  }
+  if (out.length < rate * 0.3) return null
+  return { wav: encodeWav([out], rate), seconds: out.length / rate }
 }
