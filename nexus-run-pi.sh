@@ -102,7 +102,45 @@ for (const f of fs.readdirSync(dir)) {
   // 实测 openrouter.ai/api → 404，openrouter.ai/api/v1 → 通；profile 里的写法是给 claude 用的，
   // 不能直接照搬，这里补一次（已经是 /v1 结尾的不动）。
   if (api === "openai-completions" && !/\/v1$/.test(baseUrl)) baseUrl += "/v1";
-  const def = { id: model };
+  // 能力字段必须写全。models[] 里的条目是**整体替换** catalog 条目，不是打补丁
+  // （provider-composer.js: applyModelsJson → models[i] = modelFromJson(...)，而
+  // modelFromJson 里 reasoning 默认 false、input 默认 ["text"]、maxTokens 默认 16384）。
+  // 漏写 = 对 pi 声明「这个模型不支持思考、不能看图、输出上限 16K」，而 pi 会照信 ——
+  // 表现就是 thinking level 永远 off 且改不了。
+  //
+  // 下面的值抄自 pi 内置 catalog：
+  //   node_modules/@earendil-works/pi-ai/dist/providers/data/<provider>.json
+  // pi 升级后能力若有变，对着那份 JSON 更新这里（这是唯一需要手工跟进的地方）。
+  //
+  // thinkingLevelMap 不是装饰：getSupportedThinkingLevels() 里 **xhigh / max 只有在
+  // map 里显式写了才出现**，没有 map 时最高只到 high —— 想要「最高档 = max」就必须带上它。
+  const CAPS = {
+    "deepseek-flash": {
+      reasoning: true,
+      thinkingLevelMap: { minimal: null, low: "low", medium: null, high: "high", max: "max" },
+      input: ["text", "image"],
+      maxTokens: 384000,
+      contextWindow: 1000000,
+    },
+    "kimi-k3": {
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null, minimal: null, low: "low", medium: null,
+        high: "high", xhigh: null, max: "max",
+      },
+      input: ["text", "image"],
+      maxTokens: 1048576,
+      contextWindow: 1048576,
+    },
+    "google/gemma-4-31b-it": {
+      reasoning: true,
+      input: ["text", "image"],
+      maxTokens: 16384,
+      contextWindow: 262144,
+    },
+  };
+  const def = { id: model, ...(CAPS[model] || {}) };
+  // profile 里显式声明的上下文窗口优先（那是运维的意图），否则用 catalog 值
   const ctx = parseInt(cfg.CONTEXT_TOKENS, 10);
   if (Number.isFinite(ctx) && ctx > 0) def.contextWindow = ctx;
   providers[id] = {
@@ -121,7 +159,10 @@ const out = {
   models: JSON.stringify(modelsJson, null, 2),
   // 只有 settings.json 里的 defaultProjectTrust 能免掉无人值守窗口的信任提示
   // （等价于 claude 侧的 --dangerously-skip-permissions 在 Nexus 里的用法：自己的项目目录）。
-  settings: JSON.stringify({ defaultProjectTrust: "always" }, null, 2),
+  //
+  // defaultThinkingLevel：新会话的起始思考档位（pi 默认 medium）。给最高档 ——
+  // 模型不支持 max 时 pi 会自己往下夹到它支持的最高档（clampThinkingLevel），不会报错。
+  settings: JSON.stringify({ defaultProjectTrust: "always", defaultThinkingLevel: "max" }, null, 2),
 };
 
 // 原子写：同目录临时文件 + rename，权限 600
