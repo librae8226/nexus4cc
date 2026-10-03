@@ -1316,6 +1316,8 @@ cd frontend && npm run build          # 先出 web 产物
 | 折叠屏展开时有阅读宽度 | `--size 860x1000`（dev-cdp 新加的尺寸参数）截图：流与输入框都在 760px 居中的栏里 |
 | 浅色主题下新界面成立 | 模拟器真机（系统浅色）+ 浏览器 light：提问卡、说明条、选项按钮、输入框都对 |
 | 真机（Android WebView） | 无头模拟器装 debug 包 + WebView 调试口注入 token：流、署名、输入框那一行、目标行都正常 |
+| 键盘弹起来时输入框在手边 | 模拟器真机 + Gboard：点输入框 → 整条（输入框 / 📁 📎 ⤢ ↑ / 寄给谁）正好在键盘上沿之上，流相应收缩。manifest 里的 `windowSoftInputMode="adjustResize"` 是**把这件事写死**，不是修 bug —— 不加它系统默认也挑 resize（同机实测过），但那是系统替我们猜的 |
+| 打包出来的 release 包能装能起 | 卸掉旧的 → 装 `nexus-walkie-5.0.0.apk`（正式签名）→ 冷启动进首启页，出厂地址已在 |
 
 ---
 

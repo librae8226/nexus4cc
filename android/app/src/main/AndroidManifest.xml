@@ -10,8 +10,16 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <!-- 键盘弹起来要**把版面顶上去**，不是盖在上面：这一屏全部的输入都发生在
+             最底下那一条，键盘盖住它 = 没法用。
+
+             **这不是一处修复，是把意图钉死。** 实测（API 34 模拟器 + Gboard）：
+             不写这行，系统按默认的 adjustUnspecified 也会挑 resize，表现一样。
+             但那是系统替我们猜的 —— 一个"全部输入都在屏幕底边"的界面，
+             这件事值得自己写明，而不是指望每一台设备都猜对。 -->
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:windowSoftInputMode="adjustResize"
             android:name=".MainActivity"
             android:label="@string/title_activity_main"
             android:theme="@style/AppTheme.NoActionBarLaunch"
