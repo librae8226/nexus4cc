@@ -85,7 +85,7 @@ docs/
   ARCHITECTURE.md          # 架构现状
   QUICKSTART.md            # 快速开始指南
   SESSION-PERSISTENCE.md   # 会话持久化方案
-  WALKIE.md                # 对讲机模式（F-24）：设计取舍 + 两个 APK 的构建方式
+  WALKIE.md                # 对讲机模式（F-24）：需求/设计/变更记录/验收，唯一入口
   HISTORY_MODE_REDESIGN.md # 历史模式重设计（设计阶段）
   story.md                 # 项目故事/背景
   pm2-setup.md             # PM2 部署指南
