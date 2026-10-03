@@ -112,7 +112,7 @@ export default function App() {
   if (token) {
     if (mode === null) return <div className="w-full h-full bg-nexus-bg" />
     if (mode === 'walkie') {
-      return <WalkieApp token={token} onExit={() => switchMode('classic')} />
+      return <WalkieApp token={token} />
     }
     return (
       <>

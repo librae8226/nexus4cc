@@ -110,37 +110,58 @@
 @keyframes walkie-pulse { 0%,100% { opacity: 1 } 50% { opacity: .45 } }
 @keyframes walkie-in { from { opacity: 0; transform: translateY(3px) } to { opacity: 1; transform: none } }
 
-/* 一条流里的每一件事：内容 + 一行元信息，细线隔开。
-   **点一下 = 回复给这个人**，所以左侧那道竖线同时是"这是谁说的话"和
-   "你现在在跟谁说话"（选中时变亮、变粗、闪一下）。 */
-.walkie-you, .walkie-it, .walkie-round {
-  padding: 11px 0 11px 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--nexus-border) 55%, transparent);
-  border-left: 2px solid transparent;
-  cursor: pointer;
-  transition: background-color .18s ease, border-left-color .18s ease;
+/* ── 一条消息 ──────────────────────────────────────────
+ *
+ * 三条判据，都来自"扫一眼"：
+ *   1. **署名在内容之前** —— 你先知道是谁在说，才决定读不读。它整行都是命中区，
+ *      所以"点它 = 回复给这个人"有一个够大的靶子。
+ *   2. **我和你靠位置分开**（右 / 左）+ 底色，而不是靠一条 2px 的线 ——
+ *      余光里也得认得出。这是"分不清谁说的"那个问题的解法。
+ *   3. **长的先折成三行纯文本**，点整条正文才展开成 Markdown。
+ *      全渲染 Markdown 会让一屏只放得下一条，"扫一眼"就没了。
+ */
+.walkie-msg {
+  padding: 11px 0 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--nexus-border) 50%, transparent);
 }
-.walkie-round { cursor: default; border-bottom: none; padding-left: 0; }
-.walkie-you {
-  border-left-color: color-mix(in srgb, var(--tone-you) 45%, transparent);
-}
-.walkie-it { border-left-color: color-mix(in srgb, var(--nexus-border) 90%, transparent); }
-.walkie-you.is-target { border-left-color: var(--tone-you); }
-.walkie-it.is-target { border-left-color: color-mix(in srgb, var(--nexus-accent) 70%, transparent); }
-.walkie-you:active, .walkie-it:active { background: color-mix(in srgb, var(--nexus-text) 4%, transparent); }
-.walkie-you.is-flash, .walkie-it.is-flash {
-  animation: walkie-flash .9s ease-out;
-}
+.walkie-msg.is-flash { animation: walkie-flash .9s ease-out; }
 @keyframes walkie-flash {
-  0% { background: color-mix(in srgb, var(--nexus-accent) 22%, transparent) }
+  0% { background: color-mix(in srgb, var(--nexus-accent) 20%, transparent) }
   100% { background: transparent }
 }
-.walkie-it.is-running { border-left-color: var(--tone-now); }
+.walkie-msg.mine { display: flex; flex-direction: column; align-items: flex-end; }
 
-.walkie-more {
-  display: inline-block; margin-top: 6px; padding: 2px 0;
-  background: transparent; border: none; cursor: pointer;
-  color: var(--nexus-accent); font: inherit; font-size: 12.5px;
+.walkie-who {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; padding: 3px 0 6px; margin: 0;
+  background: transparent; border: none; cursor: pointer; text-align: left;
+  color: var(--nexus-muted); font: inherit; font-size: 11.5px; line-height: 1.4;
+}
+.walkie-msg.mine .walkie-who { justify-content: flex-end; }
+.walkie-who b { color: var(--nexus-text2); font-weight: 600; }
+.walkie-msg.is-target .walkie-who b { color: var(--nexus-text); }
+.walkie-msg.mine.is-target .walkie-who b { color: var(--tone-you); }
+.walkie-who-dot {
+  flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%;
+  background: color-mix(in srgb, var(--nexus-accent) 70%, transparent);
+}
+.walkie-who-where { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.walkie-msg.mine .walkie-who-where { flex: 0 1 auto; }
+.walkie-who-time { flex: 0 0 auto; }
+.walkie-who-live { flex: 0 0 auto; color: var(--tone-now); font-weight: 600; }
+
+.walkie-body { cursor: default; }
+.walkie-msg.theirs .walkie-body { max-width: 100%; }
+.walkie-msg.mine .walkie-body {
+  max-width: 86%;
+  background: color-mix(in srgb, var(--nexus-accent) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nexus-accent) 22%, transparent);
+  border-radius: 13px;
+  padding: 8px 11px;
+}
+.walkie-preview {
+  margin: 0; font-size: 14.5px; line-height: 1.6; color: var(--nexus-text);
+  white-space: pre-wrap; word-break: break-word;
 }
 
 /* ── Markdown 正文 ───────────────────────────────────── */
@@ -428,3 +449,37 @@
   margin-top: 18px; padding: 4px 0; background: transparent; border: none; cursor: pointer;
   color: var(--nexus-muted); font: inherit; font-size: 12px;
 }
+
+/* ── 宽屏（折叠屏）打开文件：左右并排，左边树可以收 ────── */
+.walkie-browse-wide {
+  position: fixed; inset: 0; z-index: 80;
+  display: flex; flex-direction: row;
+  background: var(--nexus-bg);
+}
+.walkie-browse-wide > *:first-child { flex: 1 1 auto; min-width: 0; }
+.walkie-tree-toggle {
+  position: absolute; left: 12px; bottom: 16px; z-index: 3;
+  width: 42px; height: 42px; border-radius: 999px;
+  border: 1px solid var(--nexus-border);
+  background: var(--nexus-bg2); color: var(--nexus-text2);
+  font-size: 15px; cursor: pointer; padding: 0;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, .22);
+}
+.walkie-tree-toggle:active { background: var(--nexus-bg); }
+
+/* ── 新增 channel（选人面板右栏）───────────────────── */
+.walkie-addch {
+  margin-top: 6px; padding: 9px;
+  background: transparent; border: 1px dashed var(--nexus-border);
+  color: var(--nexus-text2); border-radius: 9px;
+  font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.walkie-addch:active { background: var(--nexus-bg); }
+.walkie-newchan { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.walkie-newchan input {
+  flex: 1 1 auto; min-width: 0;
+  background: var(--nexus-bg); border: 1px solid var(--nexus-border);
+  border-radius: 8px; padding: 8px 10px;
+  color: var(--nexus-text); font: inherit; font-size: 14px; outline: none;
+}
+.walkie-newchan input:focus { border-color: color-mix(in srgb, var(--nexus-accent) 55%, var(--nexus-border)); }

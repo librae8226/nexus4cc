@@ -446,7 +446,9 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     }
 
     events.sort((a, b) => b.at - a.at)
-    res.json({ projects, events: events.slice(0, limit), running, at: Date.now() })
+    // home 一起给出去：消息里的路径经常写成 `~/work/nexus/x.md`，前端要把 `~` 展开成
+    // 绝对路径才能交给文件浏览器打开（不然会拼成 <cwd>/~/… 而打不开）。
+    res.json({ projects, events: events.slice(0, limit), running, at: Date.now(), home: homedir() })
   })
 
   // ── 2. 发送：直接落到目标频道的输入框并回车 ───────────────────────────
@@ -541,6 +543,41 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
       audit?.('walkie-upload', req, { bytes: buf.length, name })
       res.json({ ok: true, path: file, name, bytes: buf.length })
     })
+
+  // ── 2.7 解析消息里的文件路径 ──────────────────────────────────────────
+  // AI 在回复里写的路径**没有统一的基准**：可能是绝对路径、可能是 `~/x`、
+  // 可能相对它当时的工作目录，也可能相对它的**上层**目录。前端只有一个 cwd，
+  // 硬拼会拼出 `<cwd>/debian-l-colorful/postgres.md` 这种双份路径然后 ENOENT。
+  // 所以不猜 —— 把这几种可能都试一遍，谁真的存在就是谁。
+  router.get('/resolve', authMiddleware, (req, res) => {
+    const cwd = String(req.query.cwd || '')
+    const p = String(req.query.path || '').trim()
+    if (!p) return res.status(400).json({ error: 'empty path' })
+    const home = homedir()
+    const cands = []
+    if (p.startsWith('/')) cands.push(p)
+    else {
+      if (p.startsWith('~/')) cands.push(join(home, p.slice(2)))
+      if (cwd) {
+        cands.push(join(cwd, p))
+        // 从 cwd 一级级往上：写在回复里的相对路径常常是相对上层目录的
+        let dir = cwd.replace(/\/+$/, '')
+        for (let i = 0; i < 6; i++) {
+          const up = dir.replace(/\/[^/]+$/, '')
+          if (!up || up === dir || up === '/') break
+          dir = up
+          cands.push(join(dir, p))
+        }
+      }
+      cands.push(join(home, p))
+    }
+    for (const c of cands) {
+      try { if (statSync(c).isFile()) return res.json({ path: c }) } catch { /* 试下一个 */ }
+    }
+    // 一个都不存在：把最可能的那个还回去，让文件浏览器自己说"没有这个文件" ——
+    // 比点了没反应诚实。
+    res.json({ path: cands[0] || p, missing: true })
+  })
 
   // ── 3. 精炼 ──────────────────────────────────────────────────────────
   router.post('/refine', authMiddleware, async (req, res) => {

@@ -18,6 +18,70 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { BARE_PATH_RE, isPathLike, stripLine } from './paths'
 
+/**
+ * 折起来时要显示的那点文字：**把 Markdown 语法去掉**，留纯文本。
+ *
+ * 为什么不直接拿原文截断：`## 标题`、`**粗体**`、``` 代码块 ``` 截出来是满屏符号，
+ * 而且一个代码块会把三行预览整个吃掉 —— 扫一眼什么都得不到。
+ * 代码块换成「〔代码〕」，读者知道"这里有一段代码，点开看"。
+ */
+export function plainPreview(md: string): string {
+  return md
+    .replace(/```[\s\S]*?```/g, ' 〔代码〕 ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '〔图〕')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s{0,3}>\s?/gm, '')
+    .replace(/^\s{0,3}[-*+]\s+/gm, '· ')
+    .replace(/^\s{0,3}\d+[.)]\s+/gm, '· ')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/^\s*[-*_]{3,}\s*$/gm, '')
+    .replace(/\n{2,}/g, '\n')
+    .trim()
+}
+
+/**
+ * 折起来时的那三行。**路径仍然可点** —— 你要点开一个文件，不该先展开一条消息。
+ * 它不做 Markdown，只把裸路径挑出来做按钮。
+ */
+export function Preview({ text, onOpen, max = 150 }: {
+  text: string
+  onOpen?: (p: string) => void
+  max?: number
+}) {
+  const nodes = useMemo(() => {
+    const full = plainPreview(text)
+    // 这里自己截断、不用 CSS 的 line-clamp：预览里有可点的路径按钮，
+    // 行盒里有内联按钮时 line-clamp 的表现并不一致，而且"三行"在手机上量不出来。
+    const plain = full.length > max ? `${full.slice(0, max)}…` : full
+    const out: React.ReactNode[] = []
+    let last = 0
+    let key = 0
+    BARE_PATH_RE.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = BARE_PATH_RE.exec(plain)) !== null) {
+      const path = m[2]
+      const at = m.index + m[1].length
+      if (!isPathLike(path)) continue
+      if (at > last) out.push(plain.slice(last, at))
+      out.push(
+        <button key={key++} type="button" className="walkie-filelink"
+          data-file={stripLine(path)}
+          onClick={(e) => { e.stopPropagation(); onOpen?.(stripLine(path)) }}>
+          <code>{stripLine(path)}</code>
+        </button>,
+      )
+      last = at + path.length
+    }
+    if (last < plain.length) out.push(plain.slice(last))
+    return out
+  }, [text, onOpen])
+
+  return <p className="walkie-preview">{nodes}</p>
+}
+
 marked.setOptions({ gfm: true, breaks: true })
 
 /** 造一个可点的文件引用（样式和原来的 .walkie-filelink 一致） */

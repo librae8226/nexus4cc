@@ -480,11 +480,17 @@ app.post('/api/windows', authMiddleware, (req, res) => {
 //   当 shell_type='claude' 时，profile 可选，使用 nexus-run-claude.sh 启动
 //   当 shell_type='bash' 时，启动本地 shell（优先 zsh，不存在时回退 bash）
 app.post('/api/sessions', authMiddleware, (req, res) => {
-  const { rel_path, shell_type = 'claude', profile, session } = req.body || {};
+  const { rel_path, shell_type = 'claude', profile, session, name: wantName } = req.body || {};
   const tmuxSession = session || TMUX_SESSION;
   if (!rel_path) return res.status(400).json({ error: 'rel_path required' });
   const cwd = rel_path.startsWith('/') ? rel_path : `${WORKSPACE_ROOT}/${rel_path}`;
-  const name = cwd.replace(/^\/+|\/+$/g, '').replace(/\//g, '-') || 'session';
+  // 窗口名可以指定（对讲机的「新增 channel」要在一个已有工作区里再开一个，默认那个
+  // 名字是目录派生的，第二个就会撞名）。**必须白名单**：它会被拼进 execSync 的命令行，
+  // 放任引号/$( ) 进来就是命令注入。不合法就当没给，退回目录派生。
+  const clean = typeof wantName === 'string' ? wantName.trim() : '';
+  const name = /^[A-Za-z0-9._一-龥-]{1,40}$/.test(clean)
+    ? clean
+    : cwd.replace(/^\/+|\/+$/g, '').replace(/\//g, '-') || 'session';
 
   // 收集代理变量（宿主机环境 + CLAUDE_PROXY 覆盖）
   const { proxyVars, proxyPrefix } = buildLaunchEnv();

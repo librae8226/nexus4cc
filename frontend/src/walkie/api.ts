@@ -77,6 +77,8 @@ export interface StreamState {
   /** 现在有几件活在跑 */
   running: number
   at: number
+  /** 家目录的绝对路径 —— 消息里的 `~/x` 要靠它展开才能打开 */
+  home?: string
 }
 
 export interface ReplyState {
@@ -167,17 +169,37 @@ export const getChannels = (token: string) => req<ChannelList>('/api/walkie/chan
 export const getStream = (token: string, limit?: number) =>
   req<StreamState>(`/api/walkie/stream${limit ? `?limit=${limit}` : ''}`, token)
 
+/**
+ * 解析消息里的文件路径。AI 写的路径没有统一基准（绝对 / `~/x` / 相对当前目录 /
+ * 相对**上层**目录），前端只有一个 cwd，硬拼会拼出错的双份路径。服务端把几种可能
+ * 都试一遍，谁真的存在就是谁。
+ */
+export const resolvePath = (token: string, cwd: string, path: string) =>
+  req<{ path: string; missing?: boolean }>(
+    `/api/walkie/resolve?cwd=${encodeURIComponent(cwd || '')}&path=${encodeURIComponent(path)}`, token)
+
 export interface WalkieConfig { id: string; label: string }
 
 /** 可用的 claude profile（新建工作区时用） */
 export const getConfigs = (token: string) => req<WalkieConfig[]>('/api/configs', token)
 
-/** 新建一个工作区（= 在某个目录下开一个跑着 claude 的 tmux 窗口）。
- *  走的是经典界面那套 `POST /api/sessions`，所以 tmux server 的归属守卫是同一道。 */
-export const createWorkspace = (token: string, path: string, shellType: 'claude' | 'bash', profile?: string) =>
+/**
+ * 在某个目录下开一个跑着 claude 的 tmux 窗口。走的是经典界面那套 `POST /api/sessions`，
+ * 所以 tmux server 的归属守卫是同一道。
+ *
+ * `session` 给了就是在那个**已有工作区**里再开一个（= 新增 channel），
+ * `name` 是窗口名（不给就按目录派生）。
+ */
+export const createWorkspace = (
+  token: string, path: string, shellType: 'claude' | 'bash', profile?: string,
+  opts?: { session?: string; name?: string },
+) =>
   req<{ name: string; cwd: string }>('/api/sessions', token, {
     method: 'POST',
-    body: JSON.stringify({ rel_path: path, shell_type: shellType, profile }),
+    body: JSON.stringify({
+      rel_path: path, shell_type: shellType, profile,
+      session: opts?.session, name: opts?.name,
+    }),
   })
 
 /** 附件：把文件交出去，拿回它的绝对路径（那句话里会带上） */

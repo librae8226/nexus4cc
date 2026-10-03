@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react'
 import type { WorkspaceBrowserHandle } from '../WorkspaceBrowser'
 import {
-  getStream, getReply, refineText, summarizeText, sendPrompt, uploadAttachment, createWorkspace,
+  getStream, getReply, refineText, summarizeText, sendPrompt, uploadAttachment, createWorkspace, resolvePath,
   type StreamEvent, type ReplyState, type WalkieProject, type WalkieStep, type WalkieNow,
 } from './api'
 import {
@@ -24,7 +24,7 @@ import {
   setMuted as setMutedFeedback, whoosh,
 } from './feedback'
 import { speak, stopSpeaking } from './tts'
-import Markdown from './Markdown'
+import Markdown, { Preview } from './Markdown'
 import './walkie.css'
 
 const WorkspaceBrowser = lazy(() => import('../WorkspaceBrowser'))
@@ -37,6 +37,8 @@ const WAIT_LIMIT_MS = 10 * 60_000
 const REFINE_WAIT_MS = 3000
 /** 超过这么多字就折叠。手机上这个长度约 20 行，再多就成了一堵墙。 */
 const FOLD_AT = 700
+/** 超过这么多字就折起来 —— 约三行。这一屏要"扫"，不是"读"。 */
+const PREVIEW_AT = 140
 /** 一次塞进来这么多字符 = 语音输入法整句提交（打字不会这样），自动精炼 */
 const BURST_CHARS = 6
 
@@ -149,7 +151,7 @@ interface Round {
   err: string
 }
 
-export default function WalkieApp({ token, onExit }: { token: string; onExit?: () => void }) {
+export default function WalkieApp({ token }: { token: string }) {
   const [projects, setProjects] = useState<WalkieProject[]>([])
   const [events, setEvents] = useState<StreamEvent[]>([])
   const [runningCount, setRunningCount] = useState(0)
@@ -185,6 +187,15 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   const [since] = useState(SEEN_AT_BOOT)
   const [absentRead, setAbsentRead] = useState(false)
   const [digest, setDigest] = useState('')
+  /** 家目录绝对路径（后端给）—— 展开 `~/x` 要用 */
+  const homeRef = useRef('')
+  /** 宽屏（折叠屏）：文件浏览器要像经典版那样左右并排，而不是全屏盖住 */
+  const [wide, setWide] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 700)
+  /** 宽屏下左侧文件树要不要展开 */
+  const [tree, setTree] = useState(true)
+  /** 新增 channel 的表单（选人面板右栏） */
+  const [addingChan, setAddingChan] = useState(false)
+  const [newChan, setNewChan] = useState('')
 
   // 滚动：贴在底部就跟着走，翻上去看历史时不打扰
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -229,6 +240,7 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
       setRunningCount(s.running)
       setTmuxOk(true)
       setLoadErr('')
+      if (s.home) homeRef.current = s.home
       // 新建成的工作区一出现就选中它
       if (justCreated) {
         const hit = s.projects.flatMap((p) => p.channels.map((c) => ({ p, c }))).find((x) => x.c.name === justCreated)
@@ -259,6 +271,11 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   }, [pollStream, busy])
 
   useEffect(() => { void attachAudioUnlock() }, [])
+  useEffect(() => {
+    const onResize = () => setWide(window.innerWidth >= 700)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); void stopSpeaking() }, [])
 
   // 落盘：目标 + 草稿。锁屏 / 退出 / WebView 被回收之后回来，字还在。
@@ -300,10 +317,25 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     const root = (cwd || '').replace(/\/+$/, '')
     if (!root) { setErr('这一格还没有工作目录'); return }
     if (!file) { setBrowser({ root }); return }
-    const abs = file.startsWith('/') ? file : `${root}/${file.replace(/^\.\//, '')}`
+    // AI 写的路径经常是 `~/work/nexus/x.md`。不展开 `~` 就会拼成 `<cwd>/~/…`，
+    // 文件浏览器当然打不开 —— 这就是"点了没反应"的那个 bug。
+    const f = file.startsWith('~/') && homeRef.current ? `${homeRef.current}/${file.slice(2)}` : file
+    const abs = f.startsWith('/') ? f : `${root}/${f.replace(/^\.\//, '')}`
     const dir = abs.slice(0, abs.lastIndexOf('/')) || root
     setBrowser({ root: dir, file: abs })
   }, [])
+
+  /** 点消息里的文件路径。先让服务端把路径解析成真的存在的那一个，再开浏览器 ——
+      直接按 cwd 拼会拼出 `<cwd>/debian-l-colorful/postgres.md` 这种双份路径然后 ENOENT。 */
+  const openFile = useCallback(async (cwd: string, p: string) => {
+    try {
+      const r = await resolvePath(token, cwd || '', p)
+      if (r.missing) setErr(`这条消息里的路径没找到：${p}`)
+      openBrowser(cwd, r.path)
+    } catch {
+      openBrowser(cwd, p)      // 解析接口不通也得能点开（退回老行为）
+    }
+  }, [token, openBrowser])
 
   // ── 精炼 ────────────────────────────────────────────────
   const refineNow = useCallback((raw: string) => {
@@ -588,6 +620,21 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     flashTimer.current = window.setTimeout(() => setFlash(''), 900)
   }, [])
 
+  /** 在一个**已有工作区**里再开一个 channel（tmux 窗口），名字由你起 */
+  const createChan = useCallback(async () => {
+    const p = projects.find((x) => x.name === pickWs)
+    const cwd = p?.channels[0]?.cwd
+    const name = newChan.trim()
+    if (!p || !cwd || !name) return
+    try {
+      await createWorkspace(token, cwd, 'claude', undefined, { session: p.name, name })
+      setAddingChan(false); setNewChan(''); setPicker(false); setJustCreated(name)
+      setTimeout(() => { void pollStream() }, 1200)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }, [token, projects, pickWs, newChan, pollStream])
+
   const onCreated = useCallback(async (path: string, shellType: 'claude' | 'bash', profile?: string) => {
     setAdding(false)
     try {
@@ -700,7 +747,6 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
           <button type="button" className="walkie-icon-btn" onClick={toggleMute} title={muted ? '开启声音' : '静音'}>
             <IconSound off={muted} />
           </button>
-          {onExit && <button type="button" className="walkie-chip" onClick={onExit}>经典</button>}
         </div>
       </div>
 
@@ -730,45 +776,38 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
 
       <div className="walkie-stage" ref={scrollRef} onScroll={onScroll}>
         <div className="walkie-stage-inner">
-          {items.map((e) => e.kind === 'you' ? (
-            <div key={e.id}
-              className={`walkie-you${e.ch === target ? ' is-target' : ''}${flash === e.id ? ' is-flash' : ''}`}
-              onClick={() => replyTo(e.ch, e.id)}>
-              <Markdown text={e.text} onOpen={(p) => openBrowser(e.cwd, p)} />
-              <span className="walkie-at">
-                {e.running && <span className="walkie-dot-live" />}
-                {stamp(e.at)} · {e.name}
-              </span>
-            </div>
-          ) : (
-            <div key={e.id}
-              className={`walkie-it${e.running ? ' is-running' : ''}${e.ch === target ? ' is-target' : ''}${flash === e.id ? ' is-flash' : ''}`}
-              onClick={() => replyTo(e.ch, e.id)}>
-              <Markdown text={openIds.has(e.id) ? e.text : fold(e.text)} onOpen={(p) => openBrowser(e.cwd, p)} />
-              {e.text.length > FOLD_AT && (
-                <button type="button" className="walkie-more"
-                  onClick={(ev) => {
-                    ev.stopPropagation()      // 展开是展开，别顺手把收件人也换了
-                    setOpenIds((s) => { const n = new Set(s); if (n.has(e.id)) n.delete(e.id); else n.add(e.id); return n })
-                  }}>
-                  {openIds.has(e.id) ? '收起来' : '展开全文'}
+          {items.map((e) => {
+            const mine = e.kind === 'you'
+            const open = openIds.has(e.id)
+            // 长到需要折的才折 —— 三行以内没有"扫不动"的问题，直接正常渲染。
+            const long = e.text.length > PREVIEW_AT || e.text.includes('\n\n')
+            const toggle = () => {
+              if (!long) return
+              setOpenIds((s) => { const n = new Set(s); if (n.has(e.id)) n.delete(e.id); else n.add(e.id); return n })
+            }
+            return (
+              <div key={e.id}
+                className={`walkie-msg ${mine ? 'mine' : 'theirs'}${e.ch === target ? ' is-target' : ''}${flash === e.id ? ' is-flash' : ''}`}>
+                {/* 署名一行。**它整行都是命中区**（全宽、约 32px 高）——
+                    它是"这是谁"，所以点它 = 回复给这个人。正文是另一个命中区，管展开。
+                    两条需求抢同一个手势，就按"说的是什么"分给谁。 */}
+                <button type="button" className="walkie-who" onClick={() => replyTo(e.ch, e.id)}
+                  title={mine ? `再跟 ${e.name} 说一句` : `回复 ${e.name}`}>
+                  {!mine && <span className="walkie-who-dot" />}
+                  <b>{mine ? '你' : e.name}</b>
+                  <span className="walkie-who-where">{mine ? `${e.path} · ${e.name}` : e.path}</span>
+                  <span className="walkie-who-time">{stamp(e.at)}</span>
+                  {e.running && <span className="walkie-who-live">在跑</span>}
                 </button>
-              )}
-              <span className="walkie-at">
-                {speaking === e.id && <span className="walkie-speaking">🔊 </span>}
-                {stamp(e.at)} · {e.name}
-              </span>
-              {openIds.has(e.id) && (
-                <div className="walkie-inline" onClick={(ev) => ev.stopPropagation()}>
-                  <button type="button" className="walkie-mini"
-                    onClick={() => (speaking === e.id ? (void stopSpeaking(), setSpeaking(null)) : void play(e.text, 1.06, e.id))}>
-                    {speaking === e.id ? '⏹ 停止' : '▶ 读一遍'}
-                  </button>
-                  <button type="button" className="walkie-mini" onClick={() => openBrowser(e.cwd)}>看文件</button>
+                <div className="walkie-body" onClick={toggle}>
+                  {open || !long
+                    ? <Markdown text={e.text} onOpen={(p) => void openFile(e.cwd, p)} />
+                    : <Preview text={e.text} onOpen={(p) => void openFile(e.cwd, p)} />}
+                  {speaking === e.id && <span className="walkie-at walkie-speaking">🔊 正在念</span>}
                 </div>
-              )}
-            </div>
-          ))}
+              </div>
+            )
+          })}
 
           {round && (
             <div className={`walkie-round${round.state === 'waiting' ? ' is-live' : ''}`}>
@@ -782,7 +821,8 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
                 {round.state === 'waiting' && <span className="walkie-at">{elapsed}s</span>}
               </div>
 
-              <Markdown text={round.sent} className="walkie-said" />
+              <Markdown text={round.sent} className="walkie-said"
+                onOpen={(p) => void openFile(findChannel(round.key)?.channel.cwd || '', p)} />
 
               {round.state === 'waiting' && (round.steps.length ? story(round.steps.slice(-18))
                 : <p className="walkie-waiting-line">已经投递，等它开口…</p>)}
@@ -797,7 +837,7 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
 
               {round.state === 'done' && round.reply?.text && (
                 <Markdown text={fold(round.reply.text)}
-                  onOpen={(f) => openBrowser(findChannel(round.key)?.channel.cwd || '', f)} />
+                  onOpen={(f) => void openFile(findChannel(round.key)?.channel.cwd || '', f)} />
               )}
               {round.state === 'done' && !round.reply?.text && <p className="walkie-dim">（这一轮没有说话，可能只动了文件）</p>}
               {round.state === 'done' && (
@@ -904,6 +944,15 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
                     </button>
                   )
                 })}
+                {addingChan ? (
+                  <div className="walkie-newchan">
+                    <input autoFocus value={newChan} onChange={(e) => setNewChan(e.target.value)}
+                      placeholder="叫它什么" onKeyDown={(e) => { if (e.key === 'Enter') void createChan() }} />
+                    <button type="button" className="walkie-mini" disabled={!newChan.trim()} onClick={() => void createChan()}>建立</button>
+                  </div>
+                ) : (
+                  <button type="button" className="walkie-addch" onClick={() => setAddingChan(true)}>＋ 新增 channel</button>
+                )}
               </div>
             </div>
             <button type="button" className="walkie-addws" onClick={() => { setAdding(true); setPicker(false) }}>
@@ -919,10 +968,23 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
         </Suspense>
       )}
 
+      {/* 文件浏览器：宽屏（折叠屏）像经典版那样**左右并排** —— 左边文件树快速跳，
+          右边看内容；树可以收掉，收起后内容占满。窄屏还是全屏一张。
+          复用的是经典界面那套 embedded / overlay / hideSidebar，不是另写一个。 */}
       {browser && (
         <Suspense fallback={null}>
-          <WorkspaceBrowser token={token} title="工作目录" initialPath={browser.root}
-            onClose={() => setBrowser(null)} ref={browserRef} />
+          {wide ? (
+            <div className="walkie-browse-wide">
+              <WorkspaceBrowser embedded={tree} overlay={!tree} hideSidebar={!tree}
+                token={token} title="工作目录" initialPath={browser.root}
+                onClose={() => setBrowser(null)} ref={browserRef} />
+              <button type="button" className="walkie-tree-toggle" onClick={() => setTree((v) => !v)}
+                title={tree ? '收起文件树' : '展开文件树'}>{tree ? '◀' : '▶'}</button>
+            </div>
+          ) : (
+            <WorkspaceBrowser token={token} title="工作目录" initialPath={browser.root}
+              onClose={() => setBrowser(null)} ref={browserRef} />
+          )}
         </Suspense>
       )}
     </div>
