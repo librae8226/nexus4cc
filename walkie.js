@@ -41,16 +41,33 @@ const norm = (s) => String(s ?? '').replace(/\s+/g, '').trim()
 
 /** 读文件尾部若干字节（jsonl 认领用；不整读 3MB 的文件） */
 function readTail(file, maxBytes) {
+  return readTailAt(file, maxBytes).text
+}
+
+/**
+ * 同 readTail，但把**正文第一行的绝对偏移**一并带回来。
+ *
+ * 为什么要这个偏移：认领靠尾部扫描（256KB），而增量读只从"文件末尾往回 4KB"起步。
+ * 一旦我们发的那句话离文件末尾超过 4KB —— 很常见，一条 assistant 记录动辄几千字节 ——
+ * 增量读就永远读不到它，`sawSent` 一直是 false，60 秒后报「这条消息没有出现在会话记录里」，
+ * 而这句明明就在文件里、AI 甚至已经答完了。（真机上表现为：AI 答了，界面上永远没有结果。）
+ */
+function readTailAt(file, maxBytes) {
   const size = statSync(file).size
   const start = Math.max(0, size - maxBytes)
   const len = size - start
-  if (len <= 0) return ''
+  if (len <= 0) return { text: '', start: 0 }
   const buf = Buffer.allocUnsafe(len)
   const fd = openSync(file, 'r')
   try { readSync(fd, buf, 0, len, start) } finally { closeSync(fd) }
   const text = buf.toString('utf8')
-  // 起点可能落在某行中间，丢掉第一个不完整的片段
-  return start > 0 ? text.slice(text.indexOf('\n') + 1) : text
+  // 起点可能落在某行中间，丢掉第一个不完整的片段。
+  // 注意：**砍掉的字节数要用 byteLength 算**，不能拿 JS 字符串下标直接加 ——
+  // 中文一个字 3 字节、下标只加 1，offset 会越错越远（这个偏移是要拿去当文件位置的）。
+  if (start === 0) return { text, start: 0 }
+  const nl = text.indexOf('\n')
+  if (nl < 0) return { text: '', start: size }      // 这一片里没有完整行
+  return { text: text.slice(nl + 1), start: start + Buffer.byteLength(text.slice(0, nl + 1), 'utf8') }
 }
 
 /** 读文件的 [offset, EOF) 段，返回 { lines, offset }。用于增量解析 transcript。 */
@@ -656,14 +673,19 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     // 第一轮：文本对得上
     for (const f of grew.length ? grew : files) {
       const full = join(t.cwdDir, f)
-      let tail
-      try { tail = readTail(full, TAIL_SCAN_BYTES) } catch { continue }
-      for (const line of tail.split('\n')) {
+      let seg
+      try { seg = readTailAt(full, TAIL_SCAN_BYTES) } catch { continue }
+      let at = seg.start
+      for (const line of seg.text.split('\n')) {
+        const lineAt = at
+        at += Buffer.byteLength(line, 'utf8') + 1     // 无论怎么 continue 都要前进
         let e
         try { e = JSON.parse(line) } catch { continue }
         if (e.type !== 'user' || e.isSidechain) continue
         const c = e.message?.content
-        if (typeof c === 'string' && sameText(c, t.sentText)) { claim(t, full, f, sizeOf(f), 'text'); return }
+        // 用**这句话自己的偏移**当基线，别用文件当前大小：那句话后面可能已经跟了
+        // 几万字节的回复，从末尾往回 4KB 起步就把它跳过去了（见 readTailAt 的说明）。
+        if (typeof c === 'string' && sameText(c, t.sentText)) { claim(t, full, f, lineAt, 'text'); return }
       }
     }
 
@@ -686,8 +708,15 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     t.file = full
     t.sessionId = f.replace(/\.jsonl$/, '')
     t.baseOffset = Math.max(0, sizeAtSend)
-    t.fileOffset = Math.max(0, t.baseOffset - 4096)   // 留一点重叠，别切在半行上
+    // 文本命中时 sizeAtSend 就是**那句话自己的字节偏移**，正好落在行首 ——
+    // 从这里读，前后都不会串。别的路径只有"发送前的文件末尾"，才需要往回退 4KB
+    // 防切在半行上（代价是可能把上一轮的一条人类发言也读进来）。
+    t.fileOffset = Math.max(0, how === 'text' ? sizeAtSend : t.baseOffset - 4096)
     t.via = how === 'text' ? 'text' : null
+    // 文本对上了 = 我们那句话**已经在文件里**，当场就把 sawSent 立起来。
+    // 不依赖后面那次增量读能不能读到它 —— "认领成功"和"确认送达"是同一件事，
+    // 分成两步做只会在两步之间的缝里丢掉整轮回复。
+    if (how === 'text') { t.sawSent = true; t.sentAt = sizeAtSend }
     // 认领成功就落盘：就算这一轮没答完/被中断，重启后也知道该回看哪个文件
     sessions[t.key] = { sessionId: t.sessionId, file: t.file, cwd: t.cwd, updatedAt: new Date().toISOString() }
     saveSessions()
@@ -724,4 +753,4 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
   return router
 }
 
-export const _internal = { readFrom, readTail, norm, loadLlmProfile }
+export const _internal = { readFrom, readTail, readTailAt, norm, loadLlmProfile }
