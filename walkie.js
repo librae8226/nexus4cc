@@ -19,7 +19,7 @@
 
 import express from 'express'
 import { execFile, execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, statSync, readdirSync, openSync, readSync, closeSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, statSync, readdirSync, openSync, readSync, closeSync, existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -30,6 +30,14 @@ const KEEP_DONE_MS = 10 * 60_000     // 完成后结果保留多久（供前端�
 const TAIL_SCAN_BYTES = 256 * 1024   // 认领文件时只扫尾部这么多字节
 const MATCH_PREFIX = 24              // 文本比对取前 N 个字符（去掉空白后）
 const TMUX_BUF = 'nexus-walkie'      // 专用 paste buffer，避免和用户自己的 buffer 撞
+
+// 流（跨会话时间线）的读取成本：每个 claude 频道读尾部这么多字节、只取最近几个回合。
+// 它是被轮询的，所以这两个数直接决定"这一屏"的常驻开销。
+const STREAM_TAIL_BYTES = 256 * 1024
+const STREAM_TURNS_PER_CHANNEL = 4
+const STREAM_MAX_EVENTS = 40
+// "正在跑"的新鲜度门槛：transcript 十分钟内没动过就不算在跑（见 /stream 里的说明）
+const STREAM_RUNNING_FRESH_MS = 10 * 60_000
 
 // 本地语音转写服务（~/work/intake，PM2 `intake`）。只连本机，不对外。
 const ASR_BASE = process.env.WALKIE_ASR_URL || 'http://127.0.0.1:59011'
@@ -168,6 +176,88 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
   const transcriptDir = (cwd) =>
     join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects', cwd.replace(/\//g, '-'))
 
+  /** 这个频道的 transcript 文件在哪。认过的优先；没认过的退化成"这个目录下最新的那个"。 */
+  function transcriptFor(key, cwd) {
+    const remembered = sessions[key]
+    if (remembered?.file) {
+      try { statSync(remembered.file); return remembered.file } catch { /* 被清理了，下面重找 */ }
+    }
+    if (!cwd) return null
+    let best = null, bestT = 0
+    try {
+      for (const f of readdirSync(transcriptDir(cwd))) {
+        if (!f.endsWith('.jsonl')) continue
+        const full = join(transcriptDir(cwd), f)
+        const m = statSync(full).mtimeMs
+        if (m > bestT) { bestT = m; best = full }
+      }
+    } catch { return null }
+    return best
+  }
+
+  /**
+   * 从 transcript 尾部切出"回合"：一条人类发言 + 它后面**最后一段** assistant 正文。
+   *
+   * 只留最后一段，理由和 lastWords() 一样：一轮里中间那些 text 是**过程叙述**，
+   * 拼起来在屏上是一堵前后不搭的墙。
+   *
+   * done 靠 Claude Code 自己写的 turn_duration 判 —— 它没出现，就说明这一轮还在跑，
+   * 于是"机器现在在干哪件事"不需要任何额外状态就能算出来。
+   */
+  function readTurns(file, maxTurns) {
+    const seg = readTailAt(file, STREAM_TAIL_BYTES)
+    const turns = []
+    let cur = null
+    // 文件里**内容自己的时钟**。判断"还在不在跑"要用它，不能用文件的 mtime ——
+    // 实测 mtime 会在没有新内容时被刷新（一个 6 小时前就停了的会话，mtime 是"现在"），
+    // 拿 mtime 当判据就会把死掉的会话报成"正在跑"。
+    let lastAt = 0
+    // 兜底用：这个尾巴里一条人类发言都没有时（一个回合大到把 256KB 都占满了），
+    // 至少把它最后说的那句话摆出来 —— 一块安静的黑比一句"在干什么"更没用。
+    let lastText = ''
+    for (const line of seg.text.split('\n')) {
+      if (!line) continue
+      let e
+      try { e = JSON.parse(line) } catch { continue }
+      if (e.isSidechain) continue
+      const ts = Date.parse(e.timestamp) || 0
+      if (ts > lastAt) lastAt = ts
+      if (e.type === 'user') {
+        const c = e.message?.content
+        // tool_result 之类也走 user 记录，只认人类自己说的那句话
+        if (typeof c !== 'string') continue
+        // isMeta 是 Claude Code 自己塞进去的元信息 —— 最典型的是斜杠命令的输出
+        // （`/context` 那一整张表就是这么进来的）。它不是你"说"的话，别放进流里。
+        if (e.isMeta) continue
+        if (e.origin && e.origin.kind !== 'human') continue
+        if (cur) turns.push(cur)
+        cur = { you: humanText(c), at: ts, reply: '', repliedAt: 0, done: false }
+        continue
+      }
+      if (e.type === 'assistant' && Array.isArray(e.message?.content)) {
+        for (const b of e.message.content) {
+          if (b.type === 'text' && b.text && b.text.trim()) {
+            lastText = b.text.trim()
+            if (cur) { cur.reply = b.text.trim(); cur.repliedAt = ts }
+          }
+        }
+      } else if (cur && e.type === 'system' && e.subtype === 'turn_duration') {
+        cur.done = true
+      }
+    }
+    if (cur) turns.push(cur)
+    return { turns: turns.slice(-maxTurns), lastAt, lastText }
+  }
+
+  /**
+   * 人类那条记录里夹着系统注入的东西。最典型的是贴图：
+   * Claude Code 把图片换成一句 `[Image: original 1082x2211, displayed at …]`。
+   * 原样显示在流里就是一串坐标，读的人以为坏了 —— 换成"［图片］"，那是人话。
+   */
+  function humanText(s) {
+    return String(s).replace(/\[Image:[^\]]*\]/gi, '［图片］').trim()
+  }
+
   // ── 1. 频道清单 ──────────────────────────────────────────────────────
   // 顺便探一下本机转写服务在不在。用户按下说话才发现转写服务没起，是最没必要的
   // 一次挫败 —— 界面上一开始就标出来，就没有这一类"按了没反应"。
@@ -180,14 +270,14 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     } catch { return false } finally { clearTimeout(timer) }
   }
 
-  router.get('/channels', authMiddleware, async (req, res) => {
+  async function listChannels() {
     let raw = ''
     try {
       raw = execFileSync('tmux', ['list-windows', '-a', '-F',
         '#{session_name}\t#{window_index}\t#{window_name}\t#{pane_current_path}\t#{window_active}\t#{pane_pid}'],
         { encoding: 'utf8', stdio: 'pipe' })
     } catch {
-      return res.json({ projects: [], llm: null, tmux: false })
+      return { projects: [], tmux: false }
     }
 
     const claudePanes = detectClaudePanes()
@@ -198,9 +288,8 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
       if (!proj) continue
       const panePid = Number(cols[5]) || 0
       if (!byProject.has(proj)) byProject.set(proj, [])
-      // 这一格现在忙不忙。旋钮同时是一块状态牌 —— 换过去之前就知道对方在不在干活。
-      // 判据是"我们记得的那个 transcript 文件最近 20 秒动过没有"：不额外抓 pane，
-      // 代价只有一次 stat。没聊过的频道就没有这个信息，如实报 ready。
+      // 这一格现在忙不忙。判据是"我们记得的那个 transcript 文件最近 20 秒动过没有"：
+      // 不额外抓 pane，代价只有一次 stat。没聊过的频道就没有这个信息，如实报 ready。
       let status = 'ready'
       const remembered = sessions[`${proj}:${Number(idx)}`]
       if (!claudePanes.has(panePid)) status = 'offline'
@@ -231,14 +320,89 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
       // 主 session 钉在最前 —— 它是最常用的那一个，每次都要转过去很烦
       .sort((a, b) => (a.name === tmuxSession ? -1 : b.name === tmuxSession ? 1 : a.name.localeCompare(b.name)))
 
+    return { projects, tmux: true }
+  }
+
+  router.get('/channels', authMiddleware, async (req, res) => {
+    const { projects, tmux } = await listChannels()
     const llm = loadLlmProfile(dataDir)
     const asr = await asrAlive()
     res.json({
       projects,
       llm: llm ? { label: llm.label, model: llm.model } : null,
       asr,
-      tmux: true,
+      tmux,
     })
+  })
+
+  // ── 1.5 流：**跨会话**的时间线 ────────────────────────────────────────
+  // 这一条是"它不是 chat app"的全部依据：另一端是这台机器上**所有**在跑的
+  // claude —— 包括你白天在终端里开的那些窗口，不只是从手机上发出去的那条。
+  // 数据来自各频道的 transcript（跟追踪回复用的是同一份事实来源）。
+  router.get('/stream', authMiddleware, async (req, res) => {
+    const { projects, tmux } = await listChannels()
+    if (!tmux) return res.json({ projects: [], events: [], running: 0, at: Date.now() })
+
+    const used = new Set()
+    const events = []
+    let running = 0
+
+    for (const p of projects) {
+      for (const c of p.channels) {
+        if (c.kind !== 'claude') continue
+        const key = keyOf(p.name, c.index)
+        const file = transcriptFor(key, c.cwd)
+        // 同一个 cwd 下可能并行跑着好几个 claude（vault 就有 5 个），
+        // 而"最新那个 jsonl"这种按 mtime 的猜测会把同一份记录算给好几个频道。
+        // 认过的频道优先（sessions 里有 file），剩下的一个文件只认一次。
+        if (!file || used.has(file)) continue
+        used.add(file)
+
+        let turns = []
+        let lastAt = 0
+        let lastText = ''
+        try { ({ turns, lastAt, lastText } = readTurns(file, STREAM_TURNS_PER_CHANNEL)) } catch { continue }
+        const last = turns[turns.length - 1]
+        // 没有 turn_duration 只是"这一轮没写结束标记"，**不等于现在还在跑** ——
+        // 被打断的回合、早退的会话都长这样。所以再加一道新鲜度门槛，
+        // 而且判据是**文件里最新一条记录的时间**，不是文件的 mtime（见 readTurns 里的说明）。
+        // 代价：跑一个十分钟以上的长命令会被误判成停了 —— 那种情况你本来就该去经典界面看。
+        const isRunning = !!last && !last.done && Date.now() - lastAt < STREAM_RUNNING_FRESH_MS
+        if (isRunning) { running++; c.status = 'working' } else if (c.status === 'ready') c.status = 'idle'
+
+        // 一个回合大到把尾巴占满时，这里一条回合都切不出来。至少把它最后说的那句
+        // 摆进流里 —— 那一格是"安静的"，不是"不存在的"。
+        if (!turns.length && lastText) {
+          events.push({
+            ch: key, project: p.name, window: c.index, name: c.name, cwd: c.cwd, path: p.path,
+            id: `${key}:${lastAt}:it`, kind: 'it', text: lastText, at: lastAt,
+          })
+          continue
+        }
+
+        for (let i = 0; i < turns.length; i++) {
+          const t = turns[i]
+          const meta = {
+            ch: key, project: p.name, window: c.index,
+            name: c.name, cwd: c.cwd, path: p.path,
+          }
+          if (t.reply) {
+            events.push({ ...meta, id: `${key}:${t.repliedAt}:it`, kind: 'it', text: t.reply, at: t.repliedAt })
+          }
+          if (t.you) {
+            events.push({
+              ...meta, id: `${key}:${t.at}:you`, kind: 'you', text: t.you, at: t.at,
+              // 这一轮还没答完 = 机器现在正在干这件事。partial 是它到目前为止的最后一句
+              running: isRunning && i === turns.length - 1,
+              partial: isRunning && i === turns.length - 1 ? t.reply : '',
+            })
+          }
+        }
+      }
+    }
+
+    events.sort((a, b) => b.at - a.at)
+    res.json({ projects, events: events.slice(0, STREAM_MAX_EVENTS), running, at: Date.now() })
   })
 
   // ── 2. 发送：直接落到目标频道的输入框并回车 ───────────────────────────
@@ -306,6 +470,33 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
 
     res.json({ ok: true, key: keyOf(project, Number(win)) })
   })
+
+  // ── 2.5 附件：收下一个文件，回一个**绝对路径** ────────────────────────
+  // 附件不是"从我的文件里挑一个给 AI"（那是 chat app 的语法，前提是你先有文件），
+  // 而是"把眼前这张名片/这页 BP/这块白板交出去"。落地之后我们把路径写进那句话里 ——
+  // Claude 读一个路径就够了，不需要我们发明什么上传协议。
+  //
+  // 落在 ~/nexus-inbox/<日期>/ 而不是目标 cwd：往你的仓库里丢文件会弄脏 git status，
+  // 而这是**你的**机器，路径写绝对的就是。
+  router.post('/upload', authMiddleware, express.raw({ type: () => true, limit: '30mb' }),
+    (req, res) => {
+      const buf = req.body
+      if (!Buffer.isBuffer(buf) || buf.length === 0) return res.status(400).json({ error: 'empty file' })
+      const name = String(req.query.name || 'file')
+        .replace(/[^\w.一-龥-]+/g, '_').replace(/^_+|_+$/g, '').slice(-48) || 'file'
+      const now = new Date()
+      const pad = (n) => String(n).padStart(2, '0')
+      const day = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
+      const dir = join(homedir(), 'nexus-inbox', day)
+      try { mkdirSync(dir, { recursive: true }) } catch { /* 已存在 */ }
+      // 秒级时间戳前缀：同一天丢进来两张同名的图不会互相覆盖，翻回去也知道先后
+      const file = join(dir, `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}-${name}`)
+      try { writeFileSync(file, buf) } catch (e) {
+        return res.status(500).json({ error: `save failed: ${e.message}` })
+      }
+      audit?.('walkie-upload', req, { bytes: buf.length, name })
+      res.json({ ok: true, path: file, name, bytes: buf.length })
+    })
 
   // ── 3. 精炼 ──────────────────────────────────────────────────────────
   router.post('/refine', authMiddleware, async (req, res) => {

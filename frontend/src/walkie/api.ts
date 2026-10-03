@@ -43,9 +43,40 @@ export interface WalkieNow {
 export interface ChannelList {
   projects: WalkieProject[]
   llm: { label: string; model: string } | null
-  /** 本机转写服务（PM2 `intake`）在不在。不在就先告诉用户，别等他按下去才发现 */
+  /** 本机转写服务（PM2 `intake`）在不在 */
   asr: boolean
   tmux: boolean
+}
+
+/**
+ * 流里的一条。**这一屏的全部差异就在这个类型里**：它的另一端是这台机器上
+ * 所有在跑的 claude —— 包括你白天在终端里开的那些窗口，不只是从手机上发出去的那条。
+ */
+export interface StreamEvent {
+  id: string
+  /** "project:window" */
+  ch: string
+  project: string
+  window: number
+  name: string
+  cwd: string
+  /** 家目录已缩成 ~ */
+  path: string
+  kind: 'you' | 'it'
+  text: string
+  at: number
+  /** 这一轮还没答完 = 机器现在正在干这件事（只有最后一回合会是 true） */
+  running?: boolean
+  /** running 时它到目前为止说的最后一句 */
+  partial?: string
+}
+
+export interface StreamState {
+  projects: WalkieProject[]
+  events: StreamEvent[]
+  /** 现在有几件活在跑 */
+  running: number
+  at: number
 }
 
 export interface ReplyState {
@@ -94,6 +125,21 @@ async function req<T>(path: string, token: string, init?: RequestInit): Promise<
 }
 
 export const getChannels = (token: string) => req<ChannelList>('/api/walkie/channels', token)
+
+/** 跨会话的一条时间线。这是这一屏的主屏。 */
+export const getStream = (token: string) => req<StreamState>('/api/walkie/stream', token)
+
+/** 附件：把文件交出去，拿回它的绝对路径（那句话里会带上） */
+export async function uploadAttachment(token: string, file: File): Promise<{ path: string; name: string }> {
+  const res = await fetch(`/api/walkie/upload?name=${encodeURIComponent(file.name || 'file')}`, {
+    method: 'POST',
+    headers: { 'Content-Type': file.type || 'application/octet-stream', Authorization: `Bearer ${token}` },
+    body: file,
+  })
+  const data = await res.json().catch(() => null)
+  if (!res.ok) throw new Error((data && (data.hint || data.error)) || `HTTP ${res.status}`)
+  return data as { path: string; name: string }
+}
 
 export const sendPrompt = (token: string, project: string, window: number, text: string) =>
   req<{ ok: boolean; key: string }>('/api/walkie/send', token, {
