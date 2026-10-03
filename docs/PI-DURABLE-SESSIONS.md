@@ -42,7 +42,7 @@
 - **前端**：`NewWindowDialog` / `WorkspaceSelector` 的 pi 选项下加「持久会话」勾选框（不新增并列 radio）；勾选状态随创建请求传给后端，locale 加对应文案。
 - **会话列表解析**：`pi-durable ls` 输出 `serverId<TAB>sessionId` 两列；注意 pi 系命令在管道 stdin 下会挂起，pi-durable 包装器已处理（`</dev/null`）。
 - **窗口命名**：可选把 session id 短号写进窗口名，方便恢复与对账。
-- **手机端**：前端改动与 `851956f` 同路径（radio / locale / 类型透传），不涉及原生层。
+- **手机端**：前端改动与 `851956f` 同路径（勾选框 / locale / 类型透传），不涉及原生层；上线时可随 Android「实时加载」机制（2026-10-04 L16 拍板的改造，web 改动免重打包）下发，勾选框本身不需要为新 APK 而等打包。
 
 ## 4. 验收标准
 
