@@ -13,6 +13,7 @@ F-01 to F-12, F-15, F-18 complete.（F-13/14/16/17 已移除，F-19/F-20 提前�
 ---
 
 | **F-23 Android 客户端** 🚧 | Capacitor 壳 + 原生层（后台常驻/通知/语音/相机/SAF/分享/生物识别）。需求与技术方案见 `docs/ANDROID-APP.md`，里程碑 M0-M6。**M0 代码侧完成**（CORS 白名单 + 前端 base-URL 抽象 + Capacitor 工程 + Docker 工具链，debug APK 4.4MB 可构建），待真机裁决 `androidScheme` 与 `ws://` 混内容行为 |
+| **参谋长 agent** 💭 待拍板 | 2026-10-03 提出：project/channel 太多，切换本身成了瓶颈；要一个 agent 替我管 Agent 团队（单入口 → 路由 → 盯盘 → 只上报要拍板的事）。会改 `NORTH-STAR.md` 轴三，定方向前不动代码 |
 | Open-source polish | Git history rewrite, rate limits, etc. |
 | History mode redesign | In-place swap 方案（见 `docs/HISTORY_MODE_REDESIGN.md`） |
 | ANSI output in file viewer | 文件内容 ANSI 渲染 |
