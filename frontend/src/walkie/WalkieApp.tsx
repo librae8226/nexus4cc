@@ -17,7 +17,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } fro
 import type { WorkspaceBrowserHandle } from '../WorkspaceBrowser'
 import {
   getStream, getReply, refineText, summarizeText, sendPrompt, uploadAttachment, createWorkspace, resolvePath,
+  answerQuestion, getConfigs, getVersion,
   type StreamEvent, type ReplyState, type WalkieProject, type WalkieStep, type WalkieNow,
+  type WalkieConfig, type Ask,
 } from './api'
 import {
   attachAudioUnlock, hapticSnap, hapticTap, isMuted, land, primeFeedback, roger,
@@ -50,6 +52,8 @@ const NEAR_BOTTOM_PX = 60
 const LOAD_MORE_PX = 80
 
 const STORE_KEY = 'nexus_walkie_state'
+/** 新会话默认用哪个模型 profile（设置面板里选的） */
+const PROFILE_KEY = 'nexus_walkie_profile'
 /** 你"认领"过的频道 —— 只有它们答完了会出声，别的活不吵你 */
 const HEARD_KEY = 'nexus_walkie_heard'
 /** 你看到过的最新一条的 at。回来时用它算"你不在的时候" */
@@ -121,6 +125,19 @@ const IconExpand = () => (
     <path d="M9 4H4v5M15 20h5v-5M20 9V4h-5M4 15v5h5" />
   </svg>
 )
+const IconFolder = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.5h9A1.5 1.5 0 0 1 21 10v7.5A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z" />
+  </svg>
+)
+/** 齿轮。**不能画成"圆 + 放射状短线"** —— 那个形状在手机上读作"亮度/太阳"，
+    点开发现是设置就成了一次小意外。齿要有齿的样子。 */
+const IconGear = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+)
 const IconChevron = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M6 9l6 6 6-6" />
@@ -147,6 +164,8 @@ interface Round {
   reply: ReplyState | null
   steps: WalkieStep[]
   now: WalkieNow | null
+  /** 这一轮挂着的问题（它停下来等你选）—— 选项就画在卡片上 */
+  ask: Ask | null
   summary: string
   err: string
 }
@@ -196,6 +215,15 @@ export default function WalkieApp({ token }: { token: string }) {
   /** 新增 channel 的表单（选人面板右栏） */
   const [addingChan, setAddingChan] = useState(false)
   const [newChan, setNewChan] = useState('')
+
+  /** 设置面板。现在只有一件事（新会话用哪个模型），但它是个**容器** ——
+      以后的功能性设置都往这里放，不再往主屏上加按钮。 */
+  const [settings, setSettings] = useState(false)
+  const [profiles, setProfiles] = useState<WalkieConfig[] | null>(null)
+  const [dflt, setDflt] = useState(() => {
+    try { return localStorage.getItem(PROFILE_KEY) || '' } catch { return '' }
+  })
+  const [about, setAbout] = useState<{ current: string; clean: boolean } | null>(null)
 
   // 滚动：贴在底部就跟着走，翻上去看历史时不打扰
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -400,8 +428,9 @@ export default function WalkieApp({ token }: { token: string }) {
         setRound({ ...now, state: 'timeout', err: r.error || '没等到结果' })
         return
       }
-      setRound({ ...now, steps: r.steps || now.steps, now: r.now ?? null })
-      if (Date.now() - r0.startedAt > WAIT_LIMIT_MS) {
+      setRound({ ...now, steps: r.steps || now.steps, now: r.now ?? null, ask: r.ask ?? null })
+      // 它在等你回答 —— 这个"等"不该被十分钟的上限掐掉（那等于替你放弃）
+      if (!r.ask && Date.now() - r0.startedAt > WAIT_LIMIT_MS) {
         if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
         setRound({ ...now, state: 'timeout', err: '等了 10 分钟还没答完。切到经典界面看看它卡在哪了。' })
       }
@@ -487,7 +516,7 @@ export default function WalkieApp({ token }: { token: string }) {
     const r0: Round = {
       key: targetRef.current, project: cur.project.name, window: cur.channel.index,
       sent: body, startedAt: Date.now(), state: 'waiting',
-      reply: null, steps: [], now: null, summary: '', err: '',
+      reply: null, steps: [], now: null, ask: null, summary: '', err: '',
     }
     setRound(r0); setElapsed(0)
     setDraft(''); setRawText(''); setRefined(false); setFiles([])
@@ -504,8 +533,21 @@ export default function WalkieApp({ token }: { token: string }) {
 
   const toggleMute = () => { const next = !muted; setMutedFeedback(next); setMutedState(next) }
 
+  /**
+   * 回答它问的题。**不生成任何文案** —— 送回的就是选项本身的字，那是它自己写的，
+   * 我们改写一个字都可能让它对不上。答完立刻补一次流，让那张卡尽快变回"它说"。
+   */
+  const answer = useCallback(async (project: string, win: number, picks: number[][]) => {
+    try {
+      await answerQuestion(token, project, win, picks)
+      hapticTap()
+      window.setTimeout(() => { void pollStream() }, 700)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }, [token, pollStream])
+
   // ── 派生 ────────────────────────────────────────────────
-  const canSend = !!draft.trim() && !busy && !blocked
 
   /** 屏上真正要画的东西 = 流 + 本地这一轮（去重：这一轮涉及的频道，发送时刻之后的服务端事件丢掉） */
   const shown = useMemo(() => {
@@ -515,13 +557,25 @@ export default function WalkieApp({ token }: { token: string }) {
   // **升序**：老 → 新，新的在底下。本地那一轮是最新的，永远排在最后。
   const items = useMemo(() => [...shown].sort((a, b) => a.at - b.at), [shown])
   const runningItems = items.filter((e) => e.running)
+
+  /**
+   * 你现在对着的那个人，正停下来等你选。
+   *
+   * 这时候**输入框必须停用**：终端里那道题还开着的时候，打进输入框的字会被它吞掉，
+   * 而回车会替你按在**当前高亮的那一项**上 —— 实测就是这个行为。也就是说，
+   * 不拦的话你会得到一个"我没选它，它却收到了"的答案，这比不让发糟得多。
+   */
+  const asking = items.find((e) => e.ch === target && e.ask)?.ask ?? null
+  const canSend = !!draft.trim() && !busy && !blocked && !asking
   const showAbsent = !absentRead && since > 0 && Date.now() - since > ABSENT_MIN_MS && items.some((e) => e.kind === 'it' && e.at > since)
   const absentCount = since ? items.filter((e) => e.kind === 'it' && e.at > since).length : 0
 
-  /** 一条"现在"：把正在跑的那几件压成一行（三件以上才值得占这一行） */
+  /** 一条"现在"：把正在跑的那几件压成一行（两件以上才值得占这一行）。
+      停在那儿等你选的**不算"在跑的事"** —— 把它的原文摘进这一行只会让人以为它在干活。 */
   const nowLine = useMemo(() => {
-    if (runningItems.length < 2) return ''
-    return runningItems.map((e) => `${e.path} ${e.text.replace(/\s+/g, ' ').slice(0, 24)}`).join(' · ')
+    const busyItems = runningItems.filter((e) => !e.ask)
+    if (busyItems.length < 2) return ''
+    return busyItems.map((e) => `${e.path} ${e.text.replace(/\s+/g, ' ').slice(0, 24)}`).join(' · ')
   }, [runningItems])
 
   const speakOverview = useCallback(() => {
@@ -605,6 +659,30 @@ export default function WalkieApp({ token }: { token: string }) {
   // ── 换聊天对象 ──────────────────────────────────────────
   const pick = (key: string) => { setTarget(key); setPicker(false) }
 
+  /** 开选人面板。**每次都从"你现在对着的那个人"重新起头**，不沿用上一次的高亮 ——
+      那个工作区可能已经在经典界面里被关掉了，留着的旧高亮会指向一个不存在的地方。 */
+  const openPicker = useCallback(() => {
+    setPickWs(findChannel(targetRef.current)?.project.name || '')
+    setPicker(true)
+  }, [findChannel])
+
+  // 面板开着的时候，那个工作区被别处删了 —— 当场退到第一个，不留一个空右栏
+  useEffect(() => {
+    if (picker && pickWs && !projects.some((p) => p.name === pickWs)) setPickWs(projects[0]?.name || '')
+  }, [picker, pickWs, projects])
+
+  const pickProfile = useCallback((id: string) => {
+    setDflt(id)
+    try { localStorage.setItem(PROFILE_KEY, id) } catch { /* 隐私模式 */ }
+  }, [])
+
+  // 设置面板要用的东西**打开时才拿** —— 不开设置就不花这个钱
+  useEffect(() => {
+    if (!settings) return
+    if (!profiles) void getConfigs(token).then(setProfiles).catch(() => setProfiles([]))
+    void getVersion(token).then(setAbout).catch(() => { /* 拿不到就不显示，不编一个版本号 */ })
+  }, [settings, profiles, token])
+
   /**
    * 点一条消息 = "我要回复给这个人"。
    *
@@ -627,25 +705,27 @@ export default function WalkieApp({ token }: { token: string }) {
     const name = newChan.trim()
     if (!p || !cwd || !name) return
     try {
-      await createWorkspace(token, cwd, 'claude', undefined, { session: p.name, name })
+      // profile 来自设置里的"新会话默认模型" —— 建 channel 这一步不再问你要模型
+      await createWorkspace(token, cwd, 'claude', dflt || undefined, { session: p.name, name })
       setAddingChan(false); setNewChan(''); setPicker(false); setJustCreated(name)
       setTimeout(() => { void pollStream() }, 1200)
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     }
-  }, [token, projects, pickWs, newChan, pollStream])
+  }, [token, projects, pickWs, newChan, pollStream, dflt])
 
   const onCreated = useCallback(async (path: string, shellType: 'claude' | 'bash', profile?: string) => {
     setAdding(false)
     try {
-      const r = await createWorkspace(token, path, shellType, profile)
+      // 那个对话框里自己选过就用它的；没选就落到设置里的默认模型
+      const r = await createWorkspace(token, path, shellType, profile || dflt || undefined)
       setJustCreated(r.name)
       setPicker(false)
       setTimeout(() => { void pollStream() }, 1200)   // 给它一点时间起来
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     }
-  }, [token, pollStream])
+  }, [token, pollStream, dflt])
 
   const story = (rows: WalkieStep[]) => {
     const chapters: { say?: WalkieStep; tools: WalkieStep[] }[] = []
@@ -683,6 +763,9 @@ export default function WalkieApp({ token }: { token: string }) {
 
   const composer = (full: boolean) => (
     <>
+      {/* 为什么发不出去，必须在**看得见的地方**说 —— 全屏编辑时它盖住整屏，
+          所以这条说明也得跟着进来，不然你看到的就是一个按不动的发送键。 */}
+      {asking && <div className="walkie-blocked is-ask">它在等你选一个 —— 就在上面那条消息里。选完就能接着说话。</div>}
       {files.length > 0 && (
         <div className="walkie-files">
           {files.map((f) => (
@@ -705,6 +788,13 @@ export default function WalkieApp({ token }: { token: string }) {
           placeholder={full ? '说点什么…' : '说点什么…'}
         />
         <input id={FILE_INPUT_ID} type="file" multiple hidden onChange={onPickFiles} />
+        {/* 常驻的文件入口。它常驻是因为"这台机器上的文件"不是某一轮的产物 ——
+            任何时刻你都想去看一眼，而它必须**永远在同一个地方**（同一个位置 = 不用找）。
+            点开的是**你正对着的那个人**的目录：你已经选好了地方，文件就是那个地方的。 */}
+        <button type="button" className="walkie-roundbtn" title="文件"
+          onClick={() => openBrowser(cur?.channel.cwd || '')}>
+          <IconFolder />
+        </button>
         <button type="button" className="walkie-roundbtn" disabled={uploading}
           onClick={() => document.getElementById(FILE_INPUT_ID)?.click()} title="附件">
           {uploading ? '…' : <IconClip />}
@@ -741,11 +831,16 @@ export default function WalkieApp({ token }: { token: string }) {
         <button type="button" className="walkie-top-title" onClick={speakOverview}>
           <span className="walkie-dot" style={{ background: tmuxOk ? 'var(--nexus-success)' : 'var(--nexus-error)' }} />
           我的机器{runningCount > 0 ? ` · ${runningCount} 个在跑` : ''}
-          {speaking === 'overview' ? ' ⏹' : runningCount > 0 ? ' 🔊' : ''}
+          {/* 只留"正在念"这个状态。以前这里还挂一个 🔊 提示"点标题会念出来" ——
+              右上方就是喇叭键，同一件事说两遍。 */}
+          {speaking === 'overview' ? ' ⏹' : ''}
         </button>
         <div className="walkie-top-actions">
           <button type="button" className="walkie-icon-btn" onClick={toggleMute} title={muted ? '开启声音' : '静音'}>
             <IconSound off={muted} />
+          </button>
+          <button type="button" className="walkie-icon-btn" onClick={() => setSettings(true)} title="设置">
+            <IconGear />
           </button>
         </div>
       </div>
@@ -788,23 +883,34 @@ export default function WalkieApp({ token }: { token: string }) {
             return (
               <div key={e.id}
                 className={`walkie-msg ${mine ? 'mine' : 'theirs'}${e.ch === target ? ' is-target' : ''}${flash === e.id ? ' is-flash' : ''}`}>
-                {/* 署名一行。**它整行都是命中区**（全宽、约 32px 高）——
-                    它是"这是谁"，所以点它 = 回复给这个人。正文是另一个命中区，管展开。
-                    两条需求抢同一个手势，就按"说的是什么"分给谁。 */}
-                <button type="button" className="walkie-who" onClick={() => replyTo(e.ch, e.id)}
-                  title={mine ? `再跟 ${e.name} 说一句` : `回复 ${e.name}`}>
-                  {!mine && <span className="walkie-who-dot" />}
-                  <b>{mine ? '你' : e.name}</b>
-                  <span className="walkie-who-where">{mine ? `${e.path} · ${e.name}` : e.path}</span>
+                {/* 署名一行里有两个**各自说自己意思**的靶子（都约 32px 高）：
+                      · 名字 = 这是谁 → 点它就把收件人切成这个人（回复给他）
+                      · 路径 = 他在哪   → 点它就打开他的工作区（那个目录的文件）
+                    正文是第三个命中区，管展开。三个手势各按"它写的是什么"分给谁，
+                    没有一个是靠记的。 */}
+                <div className="walkie-who">
+                  <button type="button" className="walkie-who-who" onClick={() => replyTo(e.ch, e.id)}
+                    title={mine ? `再跟 ${e.name} 说一句` : `回复 ${e.name}`}>
+                    {!mine && <span className="walkie-who-dot" />}
+                    <b>{mine ? '你' : e.name}</b>
+                  </button>
+                  <button type="button" className="walkie-who-where" onClick={() => openBrowser(e.cwd)}
+                    title={`打开 ${e.cwd} 的文件`}>
+                    {mine ? `${e.path} · ${e.name}` : e.path}
+                  </button>
                   <span className="walkie-who-time">{stamp(e.at)}</span>
                   {e.running && <span className="walkie-who-live">在跑</span>}
-                </button>
+                </div>
                 <div className="walkie-body" onClick={toggle}>
                   {open || !long
                     ? <Markdown text={e.text} onOpen={(p) => void openFile(e.cwd, p)} />
                     : <Preview text={e.text} onOpen={(p) => void openFile(e.cwd, p)} />}
                   {speaking === e.id && <span className="walkie-at walkie-speaking">🔊 正在念</span>}
                 </div>
+                {e.ask && (
+                  <AskCard key={e.ask.id} ask={e.ask}
+                    onPick={(picks) => void answer(e.project, e.window, picks)} />
+                )}
               </div>
             )
           })}
@@ -833,6 +939,12 @@ export default function WalkieApp({ token }: { token: string }) {
                     {round.now ? `${NOW_VERB[round.now.kind] || '正在处理'}${round.now.kind === 'think' ? '…' : ` ${round.now.label}`}` : '正在连接…'}
                   </span>
                 </div>
+              )}
+
+              {/* 它在这一轮里停下来问你 —— 选项就长在卡片上，不用切到别处去答 */}
+              {round.state === 'waiting' && round.ask && (
+                <AskCard key={round.ask.id} ask={round.ask}
+                  onPick={(picks) => void answer(round.project, round.window, picks)} />
               )}
 
               {round.state === 'done' && round.reply?.text && (
@@ -866,7 +978,14 @@ export default function WalkieApp({ token }: { token: string }) {
             </div>
           )}
 
-          {!items.length && !round && !loadErr && <div className="walkie-quiet">这台机器上还没有人说过话。</div>}
+          {/* 冷启动的空态是**第一印象**，不能是一句"没有数据"。
+              这里要说清的一件事：这条流接的是整台机器 —— 包括你没通过手机下的那些活。 */}
+          {!items.length && !round && !loadErr && (
+            <div className="walkie-quiet">
+              这台机器上还没有人说过话。
+              <em>你白天在终端里开的那些窗口，说到的话也会出现在这里 —— 不用从手机上派活也看得见。</em>
+            </div>
+          )}
         </div>
       </div>
 
@@ -891,7 +1010,7 @@ export default function WalkieApp({ token }: { token: string }) {
       <div className="walkie-compose">
         {composer(false)}
         <button type="button" className={`walkie-target${blocked ? ' is-warn' : ''}`}
-          onClick={() => { setPickWs(cur?.project.name || projects[0]?.name || ''); setPicker(true) }}>
+          onClick={openPicker}>
           {blocked && '⚠ '}
           <span className="walkie-target-path">{targetLabel}</span>
           <IconChevron />
@@ -902,15 +1021,20 @@ export default function WalkieApp({ token }: { token: string }) {
           默认一小条，旁边一个键摊开成全屏，改完收回来。文本是同一份状态，不存在同步问题。 */}
       {editing && (
         <div className="walkie-full-edit">
+          <div className="walkie-compose walkie-compose-full">{composer(true)}</div>
+          {/* 三个键都在底边：收起在左、发送在右 —— 竖屏单手也够得着。
+              中间那行"寄给谁"是可以直接改的，不用先收起来。 */}
           <div className="walkie-full-bar">
             <button type="button" className="walkie-mini" onClick={() => setEditing(false)}>收起</button>
-            <span className="walkie-at">寄给 {targetLabel}</span>
+            <button type="button" className="walkie-full-who" onClick={openPicker}>
+              寄给 {targetLabel}
+              <IconChevron />
+            </button>
             <button type="button" className="walkie-sendbtn" disabled={!canSend}
               onClick={() => void deliver()} title="发送">
               <IconSend />
             </button>
           </div>
-          <div className="walkie-compose walkie-compose-full">{composer(true)}</div>
         </div>
       )}
 
@@ -962,6 +1086,46 @@ export default function WalkieApp({ token }: { token: string }) {
         </div>
       )}
 
+      {/* 设置。它是一个**容器** —— 现在只有一件（新建会话用哪个模型），
+          以后的功能性设置都往这里放，主屏上不再长按钮。 */}
+      {settings && (
+        <div className="walkie-sheet" onClick={() => setSettings(false)}>
+          <div className="walkie-sheet-body" onClick={(e) => e.stopPropagation()}>
+            <div className="walkie-sheet-head">
+              <span className="walkie-sheet-title">设置</span>
+              <button type="button" className="walkie-mini" onClick={() => setSettings(false)}>完成</button>
+            </div>
+
+            <div className="walkie-set-h">新建会话用哪个模型</div>
+            <div className="walkie-opts">
+              <button type="button" className={`walkie-opt${dflt ? '' : ' is-on'}`}
+                onClick={() => pickProfile('')}>
+                <span className="walkie-opt-name">随服务端默认</span>
+                <span className="walkie-opt-id">不指定 profile</span>
+              </button>
+              {(profiles || []).map((p) => (
+                <button key={p.id} type="button" className={`walkie-opt${p.id === dflt ? ' is-on' : ''}`}
+                  onClick={() => pickProfile(p.id)}>
+                  <span className="walkie-opt-name">{p.label}</span>
+                  <span className="walkie-opt-id">{p.id}</span>
+                </button>
+              ))}
+            </div>
+            <div className="walkie-set-note">
+              {profiles === null ? '读取中…'
+                : profiles.length ? '新建工作区 / channel 时用它；那个对话框里自己选过就以你选的为准。'
+                  : '这台机器上还没有配置过 profile。'}
+            </div>
+
+            <div className="walkie-set-h">关于</div>
+            <div className="walkie-set-note">
+              Nexus {about?.current || '—'}
+              {about && !about.clean ? '（有未提交的改动）' : ''}
+            </div>
+          </div>
+        </div>
+      )}
+
       {adding && (
         <Suspense fallback={null}>
           <WorkspaceSelector token={token} onClose={() => setAdding(false)} onConfirm={onCreated} />
@@ -987,6 +1151,66 @@ export default function WalkieApp({ token }: { token: string }) {
           )}
         </Suspense>
       )}
+    </div>
+  )
+}
+
+/**
+ * 它在问你 —— 选项就在消息里，点一下就是回答。
+ *
+ * 为什么它必须长在这一屏上：在终端里这道题是**方向键 + 回车**，手机上根本没有那两个键。
+ * 不把它接出来，你看到的就是一句"你要 A 还是 B？"然后无处可答 —— 只能打字描述一个
+ * 位置（"第一个"），而那正是我们想让这一屏消灭的那类输入。
+ *
+ * 选项文字**原样送回去**（label 是它自己写的），界面不改写、不翻译、不缩略。
+ */
+function AskCard({ ask, onPick }: { ask: Ask; onPick: (picks: number[][]) => void }) {
+  const [sel, setSel] = useState<number[][]>(() => ask.questions.map(() => []))
+  const [sent, setSent] = useState(false)
+  const many = ask.questions.length > 1
+  const multi = many || ask.questions.some((q) => q.multiSelect)
+
+  const tap = (qi: number, oi: number) => {
+    if (sent) return
+    const q = ask.questions[qi]
+    if (!multi) {
+      // 一道题、单选 = 点一下就是答复。没有"确认"这一步 —— 选择就是你按的那一下。
+      const next = ask.questions.map((_, i) => (i === qi ? [oi] : []))
+      setSel(next); setSent(true); onPick(next)
+      return
+    }
+    setSel((cur) => cur.map((c, i) => {
+      if (i !== qi) return c
+      return q.multiSelect
+        ? (c.includes(oi) ? c.filter((x) => x !== oi) : [...c, oi])
+        : [oi]
+    }))
+  }
+
+  return (
+    <div className="walkie-ask">
+      {ask.questions.map((q, qi) => (
+        <div className="walkie-ask-q" key={qi}>
+          {many && <p className="walkie-ask-title">{q.header || `第 ${qi + 1} 个问题`}</p>}
+          {q.question && <p className="walkie-ask-text">{q.question}</p>}
+          {q.options.map((o, oi) => (
+            <button key={oi} type="button"
+              className={`walkie-choice${sel[qi]?.includes(oi) ? ' is-on' : ''}`}
+              onClick={() => tap(qi, oi)}>
+              <span className="walkie-choice-label">{o.label}</span>
+              {o.description && <span className="walkie-choice-desc">{o.description}</span>}
+            </button>
+          ))}
+          {q.multiSelect && <span className="walkie-ask-hint">可选多个</span>}
+        </div>
+      ))}
+      {multi && (
+        <button type="button" className="walkie-ask-go" disabled={sent || !sel.some((c) => c.length)}
+          onClick={() => { setSent(true); onPick(sel) }}>
+          {sent ? '已送出' : '就这样'}
+        </button>
+      )}
+      {!multi && sent && <span className="walkie-ask-hint">已送出，等它接着办…</span>}
     </div>
   )
 }

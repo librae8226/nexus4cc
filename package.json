@@ -1,6 +1,6 @@
 {
   "name": "nexus",
-  "version": "4.19.0",
+  "version": "5.0.0",
   "type": "module",
   "scripts": {
     "start": "node server.js",

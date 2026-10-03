@@ -210,6 +210,26 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
   }
 
   /**
+   * 把 AskUserQuestion 的 tool_use 归一成屏上要用的形状。
+   *
+   * 选项上限跟 Claude Code 自己一样是 4 个 —— 多了在手机上就成了一列按钮墙，
+   * 而"选一个"这件事不该占满一屏。前端据这个渲染可点的选项，所以 label 必须留着原样：
+   * 它就是**要送回给它的那句话**。
+   */
+  function askOf(block) {
+    const qs = Array.isArray(block?.input?.questions) ? block.input.questions : []
+    return qs.map((q) => ({
+      question: String(q?.question || '').trim(),
+      header: String(q?.header || '').trim(),
+      multiSelect: !!q?.multiSelect,
+      options: (Array.isArray(q?.options) ? q.options : []).slice(0, 4).map((o) => ({
+        label: String(o?.label || '').trim(),
+        description: String(o?.description || '').trim(),
+      })).filter((o) => o.label),
+    })).filter((q) => q.question && q.options.length)
+  }
+
+  /**
    * 从 transcript 尾部切出"回合"：一条人类发言 + 它后面**最后一段** assistant 正文。
    *
    * 只留最后一段，理由和 lastWords() 一样：一轮里中间那些 text 是**过程叙述**，
@@ -238,7 +258,15 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
       if (ts > lastAt) lastAt = ts
       if (e.type === 'user') {
         const c = e.message?.content
-        // tool_result 之类也走 user 记录，只认人类自己说的那句话
+        // tool_result 也走 user 记录。它不是你"说"的话，但它是**那个问题被答了没有**的唯一凭据：
+        // 答过之后 cur.ask 就撤掉，屏上那张"它在问你"的卡自己消失。
+        if (Array.isArray(c)) {
+          for (const b of c) {
+            if (b?.type === 'tool_result' && cur?.ask && cur.ask.id === b.tool_use_id) cur.ask = null
+          }
+          continue
+        }
+        // 只认人类自己说的那句话
         if (typeof c !== 'string') continue
         // isMeta 是 Claude Code 自己塞进去的元信息 —— 最典型的是斜杠命令的输出
         // （`/context` 那一整张表就是这么进来的）。它不是你"说"的话，别放进流里。
@@ -258,6 +286,11 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
           if (b.type === 'text' && b.text && b.text.trim()) {
             lastText = b.text.trim()
             if (cur) { cur.reply = b.text.trim(); cur.repliedAt = ts }
+          } else if (b.type === 'tool_use' && b.name === 'AskUserQuestion' && cur) {
+            // 它在等一个选择。选项在 transcript 里是结构化的（label + description），
+            // 不必去刮终端画面 —— 那是这一屏唯一能"在手机上回答"的东西。
+            const questions = askOf(b)
+            if (questions.length) cur.ask = { id: b.id, at: ts, questions }
           }
         }
       } else if (cur && e.type === 'system' && e.subtype === 'turn_duration') {
@@ -410,7 +443,11 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
         // 被打断的回合、早退的会话都长这样。所以再加一道新鲜度门槛，
         // 而且判据是**文件里最新一条记录的时间**，不是文件的 mtime（见 readTurns 里的说明）。
         // 代价：跑一个十分钟以上的长命令会被误判成停了 —— 那种情况你本来就该去经典界面看。
-        const isRunning = !!last && !last.done && Date.now() - lastAt < STREAM_RUNNING_FRESH_MS
+        // 一个问题挂着 = 它确确实实还在等 —— 哪怕已经等了半小时。新鲜度门槛是为了
+        // 排除"被打断的死会话"，而"在等你回答"不是死会话，恰恰是最该被看见的状态。
+        const pendingAsk = last && !last.done && last.ask ? last.ask : null
+        const isRunning = !!last && !last.done
+          && (!!pendingAsk || Date.now() - lastAt < STREAM_RUNNING_FRESH_MS)
         if (isRunning) { running++; c.status = 'working' } else if (c.status === 'ready') c.status = 'idle'
 
         // 一个回合大到把尾巴占满时，这里一条回合都切不出来。至少把它最后说的那句
@@ -426,11 +463,20 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
 
         for (let i = 0; i < turns.length; i++) {
           const t = turns[i]
+          const isLast = i === turns.length - 1
           const meta = {
             ch: key, project: p.name, window: c.index,
             name: c.name, cwd: c.cwd, path: p.path,
           }
-          if (t.reply) {
+          // 挂着问题的那一轮，画成"它在问你"而不是普通的"它说"：那句话和选项是同一件事，
+          // 拆成两条会让你读两遍。答过之后 pendingAsk 为空，这条自动变回普通的"它说"。
+          if (isLast && pendingAsk) {
+            events.push({
+              ...meta, id: `${key}:${pendingAsk.at}:ask`, kind: 'it',
+              text: t.reply || '', at: pendingAsk.at, ask: pendingAsk,
+              running: true,
+            })
+          } else if (t.reply) {
             events.push({ ...meta, id: `${key}:${t.repliedAt}:it`, kind: 'it', text: t.reply, at: t.repliedAt })
           }
           if (t.you) {
@@ -515,6 +561,115 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     audit?.('walkie-send', req, { target, chars: payload.length })
 
     res.json({ ok: true, key: keyOf(project, Number(win)) })
+  })
+
+  // ── 2.4 答题：把"我选了这一项"翻译成那个 TUI 认的按键 ──────────────────
+  //
+  // 终端里这道题是**方向键 + 回车**（底下一行写着 `Enter to select · ↑/↓ to navigate`），
+  // 手机上那两个键不存在。所以这一屏得替你把按键发进去。
+  //
+  // 下面这套序列是在真 pane 上一条条试出来的，不是照着提示猜的：
+  //   · 高亮项在 `capture-pane -p` 的纯文本里带着 `❯` 前缀（`❯ 1. [ ] 面条`），
+  //     所以**当前光标在第几项是读得出来的** —— 不靠"面板刚弹出时它一定在第一项"这种假设。
+  //   · 选项行是 `1.` `2.` 这样编号的，顺序就是 transcript 里的顺序。
+  //   · **单选**：回车直接选中并提交，面板关掉。
+  //   · **多选**：行首带 `[ ]` 复选框，回车是勾选，勾完要切到 Submit 那页再回车。
+  //     判据就看行首有没有方括号 —— 这是面板自己的形状，不用去猜 multiSelect 标志。
+  //   · 多道题时它们是几页标签（`← ☐ 午餐 ✔ Submit →`），`→` 翻页。
+  //
+  // 每一步之后都**重新读一次面板**再决定下一步；对不上就停下报错，绝不盲发按键 ——
+  // 盲发的后果是替你在另一个选项上按了回车，那比不答更糟。
+  router.post('/answer', authMiddleware, async (req, res) => {
+    const { project, window: win, picks } = req.body || {}
+    if (!project || !NAME_RE.test(String(project))) return res.status(400).json({ error: 'invalid project' })
+    if (!Number.isInteger(Number(win)) || Number(win) < 0) return res.status(400).json({ error: 'invalid window' })
+    if (!Array.isArray(picks) || !picks.length || picks.length > 6) return res.status(400).json({ error: 'invalid picks' })
+    for (const p of picks) {
+      if (!Array.isArray(p) || p.length > 4) return res.status(400).json({ error: 'invalid picks' })
+      for (const i of p) if (!Number.isInteger(i) || i < 0 || i > 3) return res.status(400).json({ error: 'invalid picks' })
+    }
+
+    const target = `${project}:${Number(win)}`
+    try {
+      execFileSync('tmux', ['has-session', '-t', project], { stdio: 'pipe' })
+    } catch {
+      return res.status(404).json({ error: 'project not found' })
+    }
+
+    const readPane = () => {
+      try {
+        return execFileSync('tmux', ['capture-pane', '-p', '-t', target], { encoding: 'utf8', stdio: 'pipe' })
+          .split('\n')
+      } catch { return [] }
+    }
+    /** 面板上那几行选项：`❯ 1. [ ] 面条` → {n:1, cur:true, box:true, label:'面条'} */
+    const options = (lines) => lines.flatMap((l) => {
+      const m = /^\s*(❯)?\s*(\d+)\.\s*(.*)$/.exec(l)
+      if (!m) return []
+      const label = m[3].trim()
+      return [{ n: Number(m[2]), cur: !!m[1], box: label.startsWith('['), label }]
+    })
+    const send = (...keys) => {
+      try { execFileSync('tmux', ['send-keys', '-t', target, ...keys], { stdio: 'pipe' }) } catch { /* 下面读面板时会发现 */ }
+    }
+    // 等一下再读面板。**必须用 await**：这个进程同时还在伺服整个 Nexus，
+    // 这里同步睡两秒就是把所有人的请求一起堵住两秒。
+    const sleep = (ms) => new Promise((r) => { setTimeout(r, ms) })
+
+    const rows = options(readPane())
+    if (!rows.length) {
+      return res.status(409).json({ error: 'no-question-up', hint: '终端里没找到那道题 —— 可能你已经答过了，或者它被别处取消了。' })
+    }
+    const checkbox = rows.some((r) => r.box)
+
+    // 把光标移到第 want 项（面板里的编号就是选项序号）。读得到当前位置就不用猜。
+    const moveTo = async (want) => {
+      for (let guard = 0; guard < 6; guard++) {
+        const cur = options(readPane()).find((r) => r.cur)
+        if (!cur) return false
+        if (cur.n === want) return true
+        send(cur.n < want ? 'Down' : 'Up')
+        await sleep(160)
+      }
+      return false
+    }
+
+    const sent = []
+    for (let qi = 0; qi < picks.length; qi++) {
+      if (qi > 0) {                      // 翻到下一道题的页
+        send('Right'); await sleep(220)
+        if (!options(readPane()).length) break   // 已经不在面板上了（上一题可能就是单选直提）
+      }
+      for (const oi of picks[qi]) {
+        if (!await moveTo(oi + 1)) {
+          return res.status(409).json({ error: 'option-not-found', hint: '没能在终端里对上这个选项 —— 到经典界面看一下它现在问的是什么。' })
+        }
+        send('Enter')
+        await sleep(220)
+        sent.push(oi + 1)
+      }
+    }
+
+    // 单选：回车已经提交，面板应当自己关掉。多选：还要走到 Submit 那页确认一次。
+    if (checkbox) {
+      for (let guard = 0; guard < picks.length + 2; guard++) {
+        const lines = readPane()
+        if (lines.some((l) => /Ready to submit/i.test(l))) { send('Enter'); break }
+        if (!options(lines).length) break                  // 面板已经不在了，别再发
+        send('Right'); await sleep(220)
+      }
+    }
+
+    await sleep(400)
+    const after = readPane()
+    const stillUp = options(after).length > 0 && !after.some((l) => /Ready to submit/i.test(l))
+    audit?.('walkie-answer', req, { target, picks: JSON.stringify(picks), submitted: !stillUp })
+    if (stillUp) {
+      return res.status(409).json({
+        error: 'answer-not-taken', hint: '按键发出去了，但终端里那道题还开着 —— 到经典界面看一眼再答。',
+      })
+    }
+    res.json({ ok: true, sent: sent.map(String) })
   })
 
   // ── 2.5 附件：收下一个文件，回一个**绝对路径** ────────────────────────
@@ -765,6 +920,15 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
         case 'WebFetch': case 'WebSearch':
           step = { kind: 'web', label: cut(input.query || input.url, 48) }
           break
+        case 'AskUserQuestion': {
+          // 挂在"你正在追的这一轮"上：选项要跟着卡片一起长出来，你在这里就能回答。
+          const questions = askOf(b)
+          if (questions.length) {
+            t.ask = { id: b.id, at: Date.now(), questions }
+            step = { kind: 'ask', label: questions[0].question, id: b.id }
+          } else step = { kind: 'tool', label: 'AskUserQuestion' }
+          break
+        }
         default:
           step = { kind: 'tool', label: name }
       }
@@ -789,6 +953,8 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
    * 撤下来之后底部那行会退回"正在推理"，直到下一个工具开始。
    */
   function finishStep(t, block) {
+    // 问题答完了 —— 选项收掉，它变回普通的一步。和流里那条"它在问你"是同一个判据。
+    if (t.ask && t.ask.id === block.tool_use_id) t.ask = null
     if (!t.now || t.now.id !== block.tool_use_id) return
     const s = (t.steps || []).find((x) => x.id === block.tool_use_id)
     if (s) s.done = true
@@ -866,6 +1032,8 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
       paneTail: pane,
       hint: hintFor(t, pane),
       steps: t.steps || [],
+      // 这一轮挂着的问题（它在等你选一个）。答完就没了 —— 同一个判据贯穿流和卡片。
+      ask: t.ask || null,
       // 此刻正在发生的那一件事（"正在跑 读取 docs/WALKIE.md" / "正在推理"）。
       // 它是一条**状态**，不属于"做过哪些事"的列表 —— 见 pushStep 里为什么
       // 把"推理中"从 steps 里拿了出来。
@@ -901,7 +1069,9 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
   }
 
   function tick(t) {
-    if (Date.now() - t.startedAt > TURN_TIMEOUT_MS) {
+    // 挂着问题就不算超时 —— 它不是在拖，是在**等你**。用超时把这个问题按掉，
+    // 等于替你替它做了决定，那比慢得多。
+    if (Date.now() - t.startedAt > TURN_TIMEOUT_MS && !t.ask) {
       t.state = 'timeout'
       t.error = t.error || '等待回复超时'
       return
@@ -967,8 +1137,10 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
       }
     }
 
-    // 兜底：拿不到 turn_duration（老版本 / 被中断）时，靠「发言人已认领 + 有正文 + 文件静默」收敛
-    if (t.state === 'running' && t.sawSent && t.replyParts.length) {
+    // 兜底：拿不到 turn_duration（老版本 / 被中断）时，靠「发言人已认领 + 有正文 + 文件静默」收敛。
+    // **挂着问题时绝不收敛** —— 文件静默正是"它在等你"的特征，把它判成"答完了"，
+    // 屏上那张要你选的卡就会在 6 秒后自己消失。
+    if (t.state === 'running' && t.sawSent && t.replyParts.length && !t.ask) {
       try {
         const quiet = Date.now() - statSync(t.file).mtimeMs
         if (quiet > 6000) {

@@ -40,6 +40,27 @@ export interface WalkieNow {
   since: number
 }
 
+/** 一个可选的答案。label 是**要原样送回给它**的那句话 —— 界面上别改写它。 */
+export interface AskOption {
+  label: string
+  description?: string
+}
+
+/** 它在问你的一件事。multiSelect = 可以多选。 */
+export interface AskQuestion {
+  question: string
+  header: string
+  multiSelect: boolean
+  options: AskOption[]
+}
+
+/** 一个挂着的问题（还没被回答的）。答完就从流里消失，变回普通的一条"它说"。 */
+export interface Ask {
+  id: string
+  at: number
+  questions: AskQuestion[]
+}
+
 export interface ChannelList {
   projects: WalkieProject[]
   llm: { label: string; model: string } | null
@@ -69,6 +90,8 @@ export interface StreamEvent {
   running?: boolean
   /** running 时它到目前为止说的最后一句 */
   partial?: string
+  /** 它在等你选一个 —— 有它这条就不是"它说"，是"它在问你" */
+  ask?: Ask | null
 }
 
 export interface StreamState {
@@ -106,6 +129,8 @@ export interface ReplyState {
   steps?: WalkieStep[]
   /** 此刻正在跑的那一件事（"推理中"是状态，不是一步） */
   now?: WalkieNow | null
+  /** 这一轮挂着的问题（它在等你选）—— 选项直接长在卡片上，就地能答 */
+  ask?: Ask | null
 }
 
 const TOKEN_KEY = 'nexus_token'
@@ -228,6 +253,24 @@ export const sendPrompt = (token: string, project: string, window: number, text:
     method: 'POST',
     body: JSON.stringify({ project, window, text }),
   })
+
+/**
+ * 回答它问的那个问题。
+ *
+ * 前端只给"每一道题选了哪几项" —— **按键由后端翻译**。这一层是故意的：
+ * 往 TUI 里送什么键是实现细节（方向键？数字键？），它变了不该牵动界面；
+ * 界面这一侧只有一个语义，"我选了这一项"。
+ */
+export const answerQuestion = (
+  token: string, project: string, window: number, picks: number[][],
+) =>
+  req<{ ok: boolean; sent: string[] }>('/api/walkie/answer', token, {
+    method: 'POST',
+    body: JSON.stringify({ project, window, picks }),
+  })
+
+export const getVersion = (token: string) =>
+  req<{ current: string; clean: boolean }>('/api/version', token)
 
 export const refineText = (token: string, text: string) =>
   req<{ text: string; refined: boolean; reason?: string }>('/api/walkie/refine', token, {

@@ -98,7 +98,14 @@
   -webkit-overflow-scrolling: touch;
 }
 .walkie-stage-inner { display: flex; flex-direction: column; }
-.walkie-quiet { color: var(--nexus-muted); font-size: 13px; padding: 26px 2px; text-align: center; }
+.walkie-quiet {
+  color: var(--nexus-text2); font-size: 14px; line-height: 1.7;
+  padding: 34px 18px; text-align: center;
+}
+.walkie-quiet em {
+  display: block; margin-top: 10px; font-style: normal;
+  font-size: 12px; color: var(--nexus-muted); line-height: 1.7;
+}
 .walkie-at { font-size: 11px; color: var(--nexus-muted); font-weight: 400; letter-spacing: 0; }
 .walkie-dim { color: var(--nexus-text2); font-size: 13px; margin: 6px 0 0; }
 .walkie-dot-live {
@@ -132,22 +139,36 @@
 .walkie-msg.mine { display: flex; flex-direction: column; align-items: flex-end; }
 
 .walkie-who {
-  display: flex; align-items: center; gap: 6px;
-  width: 100%; padding: 3px 0 6px; margin: 0;
-  background: transparent; border: none; cursor: pointer; text-align: left;
-  color: var(--nexus-muted); font: inherit; font-size: 11.5px; line-height: 1.4;
+  display: flex; align-items: center; gap: 2px;
+  width: 100%; margin: 0 0 4px; padding: 0;
+  color: var(--nexus-muted); font-size: 11.5px; line-height: 1.4;
 }
-.walkie-msg.mine .walkie-who { justify-content: flex-end; }
+.walkie-msg.mine .walkie-who { flex-direction: row; justify-content: flex-end; }
+.walkie-msg.mine .walkie-who-who { order: 1; }
+.walkie-msg.mine .walkie-who-where { order: 0; text-align: right; }
 .walkie-who b { color: var(--nexus-text2); font-weight: 600; }
 .walkie-msg.is-target .walkie-who b { color: var(--nexus-text); }
 .walkie-msg.mine.is-target .walkie-who b { color: var(--tone-you); }
+/* 名字：点它 = 回复给这个人。全高命中区，两个字的宽度也够点。 */
+.walkie-who-who {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+  background: transparent; border: none; cursor: pointer; padding: 6px 4px;
+  color: inherit; font: inherit;
+}
+.walkie-who-who:active { color: var(--nexus-text); }
 .walkie-who-dot {
   flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%;
   background: color-mix(in srgb, var(--nexus-accent) 70%, transparent);
 }
-.walkie-who-where { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.walkie-msg.mine .walkie-who-where { flex: 0 1 auto; }
-.walkie-who-time { flex: 0 0 auto; }
+/* 路径：点它 = 打开他的工作区。它和名字是**两件不同的事**，所以是两个靶子。 */
+.walkie-who-where {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  background: transparent; border: none; cursor: pointer; text-align: left;
+  padding: 6px 4px; color: inherit; font: inherit;
+}
+.walkie-who-where:active { color: var(--nexus-text); }
+.walkie-msg.mine .walkie-who-where { flex: 0 1 auto; min-width: 0; }
+.walkie-who-time { flex: 0 0 auto; padding: 6px 0; }
 .walkie-who-live { flex: 0 0 auto; color: var(--tone-now); font-weight: 600; }
 
 .walkie-body { cursor: default; }
@@ -292,6 +313,41 @@
   border: 1px solid color-mix(in srgb, var(--nexus-warning) 38%, transparent);
   color: var(--nexus-text); font-size: 12.5px; line-height: 1.5;
 }
+/* "它在等你选"不是告警，是它在等你 —— 用中性色，别吓人 */
+.walkie-blocked.is-ask {
+  background: color-mix(in srgb, var(--nexus-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--nexus-accent) 32%, transparent);
+}
+
+/* ── 它在问你：选项就在消息里 ─────────────────────────
+   终端里这道题是方向键 + 回车；手机上那两个键不存在。所以选项必须变成**可点的**，
+   否则你只能打字描述一个位置（"第一个"）—— 而那正是这一屏要消灭的输入。 */
+.walkie-ask {
+  margin-top: 8px; display: flex; flex-direction: column; gap: 6px;
+  border-left: 2px solid color-mix(in srgb, var(--nexus-accent) 45%, transparent);
+  padding: 2px 0 2px 10px;
+}
+.walkie-ask-title { margin: 0; font-size: 11px; color: var(--nexus-muted); }
+.walkie-ask-text { margin: 0 0 2px; font-size: 13.5px; color: var(--nexus-text); line-height: 1.55; }
+.walkie-choice {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  width: 100%; min-height: 44px; text-align: left; cursor: pointer;
+  background: var(--nexus-bg2); border: 1px solid var(--nexus-border);
+  border-radius: 11px; padding: 10px 12px; color: var(--nexus-text); font: inherit;
+}
+.walkie-choice:active { background: var(--nexus-bg); }
+.walkie-choice.is-on {
+  border-color: color-mix(in srgb, var(--nexus-accent) 60%, transparent);
+  background: color-mix(in srgb, var(--nexus-accent) 15%, transparent);
+}
+.walkie-choice-label { font-size: 14px; font-weight: 600; line-height: 1.4; }
+.walkie-choice-desc { font-size: 11.5px; color: var(--nexus-muted); line-height: 1.5; }
+.walkie-ask-hint { font-size: 11px; color: var(--nexus-muted); }
+.walkie-ask-go {
+  align-self: flex-start; background: var(--nexus-accent); color: #fff; border: none;
+  border-radius: 11px; padding: 12px 20px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.walkie-ask-go[disabled] { opacity: .35; }
 
 /* ── 输入框 ─────────────────────────────────────────── */
 .walkie-compose {
@@ -352,16 +408,31 @@
   background: var(--nexus-bg);
   padding-top: env(safe-area-inset-top, 0px);
 }
+/* 全屏编辑时，三个键在**底边**：收起在左、发送在右、都在拇指够得着的地方。
+   以前把它们放在顶栏 —— 竖屏手机上那是单手够不到的位置，而"最大化输入"恰恰是
+   要双手打字的时候。 */
 .walkie-full-bar {
   flex: 0 0 auto;
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding: 12px 14px 6px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--nexus-border);
 }
-.walkie-full-bar .walkie-at { flex: 1 1 auto; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.walkie-full-bar .walkie-mini { padding: 9px 14px; font-size: 13px; flex: 0 0 auto; }
+/* 这一行中间是"寄给谁"—— 它本来就该是可以在那里改的，而不是必须先收起来 */
+.walkie-full-who {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: center; justify-content: center; gap: 3px;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--nexus-muted); font-size: 12px; padding: 9px 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.walkie-full-who svg { width: 12px; height: 12px; flex: 0 0 auto; opacity: .7; }
+.walkie-full-bar .walkie-sendbtn { width: 44px; height: 44px; border-radius: 13px; }
+.walkie-full-bar .walkie-sendbtn svg { width: 21px; height: 21px; }
 .walkie-full-edit .walkie-compose-full {
   flex: 1 1 auto; min-height: 0;
   display: flex; flex-direction: column;
-  border-top: none; padding-top: 0;
+  border-top: none; padding-bottom: 0;
 }
 .walkie-compose-full .walkie-box { flex: 1 1 auto; align-items: stretch; }
 .walkie-compose-full .walkie-input { max-height: none; font-size: 16px; padding-top: 10px; }
@@ -380,6 +451,11 @@
   padding: 14px 12px calc(12px + env(safe-area-inset-bottom, 0px));
 }
 .walkie-sheet-title { font-size: 12px; color: var(--nexus-muted); padding: 0 4px 8px; flex: 0 0 auto; }
+/* 面板高到盖住大半屏时，得有一个看得见的出口 —— 不能只靠"点旁边空白" */
+.walkie-sheet-head {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding-right: 2px;
+}
 .walkie-panes { display: flex; gap: 8px; flex: 1 1 auto; min-height: 0; }
 .walkie-pane-ws, .walkie-pane-ch {
   display: flex; flex-direction: column; gap: 2px;
@@ -413,6 +489,27 @@
   padding: 11px; font: inherit; font-size: 13px; cursor: pointer;
 }
 .walkie-addws:active { background: var(--nexus-bg); }
+
+/* ── 设置：一个容器，不是一张表单 ───────────────────── */
+.walkie-sheet-body { overflow-y: auto; }
+.walkie-set-h {
+  flex: 0 0 auto; font-size: 12px; color: var(--nexus-text2); font-weight: 600;
+  padding: 12px 4px 6px;
+}
+.walkie-opts { display: flex; flex-direction: column; gap: 2px; }
+.walkie-opt {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  background: transparent; border: none; cursor: pointer; text-align: left;
+  padding: 11px 11px; border-radius: 10px; color: var(--nexus-text); font: inherit;
+}
+.walkie-opt:active { background: var(--nexus-bg); }
+.walkie-opt.is-on {
+  background: color-mix(in srgb, var(--nexus-accent) 16%, transparent);
+}
+.walkie-opt.is-on .walkie-opt-name::before { content: '● '; font-size: 10px; opacity: .8; }
+.walkie-opt-name { font-size: 14px; font-weight: 600; }
+.walkie-opt-id { flex: 0 0 auto; font-size: 11px; color: var(--nexus-muted); }
+.walkie-set-note { font-size: 11.5px; color: var(--nexus-muted); line-height: 1.6; padding: 6px 4px 0; }
 
 /* ── 第一次打开（对讲机风味包的首启页）─────────────────
    它是这一屏的"开箱"，所以长得和这一屏一样：同一个圆点、同一句人话。
