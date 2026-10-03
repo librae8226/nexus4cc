@@ -474,11 +474,19 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     if (!text) return
     try {
       const s = await summarizeText(token, text)
+      // 摘要降级时后端给的是"截前 120 字"，那**不是摘要** —— 它是同一段话的残句
+      // （截在句子中间，屏上还会把回复显示两遍，真机上就是这么看到的）。
+      // 所以只认真正的摘要：没有就没有，回复自己就是那段话。
+      const real = s.summarized ? s.text : ''
       const entry = cacheRef.current.get(key)
-      if (entry) entry.summary = s.text
+      if (entry) entry.summary = real
       if (chanKeyRef.current !== key) return    // 已经切走了就别突然出声
-      setSummary(s.text)
-      await play(s.text, 1.12, 'summary')
+      setSummary(real)
+      // 没有摘要时要不要自动读？回复本来就短（它现在只是他最后那段话）就直接读；
+      // 太长就不出声了 —— 自动念一长段是最烦人的那种"贴心"。
+      const say = real || (text.length <= 400 ? text : '')
+      if (!say) return
+      await play(say, real ? 1.12 : 1.06, real ? 'summary' : 'full')
     } catch { /* 摘要失败就静默，用户还能点「▶ 全文」 */ }
   }, [token, play])
 
