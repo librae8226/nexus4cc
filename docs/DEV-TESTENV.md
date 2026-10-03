@@ -18,6 +18,7 @@
 android/emulator.sh start      # 起容器 + 开机（首次约 1 分钟），幂等
 android/emulator.sh status
 android/emulator.sh install android/app/build/outputs/apk/walkie/debug/app-walkie-debug.apk
+android/emulator.sh adb "uninstall com.librae.nexus.walkie"   # 见下面"签名对不上"那条
 android/emulator.sh shot /tmp/emu.png
 android/emulator.sh tap 540 2160
 android/emulator.sh hold 540 2160 2000     # 长按 2 秒（按住说话要这个）
@@ -33,6 +34,12 @@ AVD 具名卷 `nexus-avd`、API 34 / `google_apis` / x86_64。
 **为什么是容器**：emulator + system image 有 9GB，装进镜像里宿主保持干净（同 `android/Dockerfile`）。
 KVM 用 `--device /dev/kvm` 直通 —— 宿主 `librae` 对 `/dev/kvm` 有 ACL 写权限（无需加 kvm 组）。
 容器 `--network host`，所以模拟器里的 **`10.0.2.2` 就是这台宿主机**，直连本机 Nexus `:59000`。
+
+**debug 包重装前先 `uninstall`。** 构建跑在容器里，`debug.keystore` 落在容器自己的
+`$HOME/.android/`，容器一换（重建/清掉）签名就变了。症状是第二次安装报
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE: ... signatures do not match`，看着像"包坏了"，
+其实只是签名对不上。`adb uninstall <包名>` 再装即可 —— 代价是模拟器上的 localStorage
+会被清掉（要重新写 token / profile，脚本见下面第 2 节）。
 
 **两个坑**（都踩过）：
 - 判断"模拟器是否在跑"有两个坑，**两个都踩过**：
