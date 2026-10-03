@@ -148,6 +148,12 @@ export function hapticSnap(): void {
   try { navigator.vibrate?.(32) } catch { /* 桌面不支持就算了 */ }
 }
 
+/** 换了一个说话对象（点某条消息 = 回复给那个人）。最轻的一档，够确认就行。 */
+export function hapticTap(): void {
+  if (isNative()) { Haptics.impact({ style: ImpactStyle.Light }).catch(() => {}); return }
+  try { navigator.vibrate?.(10) } catch { /* 桌面不支持就算了 */ }
+}
+
 /**
  * 音频解锁：浏览器要求 AudioContext 必须在一次真实用户手势里创建/恢复，
  * 否则一直是 suspended，咔嗒声出不来。挂在第一次触摸上，越早越好。

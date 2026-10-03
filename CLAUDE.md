@@ -67,10 +67,14 @@ frontend/src/
   GhostShield.tsx          # 覆盖层守卫（防止意外 keyboard 弹出）
   toolbarDefaults.ts       # 按键定义与出厂配置
   walkie/                  # 对讲机模式（F-24）：一条流 + 一个输入框，实验特性
-    WalkieApp.tsx          #   根组件：跨会话的流 + 输入框 + 换人面板
+    WalkieApp.tsx          #   根组件：跨会话的流（聊天顺序）+ 输入框 + 选人（左工作区/右频道）
+    Markdown.tsx           #   回复按 Markdown 渲染；paths.ts 判"这段是不是文件路径"
+    FirstRun.tsx           #   首启页（免配置：地址出厂自带）；server.ts 把它装成 profile
     api.ts                 #   /stream /send /upload /refine /summarize /reply
-    tts.ts                 #   回复 → 语音播报；feedback.ts 三种声（whoosh/roger/land）
-    mode.ts / walkie.css   #   （v4.14 删掉了 audio.ts / speech.ts / Tuner.tsx —— 见 WALKIE.md 第十节）
+    tts.ts                 #   回复 → 语音播报；feedback.ts 三种声 + 轻震
+    mode.ts / walkie.css
+  theme.ts                 # 全局主题：跟随系统深浅色（同时切 :root.light 类），App/Terminal 共用
+  # walkie 里已删：audio.ts / speech.ts / Tuner.tsx / replyLinks.tsx —— 见 docs/WALKIE.md 第十/十二节
   windowStatus.ts          # 窗口状态检测（Terminal + TabBar 共享）
   icons.tsx                # 图标组件
   mobileInput.ts           # 移动端键盘映射

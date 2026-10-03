@@ -1,42 +1,34 @@
 // walkie/WalkieApp.tsx — 极简交互版的根组件
 //
-// 【版面只有三个带】
-//   1. 顶栏   —— 这台机器现在有几件活在跑（+ 静音 / 经典）
-//   2. 流     —— **跨会话**的时间线：你说的、它答的、正在跑的。新的在最上面
-//   3. 输入框 —— 一个框 + 附件 + 发送；它下面一行小字写着这句话会寄给谁
+// 【版面】顶栏 / 钉住的提示条 / 流 / 输入框。
+//   流是**聊天的顺序**：老的在上面，新的在最下面，进来就停在最底下，往上翻是历史。
+//   这一版把"新的在最上面"反过来了（见 docs/WALKIE.md 第十二节）——
+//   它本来是按"状态牌"设计的，但你用起来是一段对话，对话就该从底下往上读。
 //
-// 【为什么是这个形态】见 docs/WALKIE.md 第十节。一句话：
-//   AI chat app 的另一端是**它自己的 agent**；这一屏的另一端是**这台机器** ——
-//   你的 shell、你的文件、你已经在跑的那些 claude。所以主屏不该是聊天记录，
-//   而是"我的机器在干什么"。判据只有一条：
-//   **能不能看见你没通过手机下的那些活。**
+// 【钉住的两条提示】不跟着流滚：
+//   · 你不在的时候 —— 回来第一句要回答"有没有我不知道的事"，滚走了就没意义了
+//   · 现在 —— 三件以上在跑时压成一行
 //
-// 【这一版删掉了什么，以及为什么】
-//   · 两排调台条 —— 它在让你回答"哪个目录 / 哪个 shell 窗口"。
-//     路由变成"记住上次 + 一个可改的小标签"，人不需要知道 tmux 的存在。
-//   · 按住说话 + 本机转写 —— 转写质量拼不过输入法，而且那是另一个进程的按钮，
-//     我们本来就按不到。坐着要精确就用输入法；这一屏不自研语音。
-//   · "边说边出字" —— 它唯一的理由是"你在看屏幕"，而这一屏存在的理由恰恰是
-//     "你可以不盯"。两者矛盾，整条删掉（audio.ts / speech.ts 随之删除）。
-//
-// 【状态机只剩下两个】
-//   待机 ──写字/输入法──▶ 发送 ──▶ 这一轮（在跑 / 答完 / 出错），同时流在后台自己滚。
+// 【为什么是这一屏】见 docs/WALKIE.md 第十节。一句话：
+//   AI chat app 的另一端是它自己的 agent；这一屏的另一端是**这台机器**。
+//   判据只有一条：**能不能看见你没通过手机下的那些活。**
 
 import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react'
 import type { WorkspaceBrowserHandle } from '../WorkspaceBrowser'
 import {
-  getStream, getReply, refineText, summarizeText, sendPrompt, uploadAttachment,
+  getStream, getReply, refineText, summarizeText, sendPrompt, uploadAttachment, createWorkspace,
   type StreamEvent, type ReplyState, type WalkieProject, type WalkieStep, type WalkieNow,
 } from './api'
 import {
-  attachAudioUnlock, hapticSnap, isMuted, land, primeFeedback, roger,
+  attachAudioUnlock, hapticSnap, hapticTap, isMuted, land, primeFeedback, roger,
   setMuted as setMutedFeedback, whoosh,
 } from './feedback'
 import { speak, stopSpeaking } from './tts'
-import ReplyText from './replyLinks'
+import Markdown from './Markdown'
 import './walkie.css'
 
 const WorkspaceBrowser = lazy(() => import('../WorkspaceBrowser'))
+const WorkspaceSelector = lazy(() => import('../WorkspaceSelector'))
 
 const POLL_STREAM_MS = 5000
 const POLL_STREAM_BUSY_MS = 1500
@@ -47,10 +39,18 @@ const REFINE_WAIT_MS = 3000
 const FOLD_AT = 700
 /** 一次塞进来这么多字符 = 语音输入法整句提交（打字不会这样），自动精炼 */
 const BURST_CHARS = 6
+
+/** 流的页大小。往上翻就一档一档加大（后端 STREAM_EVENT_CAP 是 240）。 */
+const PAGE_STEPS = [40, 80, 160, 240]
+/** 离底部这么近就算"贴在底部"—— 新消息来了自动跟着走 */
+const NEAR_BOTTOM_PX = 60
+/** 滚到这么靠上就加载更早的 */
+const LOAD_MORE_PX = 80
+
 const STORE_KEY = 'nexus_walkie_state'
-/** 你"认领"过（从这台手机发过话）的频道 —— 只有它们答完了会出声，别的活不吵你 */
+/** 你"认领"过的频道 —— 只有它们答完了会出声，别的活不吵你 */
 const HEARD_KEY = 'nexus_walkie_heard'
-/** 上次你看着这一屏的时刻。回来时用它算"你不在的时候" */
+/** 你看到过的最新一条的 at。回来时用它算"你不在的时候" */
 const SEEN_KEY = 'nexus_walkie_seen'
 const FILE_INPUT_ID = 'walkie-attach'
 /** 离开不到这么久就别提了 —— "你不在的 40 秒里"是废话 */
@@ -82,22 +82,14 @@ const hhmm = (ms: number) => {
   const d = new Date(ms)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
-/** 今天的只报时刻；昨天的报日期 —— 一条流里分得清"刚刚"和"昨天"就够了 */
+/** 今天的只报时刻；昨天的报日期 */
 function stamp(ms: number): string {
   if (!ms) return ''
   const d = new Date(ms)
-  const now = new Date()
-  const sameDay = d.toDateString() === now.toDateString()
+  const sameDay = d.toDateString() === new Date().toDateString()
   return sameDay ? hhmm(ms) : `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')} ${hhmm(ms)}`
 }
-function ago(ms: number): string {
-  const s = Math.max(0, Math.round((Date.now() - ms) / 1000))
-  if (s < 60) return `${s}s`
-  if (s < 3600) return `${Math.round(s / 60)}m`
-  if (s < 86400) return `${Math.round(s / 3600)}h`
-  return `${Math.round(s / 86400)}d`
-}
-/** 一段时长，用来读："你不在的 2 小时里"。中英混排时长写中文更像人话。 */
+/** 一段时长，用来读："你不在的 2 小时里" */
 function span(ms: number): string {
   const m = Math.round(ms / 60_000)
   if (m < 60) return `${Math.max(1, m)} 分钟`
@@ -120,6 +112,11 @@ const IconClip = () => (
 const IconSend = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M12 19V5M6 11l6-6 6 6" />
+  </svg>
+)
+const IconExpand = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M9 4H4v5M15 20h5v-5M20 9V4h-5M4 15v5h5" />
   </svg>
 )
 const IconChevron = () => (
@@ -150,7 +147,6 @@ interface Round {
   now: WalkieNow | null
   summary: string
   err: string
-  via: string | null
 }
 
 export default function WalkieApp({ token, onExit }: { token: string; onExit?: () => void }) {
@@ -159,9 +155,13 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   const [runningCount, setRunningCount] = useState(0)
   const [loadErr, setLoadErr] = useState('')
   const [tmuxOk, setTmuxOk] = useState(true)
+  const [limit, setLimit] = useState(PAGE_STEPS[0])
 
   const [target, setTarget] = useState('')          // "project:window"
   const [picker, setPicker] = useState(false)
+  const [pickWs, setPickWs] = useState('')          // 选人面板左栏当前高亮的工作区
+  const [adding, setAdding] = useState(false)       // 目录选择器（新增工作区）
+  const [justCreated, setJustCreated] = useState('')
 
   const [draft, setDraft] = useState('')
   const [rawText, setRawText] = useState('')
@@ -169,37 +169,47 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   const [refining, setRefining] = useState(false)
   const [files, setFiles] = useState<{ path: string; name: string }[]>([])
   const [uploading, setUploading] = useState(false)
+  const [editing, setEditing] = useState(false)     // 全屏编辑
 
   const [round, setRound] = useState<Round | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [openIds, setOpenIds] = useState<Set<string>>(() => new Set())
+  /** 刚点中的那条消息 —— 闪一下，让你看清"现在跟谁说话" */
+  const [flash, setFlash] = useState('')
+  const flashTimer = useRef<number | null>(null)
 
   const [err, setErr] = useState('')
   const [speaking, setSpeaking] = useState<string | null>(null)
   const [muted, setMutedState] = useState(() => isMuted())
   const [browser, setBrowser] = useState<{ root: string; file?: string } | null>(null)
-  /** 上次你看着这一屏的时刻（见 SEEN_AT_BOOT 里为什么在模块层读）；>0 才显示"你不在的时候" */
   const [since] = useState(SEEN_AT_BOOT)
   const [absentRead, setAbsentRead] = useState(false)
+  const [digest, setDigest] = useState('')
 
-  const streamRef = useRef<HTMLDivElement | null>(null)
+  // 滚动：贴在底部就跟着走，翻上去看历史时不打扰
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const [atBottom, setAtBottom] = useState(true)
+  const [missed, setMissed] = useState(0)
+  const lastLenRef = useRef(0)
+
   const roundRef = useRef<Round | null>(null)
   const draftRef = useRef('')
   const targetRef = useRef('')
-  /** onPaste 先于 onInput 触发：用它把"粘贴"和"语音提交"这两件同形的事分开 */
+  const limitRef = useRef(limit)
   const pastedRef = useRef(false)
   const pollRef = useRef<number | null>(null)
   const browserRef = useRef<WorkspaceBrowserHandle | null>(null)
-  /** 你认领过的频道 */
   const heardRef = useRef<Set<string>>(new Set())
-  /** 频道 -> 最近念过的那条结论的 id。用来判断"新出了一条" */
   const spokenRef = useRef<Map<string, string>>(new Map())
   const seededRef = useRef(false)
+  const digestAskedRef = useRef(false)
+  const digestSpokenRef = useRef(false)
   roundRef.current = round
   draftRef.current = draft
   targetRef.current = target
+  limitRef.current = limit
 
-  // ── 目标：记住上次，不让你每次重新选 ─────────────────────
+  // ── 目标 ────────────────────────────────────────────────
   const findChannel = useCallback((key: string) => {
     for (const p of projects) {
       const c = p.channels.find((x) => `${p.name}:${x.index}` === key)
@@ -210,16 +220,21 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   const cur = findChannel(target)
   const blocked = !!cur && cur.channel.kind !== 'claude'
 
-  // ── 流：主屏的内容 ──────────────────────────────────────
+  // ── 流 ──────────────────────────────────────────────────
   const pollStream = useCallback(async () => {
     try {
-      const s = await getStream(token)
+      const s = await getStream(token, limitRef.current)
       setProjects(s.projects)
       setEvents(s.events)
       setRunningCount(s.running)
       setTmuxOk(true)
       setLoadErr('')
-      // 首帧：没选过就落到主 session 的活动窗口；上次那个没了就顺延
+      // 新建成的工作区一出现就选中它
+      if (justCreated) {
+        const hit = s.projects.flatMap((p) => p.channels.map((c) => ({ p, c }))).find((x) => x.c.name === justCreated)
+        if (hit) { setTarget(`${hit.p.name}:${hit.c.index}`); setJustCreated('') }
+      }
+      // 没选过就落到主 session 的活动窗口；上次那个没了就顺延
       if (!targetRef.current || !s.projects.some((p) => p.channels.some((c) => `${p.name}:${c.index}` === targetRef.current))) {
         const p = s.projects[0]
         const c = p?.channels.find((x) => x.kind === 'claude' && x.active) ?? p?.channels.find((x) => x.kind === 'claude') ?? p?.channels[0]
@@ -229,14 +244,12 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
       setLoadErr(e instanceof Error ? e.message : String(e))
       setTmuxOk(false)
     }
-  }, [token])
+  }, [token, justCreated])
 
   const busy = round?.state === 'waiting'
   useEffect(() => {
     let alive = true
-    // **切到后台就停**。原来是不管有没有人在看，每 5 秒问一次服务端 —— 装在手机上
-    // 就是一个常驻的唤醒源 + 电台占用，一天下来是实打实的电。回来时立刻补一次，
-    // 所以"塞回兜里再掏出来"看到的一定是新的。
+    // 切到后台就停 —— 装在手机上就是常驻唤醒源 + 电台占用。回来立刻补一次。
     const tick = () => { if (alive && !document.hidden) void pollStream() }
     tick()
     const t = window.setInterval(tick, busy ? POLL_STREAM_BUSY_MS : POLL_STREAM_MS)
@@ -248,11 +261,11 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   useEffect(() => { void attachAudioUnlock() }, [])
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); void stopSpeaking() }, [])
 
-  // 落盘：目标 + 草稿。锁屏或 WebView 被回收之后回来，都还在。
+  // 落盘：目标 + 草稿。锁屏 / 退出 / WebView 被回收之后回来，字还在。
   useEffect(() => {
     const t = setTimeout(() => {
       try { localStorage.setItem(STORE_KEY, JSON.stringify({ last: target, draft, raw: rawText, refined })) } catch { /* 隐私模式 */ }
-    }, 400)
+    }, 250)
     return () => clearTimeout(t)
   }, [target, draft, rawText, refined])
 
@@ -264,6 +277,10 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
       if (s.last) setTarget(s.last)
       if (s.draft) { setDraft(s.draft); setRawText(s.raw || ''); setRefined(!!s.refined) }
     } catch { /* 坏的就当作没有 */ }
+    try {
+      const raw = localStorage.getItem(HEARD_KEY)
+      if (raw) heardRef.current = new Set(JSON.parse(raw) as string[])
+    } catch { /* 坏的当作没有 */ }
   }, [])
 
   // 文件浏览器挂载后，把要打开的文件交给它
@@ -279,14 +296,14 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     tick()
   }, [browser])
 
-  const openBrowser = (cwd: string, file?: string) => {
+  const openBrowser = useCallback((cwd: string, file?: string) => {
     const root = (cwd || '').replace(/\/+$/, '')
     if (!root) { setErr('这一格还没有工作目录'); return }
     if (!file) { setBrowser({ root }); return }
     const abs = file.startsWith('/') ? file : `${root}/${file.replace(/^\.\//, '')}`
     const dir = abs.slice(0, abs.lastIndexOf('/')) || root
     setBrowser({ root: dir, file: abs })
-  }
+  }, [])
 
   // ── 精炼 ────────────────────────────────────────────────
   const refineNow = useCallback((raw: string) => {
@@ -301,34 +318,27 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
       .finally(() => setRefining(false))
   }, [token])
 
-  /**
-   * 输入框里进来的字。**输入法的语音键走的就是这里。**
-   *
-   * 判据是"一次性塞进来一长串"：语音输入是一次提交整句，打字是一下一个字符。
-   * 打字绝不会一次 +6 个字符，所以这条几乎不会误伤。万一误伤也有「还原」。
-   */
+  /** 输入框里进来的字。**输入法的语音键走的就是这里。** */
   const onDraftInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const next = e.target.value
     const burst = next.length - draft.length
     const pasted = pastedRef.current
     pastedRef.current = false
     setDraft(next)
-    // 粘贴也是"一次进来一大串"，但它和语音是两回事：**粘进来的东西本来就该原样发出去**
-    // （一段日志、一份需求、一个路径）。所以粘贴这一下不精炼 —— 靠 paste 事件区分，
-    // 输入法的语音提交不会触发它。
+    // 粘贴也是"一次进来一大串"，但它和语音是两回事：粘进来的本来就该原样发出去。
     if (burst >= BURST_CHARS && next.trim() && !pasted) { setRawText(next.trim()); refineNow(next.trim()) }
   }
 
   // ── 附件 ────────────────────────────────────────────────
   const onPickFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(e.target.files || [])
-    e.target.value = ''                        // 同一个文件能再选一次
+    e.target.value = ''
     if (!picked.length) return
     setUploading(true); setErr('')
     try {
       for (const f of picked) {
         const up = await uploadAttachment(token, f)
-        setFiles((cur) => [...cur, up])
+        setFiles((c) => [...c, up])
       }
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : String(ex))
@@ -339,72 +349,37 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   const startPoll = useCallback((r0: Round) => {
     if (pollRef.current) clearInterval(pollRef.current)
     const tick = async () => {
-      // 后台不追。这一轮跑完时反正会进流，回来那一下的流刷新就把它带回来了 ——
-      // 而 1.2 秒一次的轮询留在后台，是这一屏最贵的一笔电。
+      // 后台不追。这一轮跑完时反正会进流，回来那一下的流刷新就把它带回来了。
       if (document.hidden) return
       let r: ReplyState
       try { r = await getReply(token, r0.project, r0.window) } catch { return }
-      const cur = roundRef.current
-      if (!cur || cur.key !== r0.key) return
+      const now = roundRef.current
+      if (!now || now.key !== r0.key) return
       setElapsed(Math.round((Date.now() - r0.startedAt) / 1000))
       if (r.done) {
         if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
-        setRound({ ...cur, state: 'done', reply: r, steps: r.steps || cur.steps, now: null, via: r.via || null })
-        roger()                                 // 他答完了 —— 一声"通话结束"
+        setRound({ ...now, state: 'done', reply: r, steps: r.steps || now.steps, now: null })
+        roger()
         void autoSpeak(r.text, r0.key)
         return
       }
       if (r.state === 'timeout') {
         if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
-        setRound({ ...cur, state: 'timeout', err: r.error || '没等到结果' })
+        setRound({ ...now, state: 'timeout', err: r.error || '没等到结果' })
         return
       }
-      setRound({ ...cur, steps: r.steps || cur.steps, now: r.now ?? null })
+      setRound({ ...now, steps: r.steps || now.steps, now: r.now ?? null })
       if (Date.now() - r0.startedAt > WAIT_LIMIT_MS) {
         if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
-        setRound({ ...cur, state: 'timeout', err: '等了 10 分钟还没答完。切到经典界面看看它卡在哪了。' })
+        setRound({ ...now, state: 'timeout', err: '等了 10 分钟还没答完。切到经典界面看看它卡在哪了。' })
       }
     }
     pollRef.current = window.setInterval(tick, POLL_ROUND_MS)
     void tick()
   }, [token])
 
-  /**
-   * 屏上真正要画的东西 = 流 + 本地这一轮。
-   * 去重规则：本地这一轮涉及的频道，它在发送时刻之后的那些服务端事件全部丢掉 ——
-   * 否则同一句话会在"正在跑"卡片和下面的流里各出现一次。
-   */
-  const shown = useMemo(() => {
-    const cut = round ? round.startedAt - 3000 : 0
-    return events.filter((e) => !(round && e.ch === round.key && e.at >= cut))
-  }, [events, round])
-  const runningItems = shown.filter((e) => e.running)
-  // 只画最近这些 —— 这一屏是"现在怎么样"，不是档案。往下翻是经典界面的事。
-  const restItems = shown.filter((e) => !e.running).slice(0, 14)
-
-  /** 你不在的时候，这台机器上有什么落了地 */
-  const absent = useMemo(
-    () => (since ? events.filter((e) => e.kind === 'it' && e.at > since) : []),
-    [events, since],
-  )
-  const showAbsent = !absentRead && since > 0 && Date.now() - since > ABSENT_MIN_MS && absent.length > 0
-
-  /**
-   * 一条"现在"：把正在跑的那几件压成一行。
-   *
-   * 这是评审里"流没有摘要层"的一半。另一半（你不在的时候）要 LLM 写，
-   * 这一半**不需要** —— 机器现在在干什么本来就是确定的，让人自己从三张卡里
-   * 拼出来才是多余的。三件以上才值得占这一行。
-   */
-  const nowLine = useMemo(() => {
-    if (runningItems.length < 2) return ''
-    return runningItems
-      .map((e) => `${e.path} ${e.text.replace(/\s+/g, ' ').slice(0, 24)}`)
-      .join(' · ')
-  }, [runningItems])
-
   const play = useCallback(async (text: string, rate: number, which: string) => {
-    if (!text) return
+    if (!text || !which) return
     await stopSpeaking()
     setSpeaking(which)
     try { await speak(text, { rate }) } finally { setSpeaking((c) => (c === which ? null : c)) }
@@ -415,28 +390,14 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     try {
       const s = await summarizeText(token, text)
       // 摘要降级时后端给的是"截前 120 字"，那**不是摘要** —— 是同一段话的残句。
-      // 只认真正的摘要：没有就没有，回复自己就是那段话。
       const real = s.summarized ? s.text : ''
       setRound((c) => (c && c.key === key ? { ...c, summary: real } : c))
-      // 太长就不自动念 —— 自动念一长段是最烦人的那种"贴心"
       const say = real || (text.length <= 400 ? text : '')
       if (say) await play(say, real ? 1.12 : 1.06, real ? 'summary' : 'full')
     } catch { /* 摘要失败就静默，你还能点「读一遍」 */ }
   }, [token, play])
 
   // ── 回话走声音 ──────────────────────────────────────────
-  // 这一屏存在的理由就是**你可以不盯着它**。所以结论必须能听见，
-  // 否则"把手机塞回兜里还能用"就是一句空话。
-  //
-  // 出声的范围要拿捏：只念**你认领过的频道**（你从这台手机跟他说过话的那些）。
-  // 机器上别的活不出声 —— 那不是"没做完的功能"，那是"别吵我"。
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(HEARD_KEY)
-      if (raw) heardRef.current = new Set(JSON.parse(raw) as string[])
-    } catch { /* 坏的当作没有 */ }
-  }, [])
-
   const rememberHeard = useCallback((key: string) => {
     if (!key || heardRef.current.has(key)) return
     heardRef.current.add(key)
@@ -449,7 +410,7 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
       const real = s.summarized ? s.text : ''
       const say = real || (e.text.length <= 400 ? e.text : '')
       if (say) await play(say, real ? 1.12 : 1.06, e.id)
-    } catch { /* 念不出来就算了，你还能点「读一遍」 */ }
+    } catch { /* 念不出来就算了 */ }
   }, [token, play])
 
   useEffect(() => {
@@ -457,10 +418,9 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     const newest = new Map<string, StreamEvent>()
     for (const e of events) {
       if (e.kind !== 'it') continue
-      const cur = newest.get(e.ch)
-      if (!cur || e.at > cur.at) newest.set(e.ch, e)
+      const prev = newest.get(e.ch)
+      if (!prev || e.at > prev.at) newest.set(e.ch, e)
     }
-    // 首帧只记不念 —— 一打开就把历史念一遍是最烦的那种"贴心"
     if (!seededRef.current) {
       for (const [ch, e] of newest) spokenRef.current.set(ch, e.id)
       seededRef.current = true
@@ -472,56 +432,10 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
       if (!prev || prev === e.id) continue            // 第一次见 / 没有新的
       if (!heardRef.current.has(ch)) continue         // 不是你认领的频道，别吵你
       if (roundRef.current?.key === ch) continue      // 你自己那一轮由 autoSpeak 念
-      if (Date.now() - e.at > SPEAK_MAX_AGE_MS) continue   // 太旧的是补报历史，不是"刚办完"
+      if (Date.now() - e.at > SPEAK_MAX_AGE_MS) continue
       void speakEvent(e)
     }
   }, [events, speakEvent])
-
-  /**
-   * 「你不在的时候」那一句。只问一次 LLM —— 它是这一屏唯一一处"要动脑子"的摘要，
-   * 而且回来的那句要**念出来**（你不在这段时间发生的事，本来就该用耳朵收）。
-   */
-  const [digest, setDigest] = useState('')
-  const digestAskedRef = useRef(false)
-  const digestSpokenRef = useRef(false)
-  useEffect(() => {
-    if (!showAbsent || digestAskedRef.current) return
-    digestAskedRef.current = true
-    const raw = absent.slice(0, 8).map((e) => `· ${e.path}：${e.text.slice(0, 400)}`).join('\n')
-    summarizeText(token, raw)
-      .then((s) => { if (s.summarized && s.text) setDigest(s.text) })
-      .catch(() => { /* 没有摘要就只报条数，绝不编一句 */ })
-  }, [showAbsent, absent, token])
-
-  useEffect(() => {
-    if (!digest || digestSpokenRef.current) return
-    digestSpokenRef.current = true
-    void play(digest, 1.08, 'absent')
-  }, [digest, play])
-
-  /** 顶栏那个「N 个在跑」点一下 = 让它用一句话告诉你机器现在在干什么 */
-  const speakOverview = useCallback(() => {
-    if (speaking === 'overview') { void stopSpeaking(); setSpeaking(null); return }
-    const line = runningItems.length
-      ? `${runningItems.length} 件在跑。` + runningItems
-        .map((e) => `${e.path}：${e.text.replace(/\s+/g, ' ').slice(0, 40)}`)
-        .join('；')
-      : '机器上没有人在干活。'
-    void play(line, 1.06, 'overview')
-  }, [runningItems, speaking, play])
-
-  // 把水位线推到"你看到过的最新一条"。**只在页面可见时推** —— 切到后台的 WebView
-  // 还在跑 JS，那时候收到的东西你没看见，不该算数。
-  useEffect(() => {
-    if (!events.length || document.hidden) return
-    const maxAt = events.reduce((m, e) => Math.max(m, e.at), 0)
-    if (maxAt <= 0) return
-    try {
-      if (maxAt > (Number(localStorage.getItem(SEEN_KEY)) || 0)) {
-        localStorage.setItem(SEEN_KEY, String(maxAt))
-      }
-    } catch { /* 隐私模式 */ }
-  }, [events])
 
   const deliver = useCallback(async (override?: string) => {
     if (!cur) { setErr('还没选好寄给谁'); return }
@@ -529,34 +443,28 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
       setErr(`「${cur.channel.name}」里跑的不是 Claude —— 这句话发过去会被当命令执行，所以拦住了。`)
       return
     }
-    // 精炼还没落地就等一下（最多 3 秒）；宁可发原文，也不让你干等
     if (refining) await new Promise((r) => setTimeout(r, REFINE_WAIT_MS))
     const body = (override ?? draftRef.current).trim()
     if (!body) return
+    const withFiles = files.length ? `${body}\n\n${files.map((f) => `[附件] ${f.path}`).join('\n')}` : body
 
-    // 附件：把绝对路径写进那句话里。Claude 读一个路径就够了，不需要发明上传协议。
-    const withFiles = files.length
-      ? `${body}\n\n${files.map((f) => `[附件] ${f.path}`).join('\n')}`
-      : body
-
-    whoosh()
-    hapticSnap()
-    setErr('')
-    rememberHeard(targetRef.current)   // 认领这个频道：它以后答完了会出声
+    whoosh(); hapticSnap(); setErr('')
+    rememberHeard(targetRef.current)
     setAbsentRead(true)
+    setEditing(false)
     const r0: Round = {
       key: targetRef.current, project: cur.project.name, window: cur.channel.index,
       sent: body, startedAt: Date.now(), state: 'waiting',
-      reply: null, steps: [], now: null, summary: '', err: '', via: null,
+      reply: null, steps: [], now: null, summary: '', err: '',
     }
     setRound(r0); setElapsed(0)
     setDraft(''); setRawText(''); setRefined(false); setFiles([])
-
     try {
       await sendPrompt(token, cur.project.name, cur.channel.index, withFiles)
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-      setRound({ ...r0, state: 'timeout', err: e instanceof Error ? e.message : String(e) })
+      const msg = e instanceof Error ? e.message : String(e)
+      setErr(msg)
+      setRound({ ...r0, state: 'timeout', err: msg })
       return
     }
     startPoll(r0)
@@ -564,8 +472,133 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
 
   const toggleMute = () => { const next = !muted; setMutedFeedback(next); setMutedState(next) }
 
-  // ── 渲染 ────────────────────────────────────────────────
+  // ── 派生 ────────────────────────────────────────────────
   const canSend = !!draft.trim() && !busy && !blocked
+
+  /** 屏上真正要画的东西 = 流 + 本地这一轮（去重：这一轮涉及的频道，发送时刻之后的服务端事件丢掉） */
+  const shown = useMemo(() => {
+    const cut = round ? round.startedAt - 3000 : 0
+    return events.filter((e) => !(round && e.ch === round.key && e.at >= cut))
+  }, [events, round])
+  // **升序**：老 → 新，新的在底下。本地那一轮是最新的，永远排在最后。
+  const items = useMemo(() => [...shown].sort((a, b) => a.at - b.at), [shown])
+  const runningItems = items.filter((e) => e.running)
+  const showAbsent = !absentRead && since > 0 && Date.now() - since > ABSENT_MIN_MS && items.some((e) => e.kind === 'it' && e.at > since)
+  const absentCount = since ? items.filter((e) => e.kind === 'it' && e.at > since).length : 0
+
+  /** 一条"现在"：把正在跑的那几件压成一行（三件以上才值得占这一行） */
+  const nowLine = useMemo(() => {
+    if (runningItems.length < 2) return ''
+    return runningItems.map((e) => `${e.path} ${e.text.replace(/\s+/g, ' ').slice(0, 24)}`).join(' · ')
+  }, [runningItems])
+
+  const speakOverview = useCallback(() => {
+    if (speaking === 'overview') { void stopSpeaking(); setSpeaking(null); return }
+    const line = runningItems.length
+      ? `${runningItems.length} 件在跑。` + runningItems.map((e) => `${e.path}：${e.text.replace(/\s+/g, ' ').slice(0, 40)}`).join('；')
+      : '机器上没有人在干活。'
+    void play(line, 1.06, 'overview')
+  }, [runningItems, speaking, play])
+
+  // 「你不在的时候」那一句：只问一次 LLM，回来的那句要念出来
+  useEffect(() => {
+    if (!showAbsent || digestAskedRef.current) return
+    digestAskedRef.current = true
+    const raw = items.filter((e) => e.kind === 'it' && e.at > since).slice(-8)
+      .map((e) => `· ${e.path}：${e.text.slice(0, 400)}`).join('\n')
+    summarizeText(token, raw)
+      .then((s) => { if (s.summarized && s.text) setDigest(s.text) })
+      .catch(() => { /* 没有摘要就只报条数，绝不编一句 */ })
+  }, [showAbsent, items, since, token])
+
+  useEffect(() => {
+    if (!digest || digestSpokenRef.current) return
+    digestSpokenRef.current = true
+    void play(digest, 1.08, 'absent')
+  }, [digest, play])
+
+  // 把水位线推到"你看到过的最新一条"。**只在页面可见时推**。
+  useEffect(() => {
+    if (!events.length || document.hidden) return
+    const maxAt = events.reduce((m, e) => Math.max(m, e.at), 0)
+    if (maxAt <= 0) return
+    try {
+      if (maxAt > (Number(localStorage.getItem(SEEN_KEY)) || 0)) localStorage.setItem(SEEN_KEY, String(maxAt))
+    } catch { /* 隐私模式 */ }
+  }, [events])
+
+  // ── 滚动：新的在底下，贴在底部就跟着走 ────────────────────
+  const scrollToBottom = useCallback((smooth = false) => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
+  }, [])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const grew = items.length + (round ? 1 : 0) - lastLenRef.current
+    lastLenRef.current = items.length + (round ? 1 : 0)
+    if (grew <= 0) return
+    if (atBottom) scrollToBottom()
+    else setMissed((c) => c + grew)
+  }, [items.length, round, atBottom, scrollToBottom])
+
+  // 输入框跟着内容长高（到上限就内部滚）。textarea 不会自己长 ——
+  // 不写这段的话，恢复回来的长草稿只露出上面两行，看着像被截断了。
+  // 全屏编辑时不干预：那里它本来就该撑满。
+  useEffect(() => {
+    if (editing) return
+    const ta = document.getElementById('walkie-draft') as HTMLTextAreaElement | null
+    if (!ta) return
+    ta.style.height = 'auto'
+    ta.style.height = `${Math.min(ta.scrollHeight, 132)}px`
+  }, [draft, editing])
+
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX
+    setAtBottom(nearBottom)
+    if (nearBottom) setMissed(0)
+    // 翻到顶了就多要点历史
+    if (el.scrollTop < LOAD_MORE_PX) {
+      setLimit((l) => {
+        const i = PAGE_STEPS.indexOf(l)
+        return i >= 0 && i < PAGE_STEPS.length - 1 ? PAGE_STEPS[i + 1] : l
+      })
+    }
+  }, [])
+
+  // ── 换聊天对象 ──────────────────────────────────────────
+  const pick = (key: string) => { setTarget(key); setPicker(false) }
+
+  /**
+   * 点一条消息 = "我要回复给这个人"。
+   *
+   * 聊天软件里这是最自然的一下：你看着谁说的话，就是在跟谁说话。所以点它
+   * 就把底下的收件人切过去（条子上的地址会跟着变，加上一下轻震和一闪）。
+   * **展开全文是另一件事，有自己的按钮** —— 一个手势干两件事，就得开始猜了。
+   */
+  const replyTo = useCallback((key: string, id: string) => {
+    setTarget(key)
+    hapticTap()
+    setFlash(id)
+    if (flashTimer.current) clearTimeout(flashTimer.current)
+    flashTimer.current = window.setTimeout(() => setFlash(''), 900)
+  }, [])
+
+  const onCreated = useCallback(async (path: string, shellType: 'claude' | 'bash', profile?: string) => {
+    setAdding(false)
+    try {
+      const r = await createWorkspace(token, path, shellType, profile)
+      setJustCreated(r.name)
+      setPicker(false)
+      setTimeout(() => { void pollStream() }, 1200)   // 给它一点时间起来
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }, [token, pollStream])
 
   const story = (rows: WalkieStep[]) => {
     const chapters: { say?: WalkieStep; tools: WalkieStep[] }[] = []
@@ -601,11 +634,63 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     ? `${cur.project.path || cur.project.name}${cur.project.channels.length > 1 ? ` · ${cur.channel.name}` : ''}`
     : '选一个地方'
 
+  const composer = (full: boolean) => (
+    <>
+      {files.length > 0 && (
+        <div className="walkie-files">
+          {files.map((f) => (
+            <button key={f.path} type="button" className="walkie-file"
+              onClick={() => setFiles((c) => c.filter((x) => x.path !== f.path))} title="点一下移除">
+              📎 {f.name}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="walkie-box">
+        <textarea
+          id="walkie-draft"
+          className="walkie-input"
+          value={draft}
+          rows={1}
+          onChange={onDraftInput}
+          onPaste={() => { pastedRef.current = true }}
+          onFocus={() => { primeFeedback(); setErr('') }}
+          placeholder={full ? '说点什么…' : '说点什么…'}
+        />
+        <input id={FILE_INPUT_ID} type="file" multiple hidden onChange={onPickFiles} />
+        <button type="button" className="walkie-roundbtn" disabled={uploading}
+          onClick={() => document.getElementById(FILE_INPUT_ID)?.click()} title="附件">
+          {uploading ? '…' : <IconClip />}
+        </button>
+        {full ? null : (
+          <>
+            <button type="button" className="walkie-roundbtn" title="全屏编辑"
+              onClick={() => { setEditing(true); setTimeout(() => document.getElementById('walkie-draft')?.focus(), 60) }}>
+              <IconExpand />
+            </button>
+            <button type="button" className="walkie-sendbtn" disabled={!canSend}
+              onClick={() => void deliver()} title="发送">
+              <IconSend />
+            </button>
+          </>
+        )}
+      </div>
+      {(refined || refining) && (
+        <div className="walkie-refine">
+          {refining ? '精炼中…' : (
+            <>
+              已精炼
+              <button type="button" className="walkie-mini" onClick={() => { setDraft(rawText); setRefined(false) }}>还原</button>
+            </>
+          )}
+        </div>
+      )}
+    </>
+  )
+
   return (
     <div className="walkie-root">
       <div className="walkie-top">
-        {/* 点一下 = 让它用一句话说机器现在在干什么。这是"兜里能用"的第二半：
-            流是给眼睛的，这一句是给耳朵的。 */}
         <button type="button" className="walkie-top-title" onClick={speakOverview}>
           <span className="walkie-dot" style={{ background: tmuxOk ? 'var(--nexus-success)' : 'var(--nexus-error)' }} />
           我的机器{runningCount > 0 ? ` · ${runningCount} 个在跑` : ''}
@@ -619,81 +704,102 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
         </div>
       </div>
 
-      {/* 流：这台机器上**所有**在跑的 claude，不只是从手机上发出去的那些。
-          「正在跑」钉在最上面 —— 那是这一屏最要紧的一件事。 */}
-      <div className="walkie-stage" ref={streamRef}>
-        <div className="walkie-stage-inner">
-          {/* 你不在的时候。这一屏是状态牌，第一句就该回答"有没有我不知道的事"——
-              而且要回答"是什么事"，不是只报个数（只报个数等于让你自己去翻下面那堆）。 */}
-          {showAbsent && (
-            <div className="walkie-absent">
-              <b>你不在的 {span(Date.now() - since)}里 · {absent.length} 件办完了</b>
-              {digest && <p className="walkie-absent-say">{digest}</p>}
-              <div className="walkie-absent-acts">
-                {digest && (
-                  <button type="button" className="walkie-mini"
-                    onClick={() => (speaking === 'absent' ? (void stopSpeaking(), setSpeaking(null)) : void play(digest, 1.08, 'absent'))}>
-                    {speaking === 'absent' ? '⏹ 停止' : '🔊 再听一遍'}
-                  </button>
-                )}
-                <button type="button" className="walkie-mini" onClick={() => setAbsentRead(true)}>知道了</button>
-              </div>
-            </div>
-          )}
+      {/* 钉住的两条：滚流的时候它们不动 —— 前者回答"有没有我不知道的事"，
+          后者回答"机器现在在干什么"，两件都不该被滚走。 */}
+      {showAbsent && (
+        <div className="walkie-absent">
+          <b>你不在的 {span(Date.now() - since)}里 · {absentCount} 件办完了</b>
+          {digest && <p className="walkie-absent-say">{digest}</p>}
+          <div className="walkie-absent-acts">
+            {digest && (
+              <button type="button" className="walkie-mini"
+                onClick={() => (speaking === 'absent' ? (void stopSpeaking(), setSpeaking(null)) : void play(digest, 1.08, 'absent'))}>
+                {speaking === 'absent' ? '⏹ 停止' : '🔊 再听一遍'}
+              </button>
+            )}
+            <button type="button" className="walkie-mini" onClick={() => setAbsentRead(true)}>知道了</button>
+          </div>
+        </div>
+      )}
+      {nowLine && (
+        <button type="button" className="walkie-nowline" onClick={speakOverview}>
+          <span className="walkie-now-dot" />
+          <span>{runningItems.length} 件在跑 · {nowLine}</span>
+        </button>
+      )}
 
-          {/* 现在：把在跑的那几件压成一行。三件以上才占地方，两件以下那两张卡自己就说清了。 */}
-          {nowLine && (
-            <button type="button" className="walkie-nowline" onClick={speakOverview}>
-              <span className="walkie-now-dot" />
-              <span>{runningItems.length} 件在跑 · {nowLine}</span>
-            </button>
-          )}
+      <div className="walkie-stage" ref={scrollRef} onScroll={onScroll}>
+        <div className="walkie-stage-inner">
+          {items.map((e) => e.kind === 'you' ? (
+            <div key={e.id}
+              className={`walkie-you${e.ch === target ? ' is-target' : ''}${flash === e.id ? ' is-flash' : ''}`}
+              onClick={() => replyTo(e.ch, e.id)}>
+              <Markdown text={e.text} onOpen={(p) => openBrowser(e.cwd, p)} />
+              <span className="walkie-at">
+                {e.running && <span className="walkie-dot-live" />}
+                {stamp(e.at)} · {e.name}
+              </span>
+            </div>
+          ) : (
+            <div key={e.id}
+              className={`walkie-it${e.running ? ' is-running' : ''}${e.ch === target ? ' is-target' : ''}${flash === e.id ? ' is-flash' : ''}`}
+              onClick={() => replyTo(e.ch, e.id)}>
+              <Markdown text={openIds.has(e.id) ? e.text : fold(e.text)} onOpen={(p) => openBrowser(e.cwd, p)} />
+              {e.text.length > FOLD_AT && (
+                <button type="button" className="walkie-more"
+                  onClick={(ev) => {
+                    ev.stopPropagation()      // 展开是展开，别顺手把收件人也换了
+                    setOpenIds((s) => { const n = new Set(s); if (n.has(e.id)) n.delete(e.id); else n.add(e.id); return n })
+                  }}>
+                  {openIds.has(e.id) ? '收起来' : '展开全文'}
+                </button>
+              )}
+              <span className="walkie-at">
+                {speaking === e.id && <span className="walkie-speaking">🔊 </span>}
+                {stamp(e.at)} · {e.name}
+              </span>
+              {openIds.has(e.id) && (
+                <div className="walkie-inline" onClick={(ev) => ev.stopPropagation()}>
+                  <button type="button" className="walkie-mini"
+                    onClick={() => (speaking === e.id ? (void stopSpeaking(), setSpeaking(null)) : void play(e.text, 1.06, e.id))}>
+                    {speaking === e.id ? '⏹ 停止' : '▶ 读一遍'}
+                  </button>
+                  <button type="button" className="walkie-mini" onClick={() => openBrowser(e.cwd)}>看文件</button>
+                </div>
+              )}
+            </div>
+          ))}
 
           {round && (
             <div className={`walkie-round${round.state === 'waiting' ? ' is-live' : ''}`}>
               <div className="walkie-card-label">
                 <span className="walkie-round-head">
                   {round.state === 'waiting'
-                    ? <><span className="walkie-rec"><i />正在跑</span></>
+                    ? <span className="walkie-rec"><i />正在跑</span>
                     : round.state === 'done' ? '它说' : '没跑成'}
                   <em className="walkie-at">{displayPath(round.project, projects)} · {stamp(round.startedAt)}</em>
                 </span>
                 {round.state === 'waiting' && <span className="walkie-at">{elapsed}s</span>}
               </div>
 
-              <p className="walkie-said">{round.sent}</p>
+              <Markdown text={round.sent} className="walkie-said" />
 
-              {round.state === 'waiting' && (
-                round.steps.length ? story(round.steps.slice(-18)) : (
-                  <p className="walkie-waiting-line">已经投递，等它开口…</p>
-                )
-              )}
-
+              {round.state === 'waiting' && (round.steps.length ? story(round.steps.slice(-18))
+                : <p className="walkie-waiting-line">已经投递，等它开口…</p>)}
               {round.state === 'waiting' && (
                 <div className="walkie-now">
                   <span className="walkie-now-dot" />
                   <span className="walkie-now-text">
-                    {round.now
-                      ? `${NOW_VERB[round.now.kind] || '正在处理'}${round.now.kind === 'think' ? '…' : ` ${round.now.label}`}`
-                      : '正在连接…'}
+                    {round.now ? `${NOW_VERB[round.now.kind] || '正在处理'}${round.now.kind === 'think' ? '…' : ` ${round.now.label}`}` : '正在连接…'}
                   </span>
                 </div>
               )}
 
               {round.state === 'done' && round.reply?.text && (
-                <div className="walkie-reply">
-                  <ReplyText
-                    text={fold(round.reply.text)}
-                    onOpen={(f) => {
-                      const cwd = findChannel(round.key)?.channel.cwd || ''
-                      openBrowser(cwd, f)
-                    }}
-                  />
-                </div>
+                <Markdown text={fold(round.reply.text)}
+                  onOpen={(f) => openBrowser(findChannel(round.key)?.channel.cwd || '', f)} />
               )}
-              {round.state === 'done' && !round.reply?.text && (
-                <p className="walkie-dim">（这一轮没有说话，可能只动了文件）</p>
-              )}
+              {round.state === 'done' && !round.reply?.text && <p className="walkie-dim">（这一轮没有说话，可能只动了文件）</p>}
               {round.state === 'done' && (
                 <div className="walkie-inline">
                   {round.summary && (
@@ -710,64 +816,27 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
                   )}
                   <button type="button" className="walkie-mini"
                     onClick={() => openBrowser(findChannel(round.key)?.channel.cwd || '')}>看文件</button>
+                  {round.reply?.text && round.reply.text.length > FOLD_AT && (
+                    <button type="button" className="walkie-mini"
+                      onClick={() => openBrowser(findChannel(round.key)?.channel.cwd || '')}>看长文去文件</button>
+                  )}
                 </div>
               )}
               {(round.err || round.state === 'timeout') && <p className="walkie-hint-bad">{round.err}</p>}
             </div>
           )}
 
-          {runningItems.map((e) => (
-            <div key={e.id} className="walkie-run">
-              <div className="walkie-card-label">
-                <span className="walkie-rec"><i />正在跑</span>
-                <span className="walkie-at">{ago(e.at)} · {e.path}</span>
-              </div>
-              <p className="walkie-said">{e.text}</p>
-              {e.partial && <p className="walkie-partial">{fold(e.partial).slice(0, 220)}</p>}
-            </div>
-          ))}
-
-          {(() => {
-            // 连着几条都是同一个目录时，只写一次 —— 每条都印一遍 ~/work/nexus
-            // 是一屏里最占地方又最没信息的那点墨水。
-            let prevPath = ''
-            return restItems.map((e) => {
-              const showPath = e.path !== prevPath
-              prevPath = e.path
-              const where = showPath ? `${stamp(e.at)} · ${e.path}` : stamp(e.at)
-              return e.kind === 'you' ? (
-                <div key={e.id} className="walkie-you">
-                  <p>{e.text.length > 300 ? `${e.text.slice(0, 300)}…` : e.text}</p>
-                  <span className="walkie-at">{where}</span>
-                </div>
-              ) : (
-                <div key={e.id} className="walkie-it" onClick={() => setOpenIds((s) => {
-                  const n = new Set(s); if (n.has(e.id)) n.delete(e.id); else n.add(e.id); return n
-                })}>
-                  <p className={openIds.has(e.id) ? '' : 'is-clamp'}>{openIds.has(e.id) ? e.text : fold(e.text).slice(0, 600)}</p>
-                  <span className="walkie-at">{speaking === e.id && <span className="walkie-speaking">🔊 </span>}{where}</span>
-                  {openIds.has(e.id) && (
-                    <div className="walkie-inline" onClick={(ev) => ev.stopPropagation()}>
-                      <button type="button" className="walkie-mini"
-                        onClick={() => (speaking === e.id ? (void stopSpeaking(), setSpeaking(null)) : void play(e.text, 1.06, e.id))}>
-                        {speaking === e.id ? '⏹ 停止' : '▶ 读一遍'}
-                      </button>
-                      <button type="button" className="walkie-mini" onClick={() => openBrowser(e.cwd)}>看文件</button>
-                    </div>
-                  )}
-                </div>
-              )
-            })
-          })()}
-
-          {!events.length && !round && !loadErr && (
-            <div className="walkie-quiet">这台机器上还没有人说过话。</div>
-          )}
+          {!items.length && !round && !loadErr && <div className="walkie-quiet">这台机器上还没有人说过话。</div>}
         </div>
       </div>
 
-      {/* 出错时给的是**下一步**，不是一个红条。连不上机器和"这句话没发出去"是两件事，
-          界面上不该长得一样。 */}
+      {/* 新消息在你看历史的时候来了 —— 别把你拽下去，给一个回去的口子 */}
+      {missed > 0 && (
+        <button type="button" className="walkie-missed" onClick={() => { setMissed(0); scrollToBottom(true) }}>
+          ↓ {missed} 条新消息
+        </button>
+      )}
+
       {loadErr ? (
         <div className="walkie-error">
           <b>连不上这台机器</b>
@@ -777,103 +846,83 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
       ) : err ? (
         <div className="walkie-error"><span>{err}</span></div>
       ) : null}
-      {blocked && (
-        <div className="walkie-blocked">
-          这一格不是 Claude —— 发过去会被当命令执行。点下面的地址换一个。
-        </div>
-      )}
+      {blocked && <div className="walkie-blocked">这一格不是 Claude —— 发过去会被当命令执行。点下面的地址换一个。</div>}
 
-      {/* 输入框：一个框、一个附件、一个发送。转写交给输入法 —— 它比本机模型好，
-          而且按住说话那个按钮本来就是别人键盘上的，我们按不到。 */}
       <div className="walkie-compose">
-        {files.length > 0 && (
-          <div className="walkie-files">
-            {files.map((f) => (
-              <button key={f.path} type="button" className="walkie-file"
-                onClick={() => setFiles((c) => c.filter((x) => x.path !== f.path))} title="点一下移除">
-                📎 {f.name}
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="walkie-box">
-          <textarea
-            id="walkie-draft"
-            className="walkie-input"
-            value={draft}
-            rows={1}
-            onChange={onDraftInput}
-            onPaste={() => { pastedRef.current = true }}
-            onFocus={() => { primeFeedback(); setErr('') }}
-            placeholder="说点什么…"
-          />
-          <input id={FILE_INPUT_ID} type="file" multiple hidden onChange={onPickFiles} />
-          <button type="button" className="walkie-roundbtn" disabled={uploading}
-            onClick={() => document.getElementById(FILE_INPUT_ID)?.click()} title="附件">
-            {uploading ? '…' : <IconClip />}
-          </button>
-          <button type="button" className="walkie-sendbtn" disabled={!canSend}
-            onClick={() => void deliver()} title="发送">
-            <IconSend />
-          </button>
-        </div>
-        <button type="button" className={`walkie-target${blocked ? ' is-warn' : ''}`} onClick={() => setPicker(true)}>
+        {composer(false)}
+        <button type="button" className={`walkie-target${blocked ? ' is-warn' : ''}`}
+          onClick={() => { setPickWs(cur?.project.name || projects[0]?.name || ''); setPicker(true) }}>
           {blocked && '⚠ '}
           <span className="walkie-target-path">{targetLabel}</span>
           <IconChevron />
         </button>
-        {(refined || refining) && (
-          <div className="walkie-refine">
-            {refining ? '精炼中…' : (
-              <>
-                已精炼
-                <button type="button" className="walkie-mini" onClick={() => { setDraft(rawText); setRefined(false) }}>还原</button>
-              </>
-            )}
-          </div>
-        )}
       </div>
 
-      {/* 换一个收件人。这里才出现 tmux 的窗口名 —— 平时它不该在你眼前。 */}
+      {/* 全屏编辑：手机上一条小框改长文很难受。微信的做法是对的 ——
+          默认一小条，旁边一个键摊开成全屏，改完收回来。文本是同一份状态，不存在同步问题。 */}
+      {editing && (
+        <div className="walkie-full-edit">
+          <div className="walkie-full-bar">
+            <button type="button" className="walkie-mini" onClick={() => setEditing(false)}>收起</button>
+            <span className="walkie-at">寄给 {targetLabel}</span>
+            <button type="button" className="walkie-sendbtn" disabled={!canSend}
+              onClick={() => void deliver()} title="发送">
+              <IconSend />
+            </button>
+          </div>
+          <div className="walkie-compose walkie-compose-full">{composer(true)}</div>
+        </div>
+      )}
+
+      {/* 选人：左边工作区、右边频道。一屏看清"这台机器上有哪些地方、每个地方有谁" */}
       {picker && (
         <div className="walkie-sheet" onClick={() => setPicker(false)}>
           <div className="walkie-sheet-body" onClick={(e) => e.stopPropagation()}>
             <div className="walkie-sheet-title">寄给谁</div>
-            <div className="walkie-sheet-list">
-              {/* 按**目录**分组：目录才是人认的地方，窗口名只是"这个目录里的哪一个人"。
-                  同目录下有几个 claude 时，名字才有意义 —— 它是替代品，不是标签。 */}
-              {projects.map((p) => (
-                <div key={p.name} className="walkie-group">
-                  <div className="walkie-group-head">{p.path || p.name}</div>
-                  {p.channels.map((c) => {
-                    const key = `${p.name}:${c.index}`
-                    return (
-                      <button key={key} type="button"
-                        className={`walkie-option${key === target ? ' is-on' : ''}`}
-                        onClick={() => { setTarget(key); setPicker(false) }}>
-                        <span className="walkie-option-name">{c.name}</span>
-                        <span className="walkie-option-where">
-                          {c.kind !== 'claude' ? '不是 Claude' : c.status === 'working' ? '在跑' : '空闲'}
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
-              ))}
+            <div className="walkie-panes">
+              <div className="walkie-pane-ws">
+                {projects.map((p) => (
+                  <button key={p.name} type="button"
+                    className={`walkie-ws${p.name === pickWs ? ' is-on' : ''}`}
+                    onClick={() => setPickWs(p.name)}>
+                    <span className="walkie-ws-path">{p.path || p.name}</span>
+                    <span className="walkie-ws-n">{p.channels.filter((c) => c.kind === 'claude').length}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="walkie-pane-ch">
+                {(projects.find((p) => p.name === pickWs)?.channels ?? []).map((c) => {
+                  const key = `${pickWs}:${c.index}`
+                  return (
+                    <button key={key} type="button"
+                      className={`walkie-ch${key === target ? ' is-on' : ''}`}
+                      onClick={() => pick(key)}>
+                      <span className="walkie-ch-name">{c.name}</span>
+                      <span className="walkie-ch-st">
+                        {c.kind !== 'claude' ? '不是 Claude' : c.status === 'working' ? '在跑' : '空闲'}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
             </div>
+            <button type="button" className="walkie-addws" onClick={() => { setAdding(true); setPicker(false) }}>
+              ＋ 新增工作区
+            </button>
           </div>
         </div>
       )}
 
+      {adding && (
+        <Suspense fallback={null}>
+          <WorkspaceSelector token={token} onClose={() => setAdding(false)} onConfirm={onCreated} />
+        </Suspense>
+      )}
+
       {browser && (
         <Suspense fallback={null}>
-          <WorkspaceBrowser
-            token={token}
-            title="工作目录"
-            initialPath={browser.root}
-            onClose={() => setBrowser(null)}
-            ref={browserRef}
-          />
+          <WorkspaceBrowser token={token} title="工作目录" initialPath={browser.root}
+            onClose={() => setBrowser(null)} ref={browserRef} />
         </Suspense>
       )}
     </div>
@@ -882,6 +931,5 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
 
 /** 这一轮发生在哪个目录 —— 卡片头上要写的不是 tmux 的名字，是那个文件夹 */
 function displayPath(projectName: string, projects: WalkieProject[]): string {
-  const p = projects.find((x) => x.name === projectName)
-  return p?.path || projectName
+  return projects.find((x) => x.name === projectName)?.path || projectName
 }

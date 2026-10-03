@@ -1,10 +1,13 @@
 /* walkie.css — 极简交互版的样式
-   只用已有的 --nexus-* 主题变量，深色/浅色主题都跟着走。
-
-   版面三个带：顶栏（机器状态）/ 流（跨会话的时间线）/ 输入框。
-   流是**新的在最上面** —— 它不是聊天记录，是一块状态牌：
-   "现在怎么样"永远在第一眼的位置，不用往下翻。
-   所以这里不需要"自动滚到底"那套逻辑，也就没有"你往上翻会被拽回去"。 */
+ *
+ * 【跟随系统主题】深浅两套都由 theme.ts 写到 :root（内联变量 + `.light` 类）。
+ * 这一屏只用语义变量，所以自动跟着走。**唯一例外是两个"这一屏自己的"语义色**
+ * （正在跑 / 你说的）：它们不在主题色板里，得按主题各给一份 ——
+ * 琥珀 #f0a03c 在深底上很精神，在白底上几乎看不见。
+ *
+ * 【版面】顶栏 / 钉住的提示条 / 流 / 输入框。
+ * 流是**聊天的顺序**：老的在上面、新的在最底下，进来停在最底，往上翻是历史。
+ */
 
 .walkie-root {
   --tone-now: #3b82f6;     /* 正在跑 —— 蓝 */
@@ -17,189 +20,204 @@
   color: var(--nexus-text);
   overflow: hidden;
 }
-/* 能读的字要能选 */
-.walkie-reply, .walkie-you p, .walkie-it p, .walkie-step { -webkit-user-select: text; user-select: text; }
-
-/* 【这一屏自带皮肤，不跟经典界面的主题走】
- *
- * 为什么：主题是 Terminal.tsx 在**模块作用域**写进 :root 的（applyNexusCssVars
- * 在 import 时就跑），而它取的是 `nexus_theme` 或**系统的 prefers-color-scheme**。
- * 于是手机上只要系统是浅色，这一屏就会用一套**没人设计过**的颜色渲染 ——
- * 它的 --tone-* 和所有 color-mix 透明度都是按深底调的（真机首启页上就是这么露馅的）。
- *
- * 定死一套，比让用户碰运气强；产品自己定颜色，也是这一屏该有的样子。
- * （要浅色皮肤就改这一块，别去动 index.css —— 那是经典界面的。） */
-.walkie-root,
-.walkie-first {
-  --nexus-bg: #0f172a;
-  --nexus-bg2: #1e293b;
-  --nexus-border: #334155;
-  --nexus-text: #f1f5f9;
-  --nexus-text2: #94a3b8;
-  --nexus-muted: #475569;
-  --nexus-accent: #3b82f6;
-  --nexus-success: #22c55e;
-  --nexus-warning: #f59e0b;
-  --nexus-error: #ef4444;
-  color-scheme: dark;
-}
-
-/* ── 第一次打开（对讲机风味包的首启页）─────────────────
-   它是这一屏的"开箱"，所以长得和这一屏一样：同一个圆点、同一句人话、同样的暗底。
-   没有标题、没有副标题、没有「多用户」的解释 —— 一次性的事。 */
-.walkie-first {
-  min-height: 100dvh;
-  display: flex; align-items: center; justify-content: center;
-  padding: 28px 24px calc(28px + env(safe-area-inset-bottom, 0px));
-  background: var(--nexus-bg);
-  color: var(--nexus-text);
-}
-.walkie-first-card { width: 100%; max-width: 360px; }
-.walkie-first-brand { margin-bottom: 24px; font-size: 13px; }
-.walkie-first-say { font-size: 15px; line-height: 1.75; color: var(--nexus-text2); margin: 0 0 26px; }
-.walkie-first-form { display: flex; flex-direction: column; gap: 12px; }
-.walkie-first-field { display: flex; flex-direction: column; gap: 6px; }
-.walkie-first-field span { font-size: 11.5px; color: var(--nexus-muted); }
-.walkie-first-field input {
-  background: var(--nexus-bg2);
-  border: 1px solid var(--nexus-border);
-  border-radius: 12px;
-  padding: 13px 14px;
-  color: var(--nexus-text);
-  font: inherit;
-  /* 16px：再小 iOS 会在聚焦时把整页放大 */
-  font-size: 16px;
-  outline: none;
-}
-.walkie-first-field input:focus { border-color: color-mix(in srgb, var(--nexus-accent) 55%, var(--nexus-border)); }
-.walkie-first-err { color: var(--nexus-warning); font-size: 12.5px; line-height: 1.5; margin: 0; }
-.walkie-first-go {
-  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  background: var(--nexus-accent); color: #fff;
-  border: none; border-radius: 12px;
-  padding: 14px; margin-top: 6px;
-  font: inherit; font-size: 16px; font-weight: 650;
-  cursor: pointer;
-}
-.walkie-first-go svg { width: 18px; height: 18px; }
-.walkie-first-go[disabled] { opacity: .35; }
-.walkie-first-more {
-  margin-top: 18px; padding: 4px 0;
-  background: transparent; border: none; cursor: pointer;
-  color: var(--nexus-muted); font: inherit; font-size: 12px;
+:root.light .walkie-root {
+  --tone-now: #2563eb;
+  --tone-you: #b45309;
 }
 
 /* ── 顶栏 ───────────────────────────────────────────── */
 .walkie-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 10px 14px 8px;
   flex: 0 0 auto;
 }
 .walkie-top-title {
-  font: inherit;
-  font-size: 13px;
-  letter-spacing: .12em;
+  font: inherit; font-size: 13px; letter-spacing: .1em;
   color: var(--nexus-text2);
-  background: transparent;
-  border: none;
-  padding: 6px 2px;
-  display: inline-flex;
-  align-items: center;
-  cursor: pointer;
-  text-align: left;
+  background: transparent; border: none; cursor: pointer;
+  padding: 6px 2px; text-align: left;
+  display: inline-flex; align-items: center;
 }
 .walkie-top-title:active { opacity: .7; }
 .walkie-top-actions { display: flex; gap: 8px; align-items: center; }
 .walkie-icon-btn {
   width: 34px; height: 34px;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 10px;
-  border: 1px solid var(--nexus-border);
-  background: transparent;
-  color: var(--nexus-text2);
-  font-size: 15px;
-  cursor: pointer;
-  padding: 0;
+  border-radius: 10px; border: 1px solid var(--nexus-border);
+  background: transparent; color: var(--nexus-text2);
+  font-size: 15px; cursor: pointer; padding: 0;
 }
 .walkie-icon-btn svg { width: 18px; height: 18px; }
 .walkie-icon-btn:active { background: var(--nexus-bg2); }
 .walkie-chip {
-  background: transparent;
-  border: 1px solid var(--nexus-border);
-  color: var(--nexus-text2);
-  border-radius: 999px;
-  font-size: 12px;
-  padding: 5px 11px;
-  cursor: pointer;
+  background: transparent; border: 1px solid var(--nexus-border);
+  color: var(--nexus-text2); border-radius: 999px;
+  font-size: 12px; padding: 5px 11px; cursor: pointer;
 }
 .walkie-chip:active { background: var(--nexus-bg2); }
 .walkie-dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--nexus-success);
-  display: inline-block;
-  margin-right: 6px;
-  vertical-align: middle;
+  display: inline-block; margin-right: 6px; vertical-align: middle;
+}
+
+/* ── 钉住的两条提示（不随流滚）───────────────────────── */
+.walkie-absent {
+  flex: 0 0 auto;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 7px;
+  margin: 6px 12px 4px; padding: 11px 13px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nexus-accent) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nexus-accent) 30%, transparent);
+  color: var(--nexus-text);
+}
+.walkie-absent b { font-size: 13.5px; }
+.walkie-absent-say { margin: 0; font-size: 14px; line-height: 1.6; color: var(--nexus-text2); }
+.walkie-absent-acts { display: flex; gap: 8px; }
+.walkie-nowline {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 7px;
+  width: calc(100% - 24px); margin: 4px 12px 2px; padding: 7px 2px;
+  text-align: left; cursor: pointer;
+  background: transparent; border: none;
+  color: var(--nexus-text2); font: inherit; font-size: 12.5px; line-height: 1.5;
+}
+.walkie-nowline > span:last-child {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.walkie-now-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--tone-now);
+  animation: walkie-blink 1.4s ease-in-out infinite; flex: 0 0 auto;
 }
 
 /* ── 流 ─────────────────────────────────────────────── */
 .walkie-stage {
-  flex: 1 1 auto;
-  min-height: 0;
-  padding: 2px 14px 14px;
+  flex: 1 1 auto; min-height: 0;
+  padding: 4px 14px 10px;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
-.walkie-stage-inner { display: flex; flex-direction: column; gap: 2px; }
+.walkie-stage-inner { display: flex; flex-direction: column; }
 .walkie-quiet { color: var(--nexus-muted); font-size: 13px; padding: 26px 2px; text-align: center; }
 .walkie-at { font-size: 11px; color: var(--nexus-muted); font-weight: 400; letter-spacing: 0; }
 .walkie-dim { color: var(--nexus-text2); font-size: 13px; margin: 6px 0 0; }
-
-/* 一条流里的每一件事，共用同一种排版：内容 + 一行元信息，用细线隔开。
-   没有卡片框 —— 一张张卡会让每件事看起来一样重，而你真正要先看到的是最上面那条。 */
-.walkie-you, .walkie-it, .walkie-run, .walkie-round {
-  padding: 11px 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--nexus-border) 60%, transparent);
+.walkie-dot-live {
+  display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--tone-now); margin-right: 5px; vertical-align: middle;
+  animation: walkie-blink 1.1s ease-in-out infinite;
 }
-.walkie-round { border-bottom: none; padding-top: 4px; }
-.walkie-run { padding-top: 12px; }
-.walkie-it { cursor: pointer; }
-.walkie-it:active { background: color-mix(in srgb, var(--nexus-text) 4%, transparent); }
+@keyframes walkie-blink { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
+@keyframes walkie-pulse { 0%,100% { opacity: 1 } 50% { opacity: .45 } }
+@keyframes walkie-in { from { opacity: 0; transform: translateY(3px) } to { opacity: 1; transform: none } }
 
-.walkie-you { border-left: 2px solid color-mix(in srgb, var(--tone-you) 55%, transparent); padding-left: 10px; }
-.walkie-you p {
-  margin: 0 0 4px; font-size: 14px; line-height: 1.55; color: var(--nexus-text2);
-  white-space: pre-wrap; word-break: break-word;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+/* 一条流里的每一件事：内容 + 一行元信息，细线隔开。
+   **点一下 = 回复给这个人**，所以左侧那道竖线同时是"这是谁说的话"和
+   "你现在在跟谁说话"（选中时变亮、变粗、闪一下）。 */
+.walkie-you, .walkie-it, .walkie-round {
+  padding: 11px 0 11px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--nexus-border) 55%, transparent);
+  border-left: 2px solid transparent;
+  cursor: pointer;
+  transition: background-color .18s ease, border-left-color .18s ease;
 }
-.walkie-said { margin: 4px 0 0; font-size: 14px; line-height: 1.55; color: var(--nexus-text2); white-space: pre-wrap; word-break: break-word; }
-.walkie-partial { margin: 6px 0 0; font-size: 13px; line-height: 1.55; color: var(--nexus-muted); white-space: pre-wrap; word-break: break-word; }
-.walkie-it p { margin: 0 0 4px; font-size: 14.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
-.walkie-it p.is-clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
-.walkie-reply { font-size: 14.5px; line-height: 1.62; white-space: pre-wrap; word-break: break-word; }
+.walkie-round { cursor: default; border-bottom: none; padding-left: 0; }
+.walkie-you {
+  border-left-color: color-mix(in srgb, var(--tone-you) 45%, transparent);
+}
+.walkie-it { border-left-color: color-mix(in srgb, var(--nexus-border) 90%, transparent); }
+.walkie-you.is-target { border-left-color: var(--tone-you); }
+.walkie-it.is-target { border-left-color: color-mix(in srgb, var(--nexus-accent) 70%, transparent); }
+.walkie-you:active, .walkie-it:active { background: color-mix(in srgb, var(--nexus-text) 4%, transparent); }
+.walkie-you.is-flash, .walkie-it.is-flash {
+  animation: walkie-flash .9s ease-out;
+}
+@keyframes walkie-flash {
+  0% { background: color-mix(in srgb, var(--nexus-accent) 22%, transparent) }
+  100% { background: transparent }
+}
+.walkie-it.is-running { border-left-color: var(--tone-now); }
 
+.walkie-more {
+  display: inline-block; margin-top: 6px; padding: 2px 0;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--nexus-accent); font: inherit; font-size: 12.5px;
+}
+
+/* ── Markdown 正文 ───────────────────────────────────── */
+/* 只给"够用"的排版：AI 回复里最常见的是段落、列表、行内代码、代码块、表格、引用。
+   代码块横向滚而不是折行 —— 折行的命令没法看。 */
+.walkie-md { font-size: 14.5px; line-height: 1.62; word-break: break-word; }
+.walkie-md > :first-child { margin-top: 0; }
+.walkie-md > :last-child { margin-bottom: 0; }
+.walkie-md p { margin: .5em 0; }
+.walkie-md h1, .walkie-md h2, .walkie-md h3, .walkie-md h4 {
+  margin: .8em 0 .4em; line-height: 1.35; font-weight: 650;
+}
+.walkie-md h1 { font-size: 1.22em; }
+.walkie-md h2 { font-size: 1.14em; }
+.walkie-md h3 { font-size: 1.06em; }
+.walkie-md h4 { font-size: 1em; }
+.walkie-md ul, .walkie-md ol { margin: .5em 0; padding-left: 1.35em; }
+.walkie-md li { margin: .18em 0; }
+.walkie-md blockquote {
+  margin: .6em 0; padding: 2px 0 2px 11px;
+  border-left: 3px solid color-mix(in srgb, var(--nexus-text2) 40%, transparent);
+  color: var(--nexus-text2);
+}
+.walkie-md hr {
+  margin: .9em 0; border: none;
+  border-top: 1px solid color-mix(in srgb, var(--nexus-border) 70%, transparent);
+}
+.walkie-md code {
+  background: color-mix(in srgb, var(--nexus-text) 9%, transparent);
+  border-radius: 4px; padding: 1px 4px; font-size: .93em;
+}
+.walkie-md pre {
+  margin: .6em 0; padding: 10px 12px; border-radius: 8px;
+  background: color-mix(in srgb, var(--nexus-text) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nexus-border) 70%, transparent);
+  overflow-x: auto;
+}
+.walkie-md pre code { background: transparent; padding: 0; font-size: .9em; white-space: pre; }
+.walkie-md table { border-collapse: collapse; margin: .7em 0; font-size: .94em; display: block; overflow-x: auto; }
+.walkie-md th, .walkie-md td {
+  border: 1px solid color-mix(in srgb, var(--nexus-border) 80%, transparent);
+  padding: 4px 9px; text-align: left;
+}
+.walkie-md th { background: color-mix(in srgb, var(--nexus-text) 6%, transparent); font-weight: 650; }
+.walkie-md a { color: var(--nexus-accent); }
+.walkie-md strong { font-weight: 700; }
+.walkie-said { margin: 4px 0 0; color: var(--nexus-text2); }
+
+.walkie-filelink {
+  display: inline; background: color-mix(in srgb, var(--nexus-accent) 12%, transparent);
+  color: var(--nexus-accent); border: none; border-radius: 5px;
+  padding: 0 4px; font: inherit; cursor: pointer;
+}
+.walkie-filelink code { background: transparent; color: inherit; padding: 0; }
+.walkie-link { color: var(--nexus-accent); }
+.walkie-code { background: color-mix(in srgb, var(--nexus-text) 9%, transparent); border-radius: 4px; padding: 1px 4px; }
+.walkie-strong { color: var(--nexus-text); font-weight: 700; }
+
+/* ── 这一轮（在跑 / 答完）───────────────────────────── */
+.walkie-round { animation: walkie-in .2s ease-out; }
 .walkie-card-label {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   font-size: 11px; color: var(--nexus-muted);
 }
 .walkie-round-head { display: inline-flex; align-items: center; gap: 8px; }
 .walkie-round-head em { font-style: normal; }
-.walkie-waiting-line { margin: 8px 0 0; font-size: 13px; color: var(--nexus-muted); }
-
 .walkie-rec { display: inline-flex; align-items: center; gap: 6px; color: var(--tone-now); font-weight: 600; }
 .walkie-rec i {
   width: 6px; height: 6px; border-radius: 50%; background: var(--tone-now); display: inline-block;
   animation: walkie-blink 1.1s ease-in-out infinite;
 }
-@keyframes walkie-blink { 0%, 100% { opacity: 1 } 50% { opacity: .3 } }
-@keyframes walkie-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .45 } }
+.walkie-waiting-line { margin: 8px 0 0; font-size: 13px; color: var(--nexus-muted); }
+.walkie-now { display: flex; align-items: center; gap: 7px; margin-top: 10px; }
+.walkie-now-text { font-size: 12.5px; color: var(--nexus-text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* ── 他在干什么：他说的话是标题，工具是它下面的证据 ── */
 .walkie-story { list-style: none; margin: 10px 0 0; padding: 0; }
 .walkie-chapter { animation: walkie-in .18s ease-out; }
-@keyframes walkie-in { from { opacity: 0; transform: translateY(3px) } to { opacity: 1; transform: none } }
 .walkie-chapter + .walkie-chapter { margin-top: 9px; }
 .walkie-say {
   margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--nexus-text);
@@ -218,82 +236,45 @@
 .walkie-step.k-edit .walkie-step-ico { color: var(--tone-you); }
 .walkie-step.k-edit .walkie-step-text { font-weight: 600; }
 
-/* 此刻：一条**状态**，所以单独一行、带呼吸的点，不混进上面"做过的事"里 */
-.walkie-now { display: flex; align-items: center; gap: 7px; margin-top: 10px; }
-.walkie-now-dot {
-  width: 6px; height: 6px; border-radius: 50%; background: var(--tone-now);
-  animation: walkie-blink 1.4s ease-in-out infinite; flex: 0 0 auto;
-}
-.walkie-now-text {
-  font-size: 12.5px; color: var(--nexus-text2);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+/* ── 新消息提示：你看历史时来了新的，别把你拽下去 ─────── */
+.walkie-missed {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  bottom: calc(100% - 6px);
+  background: var(--nexus-accent); color: #fff;
+  border: none; border-radius: 999px;
+  padding: 7px 15px; font: inherit; font-size: 12.5px; font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .28);
+  cursor: pointer; z-index: 5;
 }
 
 /* ── 小按钮 / 提示 ──────────────────────────────────── */
 .walkie-inline { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .walkie-mini {
-  background: transparent;
-  border: 1px solid var(--nexus-border);
-  color: var(--nexus-text2);
-  border-radius: 8px;
-  font-size: 12px;
-  padding: 5px 10px;
-  cursor: pointer;
+  background: transparent; border: 1px solid var(--nexus-border);
+  color: var(--nexus-text2); border-radius: 8px;
+  font-size: 12px; padding: 5px 10px; cursor: pointer;
 }
 .walkie-mini:active { background: var(--nexus-bg2); }
 .walkie-hint-bad { margin: 8px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--nexus-warning); }
 .walkie-error {
-  margin: 0 14px 8px;
-  padding: 10px 12px;
-  border-radius: 10px;
+  margin: 0 14px 8px; padding: 10px 12px; border-radius: 10px;
   background: color-mix(in srgb, var(--nexus-error) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--nexus-error) 40%, transparent);
-  color: var(--nexus-text);
-  font-size: 12.5px;
-  line-height: 1.5;
+  color: var(--nexus-text); font-size: 12.5px; line-height: 1.5;
   display: flex; flex-direction: column; align-items: flex-start; gap: 5px;
 }
 .walkie-error b { font-size: 13px; }
 .walkie-error span { color: var(--nexus-text2); word-break: break-word; }
-/* 目标不是 Claude。**在输入框正上方说清楚**，不是只在标签上挂一个 ⚠ ——
-   你按下发送的那一下，眼睛在这里。 */
 .walkie-blocked {
-  margin: 0 14px 8px;
-  padding: 9px 12px;
-  border-radius: 10px;
+  margin: 0 14px 8px; padding: 9px 12px; border-radius: 10px;
   background: color-mix(in srgb, var(--nexus-warning) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--nexus-warning) 38%, transparent);
-  color: var(--nexus-text);
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-/* 你不在的时候 */
-.walkie-absent {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 7px;
-  margin: 10px 0 6px; padding: 11px 13px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--nexus-accent) 13%, transparent);
-  border: 1px solid color-mix(in srgb, var(--nexus-accent) 30%, transparent);
-  color: var(--nexus-text);
-}
-.walkie-absent b { font-size: 13.5px; }
-.walkie-absent-say { margin: 0; font-size: 14px; line-height: 1.6; color: var(--nexus-text2); }
-.walkie-absent-acts { display: flex; gap: 8px; }
-
-/* 现在：在跑的那几件压成一行 */
-.walkie-nowline {
-  display: flex; align-items: center; gap: 7px;
-  width: 100%; text-align: left; cursor: pointer;
-  margin: 8px 0 2px; padding: 8px 2px;
-  background: transparent; border: none;
-  color: var(--nexus-text2); font: inherit; font-size: 12.5px; line-height: 1.5;
-}
-.walkie-nowline span:last-child {
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  color: var(--nexus-text); font-size: 12.5px; line-height: 1.5;
 }
 
-/* ── 输入框：这一屏唯一的入口 ───────────────────────── */
+/* ── 输入框 ─────────────────────────────────────────── */
 .walkie-compose {
+  position: relative;
   flex: 0 0 auto;
   padding: 8px 12px calc(10px + env(safe-area-inset-bottom, 0px));
   border-top: 1px solid var(--nexus-border);
@@ -303,21 +284,17 @@
 .walkie-file {
   background: color-mix(in srgb, var(--nexus-accent) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--nexus-accent) 34%, transparent);
-  color: var(--nexus-text);
-  border-radius: 8px; font-size: 12px; padding: 4px 9px; cursor: pointer;
+  color: var(--nexus-text); border-radius: 8px; font-size: 12px; padding: 4px 9px; cursor: pointer;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .walkie-box {
   display: flex; align-items: flex-end; gap: 6px;
-  border: 1px solid var(--nexus-border);
-  border-radius: 14px;
-  background: var(--nexus-bg2);
-  padding: 5px 5px 5px 12px;
+  border: 1px solid var(--nexus-border); border-radius: 14px;
+  background: var(--nexus-bg2); padding: 5px 5px 5px 12px;
 }
 .walkie-box:focus-within { border-color: color-mix(in srgb, var(--nexus-accent) 55%, var(--nexus-border)); }
 .walkie-input {
-  flex: 1 1 auto;
-  border: none; outline: none; background: transparent; resize: none;
+  flex: 1 1 auto; border: none; outline: none; background: transparent; resize: none;
   color: var(--nexus-text); font: inherit; font-size: 15px; line-height: 1.5;
   padding: 7px 0; max-height: 132px; min-height: 24px;
 }
@@ -328,69 +305,126 @@
   border: none; cursor: pointer; padding: 0;
 }
 .walkie-roundbtn { background: transparent; color: var(--nexus-text2); }
-.walkie-roundbtn svg { width: 20px; height: 20px; }
+.walkie-roundbtn svg { width: 19px; height: 19px; }
 .walkie-roundbtn:active { background: var(--nexus-bg); }
 .walkie-roundbtn[disabled] { opacity: .4; }
 .walkie-sendbtn { background: var(--nexus-accent); color: #fff; }
 .walkie-sendbtn svg { width: 19px; height: 19px; }
 .walkie-sendbtn:active { filter: brightness(1.1); }
 .walkie-sendbtn[disabled] { opacity: .3; }
-
-/* 这句话会寄给谁。它是**记住**的，不是要你选的 —— 所以只是一行小字，
-   点开才有列表。tmux 的窗口名只在这里出现。 */
 .walkie-target {
   display: flex; align-items: center; gap: 3px;
-  margin-top: 7px; padding: 2px 2px;
+  margin-top: 7px; padding: 2px;
   background: transparent; border: none; cursor: pointer;
   color: var(--nexus-muted); font-size: 12px; max-width: 100%;
 }
 .walkie-target svg { width: 13px; height: 13px; flex: 0 0 auto; opacity: .7; }
 .walkie-target-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .walkie-target.is-warn { color: var(--nexus-warning); }
-.walkie-refine {
-  display: flex; align-items: center; gap: 8px;
-  margin-top: 6px; font-size: 11.5px; color: var(--nexus-muted);
-}
+.walkie-refine { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 11.5px; color: var(--nexus-muted); }
 .walkie-refine .walkie-mini { padding: 2px 8px; font-size: 11.5px; }
 
-/* ── 换一个收件人 ───────────────────────────────────── */
+/* ── 全屏编辑 ───────────────────────────────────────── */
+.walkie-full-edit {
+  position: fixed; inset: 0; z-index: 70;
+  display: flex; flex-direction: column;
+  background: var(--nexus-bg);
+  padding-top: env(safe-area-inset-top, 0px);
+}
+.walkie-full-bar {
+  flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 12px 14px 6px;
+}
+.walkie-full-bar .walkie-at { flex: 1 1 auto; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.walkie-full-edit .walkie-compose-full {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column;
+  border-top: none; padding-top: 0;
+}
+.walkie-compose-full .walkie-box { flex: 1 1 auto; align-items: stretch; }
+.walkie-compose-full .walkie-input { max-height: none; font-size: 16px; padding-top: 10px; }
+
+/* ── 选人：左工作区 / 右频道 ────────────────────────── */
 .walkie-sheet {
   position: fixed; inset: 0; z-index: 60;
   background: color-mix(in srgb, #000 45%, transparent);
   display: flex; align-items: flex-end;
 }
 .walkie-sheet-body {
-  width: 100%; max-height: 66dvh; overflow-y: auto;
+  width: 100%; max-height: 72dvh;
+  display: flex; flex-direction: column;
   background: var(--nexus-bg2);
   border-top-left-radius: 16px; border-top-right-radius: 16px;
-  padding: 14px 12px calc(14px + env(safe-area-inset-bottom, 0px));
+  padding: 14px 12px calc(12px + env(safe-area-inset-bottom, 0px));
 }
-.walkie-sheet-title { font-size: 12px; color: var(--nexus-muted); padding: 0 4px 8px; }
-.walkie-sheet-list { display: flex; flex-direction: column; gap: 2px; }
-.walkie-group + .walkie-group { margin-top: 6px; }
-.walkie-group-head {
-  font-size: 11.5px; color: var(--nexus-muted);
-  padding: 10px 12px 3px; letter-spacing: .02em;
+.walkie-sheet-title { font-size: 12px; color: var(--nexus-muted); padding: 0 4px 8px; flex: 0 0 auto; }
+.walkie-panes { display: flex; gap: 8px; flex: 1 1 auto; min-height: 0; }
+.walkie-pane-ws, .walkie-pane-ch {
+  display: flex; flex-direction: column; gap: 2px;
+  overflow-y: auto; min-height: 0;
+  padding: 2px;
 }
-.walkie-option {
-  display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
+.walkie-pane-ws { flex: 0 0 50%; }
+.walkie-pane-ch { flex: 1 1 auto; }
+.walkie-ws {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
   background: transparent; border: none; cursor: pointer; text-align: left;
-  padding: 10px 12px; border-radius: 10px; color: var(--nexus-text);
+  padding: 10px 9px; border-radius: 9px; color: var(--nexus-text2);
+  font: inherit; font-size: 12.5px;
 }
-.walkie-option:active { background: var(--nexus-bg); }
-.walkie-option.is-on { background: color-mix(in srgb, var(--nexus-accent) 16%, transparent); }
-.walkie-option-name { font-size: 15px; font-weight: 600; }
-.walkie-option-where { font-size: 11.5px; color: var(--nexus-muted); }
+.walkie-ws.is-on { background: color-mix(in srgb, var(--nexus-accent) 16%, transparent); color: var(--nexus-text); font-weight: 600; }
+.walkie-ws-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.walkie-ws-n { flex: 0 0 auto; font-size: 11px; color: var(--nexus-muted); }
+.walkie-ch {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  background: transparent; border: none; cursor: pointer; text-align: left;
+  padding: 9px 11px; border-radius: 9px; color: var(--nexus-text);
+}
+.walkie-ch:active { background: var(--nexus-bg); }
+.walkie-ch.is-on { background: color-mix(in srgb, var(--nexus-accent) 16%, transparent); }
+.walkie-ch-name { font-size: 14.5px; font-weight: 600; }
+.walkie-ch-st { font-size: 11.5px; color: var(--nexus-muted); }
+.walkie-addws {
+  flex: 0 0 auto; margin-top: 8px;
+  background: transparent; border: 1px dashed var(--nexus-border);
+  color: var(--nexus-text2); border-radius: 10px;
+  padding: 11px; font: inherit; font-size: 13px; cursor: pointer;
+}
+.walkie-addws:active { background: var(--nexus-bg); }
 
-/* ── 回复里的文件引用 ───────────────────────────────── */
-.walkie-filelink {
-  background: color-mix(in srgb, var(--nexus-accent) 12%, transparent);
-  color: var(--nexus-accent); border: none; border-radius: 5px;
-  padding: 0 4px; font: inherit; cursor: pointer;
+/* ── 第一次打开（对讲机风味包的首启页）─────────────────
+   它是这一屏的"开箱"，所以长得和这一屏一样：同一个圆点、同一句人话。
+   没有标题、没有副标题 —— 一次性的事。 */
+.walkie-first {
+  min-height: 100dvh;
+  display: flex; align-items: center; justify-content: center;
+  padding: 28px 24px calc(28px + env(safe-area-inset-bottom, 0px));
+  background: var(--nexus-bg);
+  color: var(--nexus-text);
 }
-.walkie-link { color: var(--nexus-accent); }
-.walkie-strong { color: var(--nexus-text); font-weight: 700; }
-.walkie-code {
-  background: color-mix(in srgb, var(--nexus-text) 9%, transparent);
-  border-radius: 4px; padding: 1px 4px; font-size: .94em;
+.walkie-first-card { width: 100%; max-width: 360px; }
+.walkie-first-brand { margin-bottom: 24px; font-size: 13px; }
+.walkie-first-say { font-size: 15px; line-height: 1.75; color: var(--nexus-text2); margin: 0 0 26px; }
+.walkie-first-form { display: flex; flex-direction: column; gap: 12px; }
+.walkie-first-field { display: flex; flex-direction: column; gap: 6px; }
+.walkie-first-field span { font-size: 11.5px; color: var(--nexus-muted); }
+.walkie-first-field input {
+  background: var(--nexus-bg2); border: 1px solid var(--nexus-border); border-radius: 12px;
+  padding: 13px 14px; color: var(--nexus-text); font: inherit;
+  font-size: 16px;                 /* 16px：再小 iOS 会在聚焦时把整页放大 */
+  outline: none;
+}
+.walkie-first-field input:focus { border-color: color-mix(in srgb, var(--nexus-accent) 55%, var(--nexus-border)); }
+.walkie-first-err { color: var(--nexus-warning); font-size: 12.5px; line-height: 1.5; margin: 0; }
+.walkie-first-go {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--nexus-accent); color: #fff; border: none; border-radius: 12px;
+  padding: 14px; margin-top: 6px; font: inherit; font-size: 16px; font-weight: 650; cursor: pointer;
+}
+.walkie-first-go svg { width: 18px; height: 18px; }
+.walkie-first-go[disabled] { opacity: .35; }
+.walkie-first-more {
+  margin-top: 18px; padding: 4px 0; background: transparent; border: none; cursor: pointer;
+  color: var(--nexus-muted); font: inherit; font-size: 12px;
 }

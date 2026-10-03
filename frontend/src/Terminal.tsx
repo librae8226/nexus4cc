@@ -1,3 +1,4 @@
+import { applyNexusCssVars, getInitialTheme, watchSystemTheme, type ThemeMode } from './theme'
 import { useEffect, useRef, useCallback, useState, lazy, Suspense } from 'react'
 import type { SessionManagerV2Handle } from './SessionManagerV2'
 import type { WorkspaceBrowserHandle } from './WorkspaceBrowser'
@@ -123,8 +124,6 @@ const WINDOW_KEY = 'nexus_window'
 const TAP_THRESHOLD = 8
 const MAX_UPLOAD_NOTIFICATIONS = 5
 
-export type ThemeMode = 'dark' | 'light'
-
 const DARK_THEME: ITheme = {
   background: '#0f172a',
   foreground: '#e2e8f0',
@@ -180,30 +179,6 @@ export const THEMES: Record<ThemeMode, ITheme> = {
   light: LIGHT_THEME,
 }
 
-export function getInitialTheme(): ThemeMode {
-  const saved = localStorage.getItem(THEME_KEY)
-  if (saved === 'light' || saved === 'dark') return saved
-  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-}
-
-// 主题色板 — 统一 Tailwind slate 色阶
-function applyNexusCssVars(mode: ThemeMode) {
-  const isDark = mode === 'dark'
-  const root = document.documentElement
-  root.style.setProperty('--nexus-bg',         isDark ? '#0f172a' : '#ffffff')   // slate-900 / white
-  root.style.setProperty('--nexus-bg2',        isDark ? '#1e293b' : '#f1f5f9')   // slate-800 / slate-100
-  root.style.setProperty('--nexus-menu-bg',    isDark ? '#1e293b' : '#ffffff')    // 面板/弹层背景
-  root.style.setProperty('--nexus-border',     isDark ? '#334155' : '#e2e8f0')   // slate-700 / slate-200
-  root.style.setProperty('--nexus-text',       isDark ? '#f1f5f9' : '#0f172a')   // slate-100 / slate-900
-  root.style.setProperty('--nexus-text2',      isDark ? '#94a3b8' : '#64748b')   // slate-400 / slate-500
-  root.style.setProperty('--nexus-muted',      isDark ? '#475569' : '#94a3b8')   // slate-600 / slate-400
-  root.style.setProperty('--nexus-tab-active', isDark ? '#1e293b' : '#f1f5f9')   // 选中标签高亮
-  root.style.setProperty('--nexus-accent',     '#3b82f6')                         // blue-500
-  root.style.setProperty('--nexus-success',    '#22c55e')                         // green-500
-  root.style.setProperty('--nexus-warning',    '#f59e0b')                         // amber-500
-  root.style.setProperty('--nexus-error',      '#ef4444')                         // red-500
-}
-applyNexusCssVars(getInitialTheme())
 
 // Agent 状态推断（F-15）
 export default function Terminal({ token }: Props) {
@@ -390,18 +365,9 @@ export default function Terminal({ token }: Props) {
   }, [])
 
   // 跟随系统深色/浅色模式切换（用户未手动设置时）
-  useEffect(() => {
-    const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
-    if (!mq) return
-    const handler = (e: MediaQueryListEvent) => {
-      if (localStorage.getItem(THEME_KEY)) return // user has manual override
-      setThemeMode(e.matches ? 'dark' : 'light')
-    }
-    mq.addEventListener('change', handler)
-    return () => mq.removeEventListener('change', handler)
-  }, [])
+  // 系统切深浅色 —— 交给 theme.ts 那份实现（"有手动覆盖就不跟"的规则只写一处）
+  useEffect(() => watchSystemTheme(setThemeMode), [])
 
-  // CSS vars 统一调用模块级函数，保证一致性
   const applyCssVars = useCallback((mode: ThemeMode) => {
     applyNexusCssVars(mode)
   }, [])

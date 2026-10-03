@@ -7,6 +7,7 @@ import FirstRun from './walkie/FirstRun'
 import { buildDefaultMode, rememberMode, resolveMode, type UiMode } from './walkie/mode'
 import { ensureBakedServer } from './walkie/server'
 import { getApiBase, needsServerConfig, getActiveProfile, isNative, setActiveProfileUsername } from './baseUrl'
+import { applyNexusCssVars, getInitialTheme, watchSystemTheme } from './theme'
 
 const STORAGE_KEY = 'nexus_token'
 
@@ -39,6 +40,14 @@ export default function App() {
   // 首启引导：**先把服务器地址装好，再决定登录页长什么样** —— 顺序反了会先闪一下
   // 「Add server」再收回去。
   const [booted, setBooted] = useState(!isNative())
+  // 主题：进应用先应用一次，然后**跟着系统走**（有手动覆盖则不跟）。
+  // 显式在这里做，而不是靠"import 到 Terminal 的副作用" —— 对讲机那一屏
+  // 根本不会渲染 Terminal，但它同样需要主题。
+  useEffect(() => {
+    applyNexusCssVars(getInitialTheme())
+    return watchSystemTheme(applyNexusCssVars)
+  }, [])
+
   useEffect(() => {
     void (async () => {
       if (isNative()) await ensureBakedServer()

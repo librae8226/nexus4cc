@@ -163,8 +163,22 @@ async function req<T>(path: string, token: string, init?: RequestInit): Promise<
 
 export const getChannels = (token: string) => req<ChannelList>('/api/walkie/channels', token)
 
-/** 跨会话的一条时间线。这是这一屏的主屏。 */
-export const getStream = (token: string) => req<StreamState>('/api/walkie/stream', token)
+/** 跨会话的一条时间线。这是这一屏的主屏。limit 调大 = 往上翻加载更多。 */
+export const getStream = (token: string, limit?: number) =>
+  req<StreamState>(`/api/walkie/stream${limit ? `?limit=${limit}` : ''}`, token)
+
+export interface WalkieConfig { id: string; label: string }
+
+/** 可用的 claude profile（新建工作区时用） */
+export const getConfigs = (token: string) => req<WalkieConfig[]>('/api/configs', token)
+
+/** 新建一个工作区（= 在某个目录下开一个跑着 claude 的 tmux 窗口）。
+ *  走的是经典界面那套 `POST /api/sessions`，所以 tmux server 的归属守卫是同一道。 */
+export const createWorkspace = (token: string, path: string, shellType: 'claude' | 'bash', profile?: string) =>
+  req<{ name: string; cwd: string }>('/api/sessions', token, {
+    method: 'POST',
+    body: JSON.stringify({ rel_path: path, shell_type: shellType, profile }),
+  })
 
 /** 附件：把文件交出去，拿回它的绝对路径（那句话里会带上） */
 export async function uploadAttachment(token: string, file: File): Promise<{ path: string; name: string }> {

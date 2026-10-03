@@ -35,7 +35,11 @@ const TMUX_BUF = 'nexus-walkie'      // 专用 paste buffer，避免和用户自
 // 它是被轮询的，所以这两个数直接决定"这一屏"的常驻开销。
 const STREAM_TAIL_BYTES = 256 * 1024
 const STREAM_TURNS_PER_CHANNEL = 4
+/** 每个频道最多解析这么多回合（缓存按这个数存，调用方再切片）—— 供"往上翻加载更多" */
+const STREAM_TURNS_MAX = 30
 const STREAM_MAX_EVENTS = 40
+/** 一次最多给多少条。"往上翻"就调大它。 */
+const STREAM_EVENT_CAP = 240
 // "正在跑"的新鲜度门槛：transcript 十分钟内没动过就不算在跑（见 /stream 里的说明）
 const STREAM_RUNNING_FRESH_MS = 10 * 60_000
 
@@ -264,8 +268,12 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     return { turns: turns.slice(-maxTurns), lastAt, lastText }
   }
 
-  /** readTurns 的带缓存版本。文件没变就不重解析。 */
-  function readTurnsCached(file, maxTurns) {
+  /**
+   * readTurns 的带缓存版本。文件没变就不重解析。
+   * 缓存里存的是**最多 STREAM_TURNS_MAX 个回合**，调用方再按需切片 ——
+   * 缓存不能按调用方的 maxTurns 存，否则"往上翻加载更多"会命中一个更短的缓存。
+   */
+  function readTurnsCached(file) {
     let key = ''
     try {
       const st = statSync(file)
@@ -273,7 +281,7 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
       const hit = turnCache.get(file)
       if (hit && hit.key === key) return hit.val
     } catch { return { turns: [], lastAt: 0, lastText: '' } }
-    const val = readTurns(file, maxTurns)
+    const val = readTurns(file, STREAM_TURNS_MAX)
     // 别让它无限长：只留最近 64 个文件
     if (turnCache.size > 64) turnCache.clear()
     turnCache.set(file, { key, val })
@@ -374,6 +382,10 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     const { projects, tmux } = await listChannels()
     if (!tmux) return res.json({ projects: [], events: [], running: 0, at: Date.now() })
 
+    // 一次要多少条。"往上翻"就把 limit 调大，每个频道也相应多切几个回合回来。
+    const limit = Math.min(STREAM_EVENT_CAP, Math.max(10, Number(req.query.limit) || STREAM_MAX_EVENTS))
+    const perChannel = Math.min(STREAM_TURNS_MAX, Math.max(STREAM_TURNS_PER_CHANNEL, Math.ceil(limit / 6)))
+
     const used = new Set()
     const events = []
     let running = 0
@@ -392,7 +404,7 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
         let turns = []
         let lastAt = 0
         let lastText = ''
-        try { ({ turns, lastAt, lastText } = readTurnsCached(file, STREAM_TURNS_PER_CHANNEL)) } catch { continue }
+        try { ({ turns, lastAt, lastText } = readTurnsCached(file)) } catch { continue }
         const last = turns[turns.length - 1]
         // 没有 turn_duration 只是"这一轮没写结束标记"，**不等于现在还在跑** ——
         // 被打断的回合、早退的会话都长这样。所以再加一道新鲜度门槛，
@@ -403,6 +415,7 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
 
         // 一个回合大到把尾巴占满时，这里一条回合都切不出来。至少把它最后说的那句
         // 摆进流里 —— 那一格是"安静的"，不是"不存在的"。
+        turns = turns.slice(-perChannel)
         if (!turns.length && lastText) {
           events.push({
             ch: key, project: p.name, window: c.index, name: c.name, cwd: c.cwd, path: p.path,
@@ -433,7 +446,7 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     }
 
     events.sort((a, b) => b.at - a.at)
-    res.json({ projects, events: events.slice(0, STREAM_MAX_EVENTS), running, at: Date.now() })
+    res.json({ projects, events: events.slice(0, limit), running, at: Date.now() })
   })
 
   // ── 2. 发送：直接落到目标频道的输入框并回车 ───────────────────────────

@@ -6,7 +6,7 @@ import useOverlayGuard from './useOverlayGuard'
 import { Icon } from './icons'
 import type { Terminal } from '@xterm/xterm'
 import { KeyDef, ToolbarConfig, ALL_KEYS, FACTORY_CONFIG } from './toolbarDefaults'
-import type { ThemeMode } from './Terminal'
+import type { ThemeMode } from './theme'
 
 interface Props {
   token: string
