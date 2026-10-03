@@ -145,7 +145,18 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects', cwd.replace(/\//g, '-'))
 
   // ── 1. 频道清单 ──────────────────────────────────────────────────────
-  router.get('/channels', authMiddleware, (req, res) => {
+  // 顺便探一下本机转写服务在不在。用户按下说话才发现转写服务没起，是最没必要的
+  // 一次挫败 —— 界面上一开始就标出来，就没有这一类"按了没反应"。
+  async function asrAlive() {
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), 1500)
+    try {
+      const r = await fetch(`${ASR_BASE}/health`, { signal: ac.signal })
+      return r.ok
+    } catch { return false } finally { clearTimeout(timer) }
+  }
+
+  router.get('/channels', authMiddleware, async (req, res) => {
     let raw = ''
     try {
       raw = execFileSync('tmux', ['list-windows', '-a', '-F',
@@ -182,7 +193,13 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
       .sort((a, b) => (a.name === tmuxSession ? -1 : b.name === tmuxSession ? 1 : a.name.localeCompare(b.name)))
 
     const llm = loadLlmProfile(dataDir)
-    res.json({ projects, llm: llm ? { label: llm.label, model: llm.model } : null, tmux: true })
+    const asr = await asrAlive()
+    res.json({
+      projects,
+      llm: llm ? { label: llm.label, model: llm.model } : null,
+      asr,
+      tmux: true,
+    })
   })
 
   // ── 2. 发送：直接落到目标频道的输入框并回车 ───────────────────────────
@@ -379,17 +396,52 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     return '正在输出…'
   }
 
-  const publicState = (t) => ({
-    state: t.state,                       // running | done | timeout
-    stage: stageOf(t),
-    text: t.reply || '',
-    partial: t.replyParts.join(''),
-    done: t.state === 'done',
-    error: t.error || null,
-    sessionId: t.sessionId || null,
-    via: t.via || null,
-    elapsedMs: Date.now() - t.startedAt,
-  })
+  /**
+   * 目标 pane 底部几行。等回复时把它透给前端 —— 「AI 在干活但界面上什么都没有」
+   * 是最没法自查的状态，有了这几行，卡在信任提示 / 卡在 shell / 正在跑工具，
+   * 一眼就能看出来。
+   */
+  function paneTail(project, win, lines = 8) {
+    try {
+      const out = execFileSync('tmux', ['capture-pane', '-p', '-t', `${project}:${win}`],
+        { encoding: 'utf8', stdio: 'pipe' })
+      return out.split('\n').map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim()).slice(-lines)
+    } catch { return [] }
+  }
+
+  /** 认领会话失败时的排障提示。认领成功就不需要了。 */
+  function hintFor(t, pane) {
+    if (t.file) return null
+    const joined = pane.join('\n')
+    if (/trust this folder|Do you trust/i.test(joined)) {
+      return '这个频道的目录还没被 Claude 信任，它在等一个确认。到经典界面点一下「Yes, I trust this folder」。'
+    }
+    if (/bypass permissions/.test(joined) === false && pane.length && !/❯/.test(joined)) {
+      return '这个窗口现在不是 Claude 的对话界面 —— 消息可能落在了别的东西上。'
+    }
+    if (Date.now() - t.startedAt > 20_000) {
+      return '这条消息还没进到对话里。看看下面窗口当前的样子，多半能对上原因。'
+    }
+    return null
+  }
+
+  const publicState = (t) => {
+    // 只在还没答完的时候抓 pane：完成之后前端看的是回复卡，不需要这些
+    const pane = t.state === 'running' ? paneTail(t.project, t.win) : []
+    return {
+      state: t.state,                       // running | done | timeout
+      stage: stageOf(t),
+      text: t.reply || '',
+      partial: t.replyParts.join(''),
+      done: t.state === 'done',
+      error: t.error || null,
+      sessionId: t.sessionId || null,
+      via: t.via || null,
+      elapsedMs: Date.now() - t.startedAt,
+      paneTail: pane,
+      hint: hintFor(t, pane),
+    }
+  }
 
   // ── 追踪器：把「发出去了」变成「答完了」────────────────────────────
   function startTracking(key, { project, win, cwd, sentText, before }) {
@@ -470,6 +522,7 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
 
   /** 找出「刚被我们写进一句话」的那个 jsonl。判据是内容，不是 mtime。 */
   function claimFile(t) {
+    t.polls = (t.polls || 0) + 1
     let files
     try { files = readdirSync(t.cwdDir).filter((f) => f.endsWith('.jsonl')) } catch { return }
 
@@ -495,6 +548,27 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
           saveSessions()
           return
         }
+      }
+    }
+
+    // 严格匹配失败、而且已经等够 ~10 秒 —— 退一步认「发送后长得最多的那个文件」。
+    // 同目录多开 claude 时这不如内容匹配可靠，但总比一个字都不给强；落一个
+    // via=grew-fallback，界面上说清楚这是猜的。
+    if (t.polls >= 8) {
+      let best = null, bestGrow = 0
+      for (const f of files) {
+        const full = join(t.cwdDir, f)
+        let size
+        try { size = statSync(full).size } catch { continue }
+        const grow = size - (t.before.get(f) ?? 0)
+        if (grow > bestGrow) { bestGrow = grow; best = f }
+      }
+      if (best && bestGrow > 200) {
+        t.file = join(t.cwdDir, best)
+        t.sessionId = best.replace(/\.jsonl$/, '')
+        t.via = 'grew-fallback'
+        sessions[t.key] = { sessionId: t.sessionId, file: t.file, cwd: t.cwd, updatedAt: new Date().toISOString() }
+        saveSessions()
       }
     }
   }

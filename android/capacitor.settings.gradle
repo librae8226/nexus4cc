@@ -7,3 +7,6 @@ project(':capacitor-community-speech-recognition').projectDir = new File('../nod
 
 include ':capacitor-community-text-to-speech'
 project(':capacitor-community-text-to-speech').projectDir = new File('../node_modules/@capacitor-community/text-to-speech/android')
+
+include ':capacitor-haptics'
+project(':capacitor-haptics').projectDir = new File('../node_modules/@capacitor/haptics/android')

@@ -8,8 +8,16 @@
 //   1) 噪声瞬态（~3ms，2.4kHz 带通）—— 就是那声"嗒"的锐利部分
 //   2) 两个快速衰减的谐振（1.75k / 3.3k）—— 给它一点实体感，不然只有"嘶"没有"咔"
 //
-// 震动走 navigator.vibrate。Android 上需要 manifest 里的 VIBRATE 权限，
-// 否则调用是静默空转（上一版就是这样，所以"震一下"从来没生效过）。
+// 【震动为什么不用 navigator.vibrate】
+// 它在 Android WebView 里**是存在的**（`typeof === 'function'`，调用还返回 true），
+// 但 Chromium 的 WebView 没有实现 VibrationManager，调用是静默空转 —— 返回 true
+// 不代表真的震了。所以原生壳里改走 Capacitor 的 Haptics，那是真的在驱动马达；
+// navigator.vibrate 只留给浏览器（桌面 Chrome 会忽略，也无所谓）。
+//
+// 旋钮的"格"用 selectionChanged：这是系统给滚轮/选择器准备的触感，最轻最跟手；
+// 吸附到位用 impact(Medium)，重一点，有"到位了"的收束感。
+
+import { Haptics, ImpactStyle } from '@capacitor/haptics'
 
 let ctx: AudioContext | null = null
 let master: GainNode | null = null
@@ -56,24 +64,25 @@ export function tick(strength = 1): void {
   const t = c.currentTime
   const s = Math.max(0.15, Math.min(1, strength))
 
-  // 1) 噪声瞬态
-  const dur = 0.042
+  // 1) 噪声瞬态：那声"嗒"的锐利部分。带通放宽（Q 从 1.05 降到 0.8）、
+  //    中心从 2.3k 下到 1.8k —— 太窄太高会变成"嘶"，宽一点低一点才有"嗒"的实体感。
+  const dur = 0.048
   const len = Math.max(1, Math.floor(c.sampleRate * dur))
   const buf = c.createBuffer(1, len, c.sampleRate)
   const data = buf.getChannelData(0)
   for (let i = 0; i < len; i++) {
     const x = i / len
-    data[i] = (Math.random() * 2 - 1) * Math.exp(-x * 46)
+    data[i] = (Math.random() * 2 - 1) * Math.exp(-x * 42)
   }
   const noise = c.createBufferSource()
   noise.buffer = buf
   const bp = c.createBiquadFilter()
   bp.type = 'bandpass'
-  bp.frequency.value = 2300 + Math.random() * 500      // 每一声略有不同
-  bp.Q.value = 1.05
+  bp.frequency.value = 1650 + Math.random() * 550      // 每一声略有不同，免得像电子音
+  bp.Q.value = 0.8
   const ng = c.createGain()
   ng.gain.setValueAtTime(0.0001, t)
-  ng.gain.exponentialRampToValueAtTime(0.55 * s, t + 0.0015)
+  ng.gain.exponentialRampToValueAtTime(0.5 * s, t + 0.0015)
   ng.gain.exponentialRampToValueAtTime(0.0001, t + dur)
   noise.connect(bp)
   bp.connect(ng)
@@ -81,18 +90,19 @@ export function tick(strength = 1): void {
   noise.start(t)
   noise.stop(t + dur)
 
-  // 2) 谐振体
-  for (const [freq, amp] of [[1750, 0.16], [3300, 0.085]] as const) {
+  // 2) 谐振体：三个不同衰减速度的谐波叠在一起，像金属件被拨了一下。
+  //    只留两个会听出"电子滴答"，加个高频短衰减的才有"咔"的边。
+  for (const [freq, amp, decay] of [[1250, 0.13, 0.05], [2500, 0.10, 0.036], [4300, 0.05, 0.02]] as const) {
     const osc = c.createOscillator()
     osc.type = 'triangle'
-    osc.frequency.value = freq * (0.97 + Math.random() * 0.06)
+    osc.frequency.value = freq * (0.96 + Math.random() * 0.08)
     const og = c.createGain()
     og.gain.setValueAtTime(amp * s, t)
-    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.034)
+    og.gain.exponentialRampToValueAtTime(0.0001, t + decay)
     osc.connect(og)
     og.connect(master)
     osc.start(t)
-    osc.stop(t + 0.04)
+    osc.stop(t + decay + 0.01)
   }
 }
 
@@ -114,7 +124,36 @@ export function thunk(): void {
   osc.stop(t + 0.1)
 }
 
-/** 微弱震动。毫秒级，别把马达震麻。 */
-export function haptic(ms = 7): void {
-  try { navigator.vibrate?.(ms) } catch { /* 桌面或不支持就算了 */ }
+function isNative(): boolean {
+  const w = window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }
+  return !!w.Capacitor?.isNativePlatform?.()
+}
+
+/** 过一格：最轻的触感，跟手用 */
+export function hapticTick(): void {
+  if (isNative()) { Haptics.selectionChanged().catch(() => {}); return }
+  try { navigator.vibrate?.(6) } catch { /* 桌面不支持就算了 */ }
+}
+
+/** 吸附到位 / 按下：明显一点的一声 */
+export function hapticSnap(): void {
+  if (isNative()) { Haptics.impact({ style: ImpactStyle.Medium }).catch(() => {}); return }
+  try { navigator.vibrate?.(16) } catch { /* 桌面不支持就算了 */ }
+}
+
+/**
+ * 音频解锁：浏览器要求 AudioContext 必须在一次真实用户手势里创建/恢复，
+ * 否则一直是 suspended，咔嗒声出不来。挂在第一次触摸上，越早越好。
+ */
+export function attachAudioUnlock(): () => void {
+  const unlock = () => { primeFeedback() }
+  const opts = { passive: true } as AddEventListenerOptions
+  document.addEventListener('touchstart', unlock, opts)
+  document.addEventListener('mousedown', unlock, opts)
+  document.addEventListener('keydown', unlock, opts)
+  return () => {
+    document.removeEventListener('touchstart', unlock)
+    document.removeEventListener('mousedown', unlock)
+    document.removeEventListener('keydown', unlock)
+  }
 }

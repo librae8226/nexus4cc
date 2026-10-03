@@ -5,6 +5,11 @@
   /* 闲置时旋钮是主角，占满剩下的空间；手里有内容时再收小让位给文字。
      两个值分别是「空手」和「有内容」，见下面的 .has-content。 */
   --walkie-dial: min(78vw, 320px);
+  /* 两个圈各自的颜色。这不是装饰：外圈/内圈谁是 PROJECT 谁是 CHANNEL，
+     原来只能靠读上方的字去猜。给了颜色之后，看读数前面那个小色块就知道
+     该拧哪个圈 —— 圈上的刻度、指针、中心读数全用同一套色。 */
+  --ring-outer: #f0a03c;
+  --ring-inner: #3b82f6;
   display: flex;
   flex-direction: column;
   height: 100dvh;
@@ -86,20 +91,34 @@
 
 /* 读数放在旋钮上方。中文绕在圆周上必然被截断，而且两个圈的字混在一起
    分不清内外 —— 移到上方之后一眼可读，圈上只留刻度。 */
-.walkie-readout { text-align: center; width: 100%; }
-.walkie-readout-row { display: flex; align-items: baseline; justify-content: center; gap: 8px; }
+.walkie-readout { text-align: center; width: 100%; display: flex; flex-direction: column; gap: 1px; }
+.walkie-readout-row {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  transition: transform .16s ease, opacity .16s ease;
+}
+/* 正在拧哪个圈，哪一行读数就亮起来、微微放大 —— 视觉上把"手"和"读数"接上 */
+.walkie-readout-row.is-turn { transform: scale(1.06); }
+.walkie-readout-row.is-turn .walkie-readout-val { color: #fff; }
 .walkie-readout-key {
   font-size: 9.5px; letter-spacing: .2em; color: var(--nexus-muted);
   text-transform: uppercase; flex: 0 0 auto;
 }
 .walkie-readout-val {
   font-size: 15px; font-weight: 650; color: var(--nexus-text);
-  max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 56vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* 小色块 = 这个读数的圈是什么颜色。就是"哪个是外圈哪个是内圈"的答案。 */
+.walkie-swatch {
+  width: 7px; height: 7px; border-radius: 2px; flex: 0 0 auto;
+  box-shadow: 0 0 8px currentColor;
+}
+.walkie-swatch-outer { background: var(--ring-outer); color: var(--ring-outer); }
+.walkie-swatch-inner { background: var(--ring-inner); color: var(--ring-inner); }
 .walkie-readout-sub .walkie-readout-val { color: var(--nexus-text-2); font-weight: 550; }
 .walkie-readout-warn { color: var(--nexus-warning); font-style: normal; font-size: 11px; margin-left: 6px; }
 .walkie-root.has-content .walkie-readout-val { font-size: 13px; }
 .walkie-root.has-content .walkie-readout-key { font-size: 9px; }
+.walkie-root.has-content .walkie-swatch { width: 6px; height: 6px; }
 
 .walkie-dial {
   position: relative;
@@ -112,7 +131,8 @@
   filter: drop-shadow(0 10px 22px color-mix(in srgb, #000 34%, transparent));
 }
 
-/* 固定指针：两个圈共用一根，明确「读的是正上方这一格」 */
+/* 固定指针：不偏任何一圈的颜色 —— 它同时指着内外两圈的正上方那一格，
+   染成某一圈的颜色会让人以为它只属于那一圈。 */
 .walkie-index {
   position: absolute;
   top: -6px; left: 50%;
@@ -120,11 +140,14 @@
   width: 0; height: 0;
   border-left: 7px solid transparent;
   border-right: 7px solid transparent;
-  border-top: 12px solid var(--nexus-accent);
-  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--nexus-accent) 70%, transparent));
+  border-top: 12px solid var(--nexus-text);
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--nexus-text) 55%, transparent));
   pointer-events: none;
   z-index: 5;
 }
+
+/* 浅色主题下琥珀要压深一点才看得清 */
+:root.light .walkie-root { --ring-outer: #d97706; }
 
 /* 两个旋钮本体。都是独立圆盘，各自带自己的齿纹和阴影，转动时一起转。 */
 .walkie-knob {
@@ -144,9 +167,10 @@
       color-mix(in srgb, #000 34%, var(--nexus-bg-2)) 100%);
   border: 1px solid color-mix(in srgb, var(--nexus-text) 14%, transparent);
   box-shadow:
-    inset 0 2px 0 color-mix(in srgb, #fff 9%, transparent),
-    inset 0 -14px 26px color-mix(in srgb, #000 42%, transparent),
-    inset 0 0 0 6px color-mix(in srgb, #000 18%, transparent);
+    inset 0 3px 0 color-mix(in srgb, #fff 13%, transparent),
+    inset 0 -18px 30px color-mix(in srgb, #000 48%, transparent),
+    inset 0 0 0 5px color-mix(in srgb, #000 22%, transparent),
+    0 14px 30px color-mix(in srgb, #000 46%, transparent);
 }
 
 /* 内圈 = CHANNEL：更亮的小旋钮帽，齿纹细密 —— 和外圈拉开材质差异，
@@ -160,9 +184,10 @@
       color-mix(in srgb, #000 22%, var(--nexus-bg-2)) 100%);
   border: 1px solid color-mix(in srgb, var(--nexus-text) 18%, transparent);
   box-shadow:
-    inset 0 1px 0 color-mix(in srgb, #fff 14%, transparent),
-    inset 0 -8px 18px color-mix(in srgb, #000 38%, transparent),
-    0 6px 16px color-mix(in srgb, #000 42%, transparent);
+    inset 0 3px 0 color-mix(in srgb, #fff 20%, transparent),
+    inset 0 -10px 20px color-mix(in srgb, #000 44%, transparent),
+    inset 0 0 0 4px color-mix(in srgb, #000 26%, transparent),
+    0 8px 18px color-mix(in srgb, #000 50%, transparent);
 }
 
 /* 齿纹（滚花）。放在会转的容器里 —— 静止的刻度看不出动，会动的齿纹一眼
@@ -173,21 +198,22 @@
   inset: 0;
   border-radius: 50%;
 }
+/* 齿纹带上各自圈的颜色，转起来时能看出"这一圈是哪个" */
 .walkie-ridges-outer {
   background: repeating-conic-gradient(from 0deg,
-    color-mix(in srgb, var(--nexus-text) 30%, transparent) 0deg 1.1deg,
-    transparent 1.1deg 6deg);
+    color-mix(in srgb, var(--ring-outer) 58%, var(--nexus-text)) 0deg 1.6deg,
+    transparent 1.6deg 8deg);
   -webkit-mask: radial-gradient(circle closest-side, transparent 0 88%, #000 88% 100%);
   mask: radial-gradient(circle closest-side, transparent 0 88%, #000 88% 100%);
-  opacity: .42;
+  opacity: .5;
 }
 .walkie-ridges-inner {
   background: repeating-conic-gradient(from 0deg,
-    color-mix(in srgb, var(--nexus-text) 26%, transparent) 0deg .8deg,
-    transparent .8deg 4.5deg);
+    color-mix(in srgb, var(--ring-inner) 55%, var(--nexus-text)) 0deg 1.1deg,
+    transparent 1.1deg 8deg);
   -webkit-mask: radial-gradient(circle closest-side, transparent 0 88%, #000 88% 100%);
   mask: radial-gradient(circle closest-side, transparent 0 88%, #000 88% 100%);
-  opacity: .30;
+  opacity: .38;
 }
 
 /* 刻度：没有文字，整个环一起转，所以不需要反向旋转保持水平。 */
@@ -197,32 +223,30 @@
   pointer-events: none;
   will-change: opacity;
 }
-/* 外圈刻度：细长线，像量程刻度 */
-.walkie-notch-outer {
+/* 刻度：两个圈都是**径向短线**（像量程刻度），各自用自己的颜色。
+   上一版内圈用圆点，远看就是几个灰点，既不像刻度也不知道选中了哪个。 */
+.walkie-notch {
   width: 2px; height: 9px;
   margin: -4.5px 0 0 -1px;
   border-radius: 1px;
-  background: color-mix(in srgb, var(--nexus-text) 62%, transparent);
 }
+.walkie-notch-outer { background: color-mix(in srgb, var(--ring-outer) 30%, var(--nexus-text)); }
 .walkie-notch-outer.is-sel {
-  width: 3px; height: 15px;
-  margin: -7.5px 0 0 -1.5px;
-  background: var(--nexus-accent);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--nexus-accent) 85%, transparent);
+  width: 3.5px; height: 18px;
+  margin: -9px 0 0 -1.75px;
+  background: var(--ring-outer);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--ring-outer) 90%, transparent);
 }
-/* 内圈刻度：短粗点，视觉上和外圈刻度明确不同 */
-.walkie-notch-inner {
-  width: 4px; height: 4px;
-  margin: -2px 0 0 -2px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--nexus-text) 46%, transparent);
-}
+.walkie-notch-inner { height: 7px; margin: -3.5px 0 0 -1px; background: color-mix(in srgb, var(--ring-inner) 30%, var(--nexus-text)); }
 .walkie-notch-inner.is-sel {
-  width: 7px; height: 7px;
-  margin: -3.5px 0 0 -3.5px;
-  background: var(--nexus-accent);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--nexus-accent) 85%, transparent);
+  width: 3.5px; height: 14px;
+  margin: -7px 0 0 -1.75px;
+  background: var(--ring-inner);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--ring-inner) 90%, transparent);
 }
+
+/* 中心读数是**频道**号，所以用内圈的颜色 */
+.walkie-hub-num { color: var(--ring-inner); }
 
 /* 转动中的圈：把非活动的那一圈压暗一点，"我在拧哪个"一目了然 */
 .walkie-dial.is-turning-inner .walkie-knob-outer { opacity: .45; transition: opacity .18s; }
@@ -358,6 +382,7 @@
 .walkie-mini:active { background: var(--nexus-bg); }
 .walkie-mini[disabled] { opacity: .45; }
 .walkie-note { font-size: 11px; color: var(--nexus-muted); }
+.walkie-note-warn { color: var(--nexus-warning); }
 
 /* 等待中的跳动点 */
 .walkie-wait { display: flex; align-items: center; gap: 8px; color: var(--nexus-text-2); font-size: 13px; }
@@ -511,6 +536,9 @@
   50% { opacity: .35; transform: scale(.8); }
 }
 
+/* 真实音量条：高度由麦克风采到的 RMS 驱动（不是装饰动画）。
+   上一版是一段固定的 CSS 动画 —— 好看，但麦克风坏没坏它都长一样，
+   等于什么都没告诉你。 */
 .walkie-levels {
   display: flex;
   align-items: center;
@@ -524,12 +552,42 @@
   height: 12px;
   border-radius: 2px;
   background: var(--nexus-accent);
-  opacity: .85;
-  animation: walkie-level 900ms ease-in-out infinite;
+  transition: height .1s linear, opacity .1s linear;
 }
-@keyframes walkie-level {
-  0%, 100% { height: 8px; opacity: .45; }
-  50% { height: 40px; opacity: 1; }
+
+/* 边说边出字的实时转写 */
+.walkie-live { color: var(--nexus-text); white-space: pre-wrap; word-break: break-word; }
+.walkie-live[data-empty="1"] { color: var(--nexus-muted); }
+
+/* 等待时透出的目标窗口现状 */
+.walkie-pane {
+  margin: 10px 0 0;
+  padding: 9px 11px;
+  max-height: 150px;
+  overflow: hidden;
+  border-radius: 9px;
+  background: var(--nexus-bg);
+  border: 1px solid var(--nexus-border);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--nexus-text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* 只露出最下面几行：上面是历史，看的是"现在卡在哪" */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 22px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 22px);
+}
+.walkie-pane code { font: inherit; }
+
+.walkie-hint-bad {
+  margin-top: 9px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--nexus-warning) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nexus-warning) 40%, transparent);
+  color: var(--nexus-warning);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .walkie-notice {

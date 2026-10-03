@@ -27,8 +27,11 @@ export default function App() {
   // 界面模式（经典终端 / 对讲机）。判定规则见 walkie/mode.ts。
   // 初值 null = 还没判定完，先什么都不渲染，避免先闪一下经典终端再跳走。
   const [mode, setMode] = useState<UiMode | null>(null)
+  // 经典界面里要不要显示「回对讲机」的浮标：出厂默认就是对讲机的包装里有，
+  // 或者用户自己从对讲机切过来（浏览器里也一样，否则切过去就回不来了）。
+  const [showWalkieReturn, setShowWalkieReturn] = useState(false)
   useEffect(() => { void resolveMode().then(setMode) }, [])
-  const switchMode = (m: UiMode) => { rememberMode(m); setMode(m) }
+  const switchMode = (m: UiMode) => { rememberMode(m); setMode(m); setShowWalkieReturn(true) }
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -79,7 +82,7 @@ export default function App() {
         <Terminal token={token} />
         {/* 只有在「出厂默认就是对讲机」的 APK 里才给回程入口 —— 浏览器用户
             从没见过对讲机，别凭空多一个按钮出来。 */}
-        {buildDefaultMode() === 'walkie' && (
+        {(buildDefaultMode() === 'walkie' || showWalkieReturn) && (
           <button type="button" className="walkie-fab" onClick={() => switchMode('walkie')}>
             🎙 对讲机
           </button>

@@ -25,10 +25,11 @@ import {
   dictationSupported, explainDictationError, startDictation,
   type Dictation, type DictationStatus,
 } from './speech'
+import { attachAudioUnlock } from './feedback'
 import { speak, stopSpeaking } from './tts'
 import './walkie.css'
 
-// listening = 正在录音；transcribing = 松手后本机转写中（约 1.5–2 秒）
+// listening = 正在录音（边说边出字）；transcribing = 松手后等最后一段落地（约 1.5 秒）
 type Phase = 'idle' | 'listening' | 'transcribing' | 'review' | 'waiting' | 'reply'
 
 interface CacheEntry { reply: ReplyState; summary: string; sent: string }
@@ -36,6 +37,7 @@ interface CacheEntry { reply: ReplyState; summary: string; sent: string }
 const POLL_MS = 1200
 const WAIT_LIMIT_MS = 10 * 60_000
 const REFINE_WAIT_MS = 3000
+const LEVEL_BARS = 26
 
 const IconMic = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
@@ -58,6 +60,9 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
 
   const [phase, setPhase] = useState<Phase>('idle')
   const [recSec, setRecSec] = useState(0)
+  const [live, setLive] = useState('')          // 边说边出字的已确定部分
+  const [micReady, setMicReady] = useState(false)  // 麦克风是否已打开（首次会弹系统权限框）
+  const [bars, setBars] = useState<number[]>(() => new Array(LEVEL_BARS).fill(0))
   const [notice, setNotice] = useState('')
   const [draft, setDraft] = useState('')
   const [rawText, setRawText] = useState('')
@@ -66,6 +71,8 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   const [sent, setSent] = useState('')
   const [reply, setReply] = useState<ReplyState | null>(null)
   const [stage, setStage] = useState('')
+  const [paneTail, setPaneTail] = useState<string[]>([])
+  const [hint, setHint] = useState('')
   const [summary, setSummary] = useState('')
   const [elapsed, setElapsed] = useState(0)
   const [err, setErr] = useState('')
@@ -86,8 +93,12 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   const pollsRef = useRef(new Map<string, number>())
   const recStartedRef = useRef(0)     // 本次录音起点
   const recSecRef = useRef(0)         // 已录秒数（松手时用来判断"是不是按太短了"）
+  const barsRef = useRef<number[]>(new Array(LEVEL_BARS).fill(0))
+  const lastLevelAt = useRef(0)
+  const liveRef = useRef('')
   draftRef.current = draft
   chanKeyRef.current = chanKey
+  liveRef.current = live
 
   const clearPoll = useCallback((key: string) => {
     const t = pollsRef.current.get(key)
@@ -117,7 +128,8 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   // 录音计时：只说"正在听"没法判断麦克风到底有没有在工作，
   // 让它一秒一秒地走，至少能确认"确实在录"。
   useEffect(() => {
-    if (phase !== 'listening') return
+    // 计时只在麦克风真的打开之后才走 —— 权限弹窗那几秒不算录音时间
+    if (phase !== 'listening' || !micReady) return
     recStartedRef.current = Date.now()
     recSecRef.current = 0
     setRecSec(0)
@@ -126,7 +138,7 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
       setRecSec(recSecRef.current)
     }, 200)
     return () => clearInterval(t)
-  }, [phase])
+  }, [phase, micReady])
 
   // 首帧：落到该项目的活动窗口（用户上次在用的那个）
   const initedRef = useRef(false)
@@ -142,18 +154,35 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     if (n && chanIdx > n - 1) setChanIdx(0)
   }, [projects, projIdx, chanIdx])
 
+  // 音频解锁：浏览器要求 AudioContext 必须在真实用户手势里恢复，否则咔嗒声出不来
+  useEffect(() => attachAudioUnlock(), [])
+
   // ── 语音 ────────────────────────────────────────────────
   const startTalk = useCallback(async () => {
     if (dictRef.current || phase === 'waiting') return
     holdRef.current = true
+    // 首次按下会弹系统的麦克风权限框，getUserMedia 要等用户点完才 resolve。
+    // 那几秒界面必须给出反馈，否则就是一个「按了没反应」的死按钮 ——
+    // 上一版真机上就是这么被误判成"按住说话坏了"的。
+    setMicReady(false); setPhase('listening')
     void stopSpeaking(); setSpeakingNow(false); setErr(''); setNotice('')
     setRecSec(0); setDraft(''); setRawText(''); setRefined(false)
     setSent(''); setReply(null); setSummary(''); setStage('')
+    setLive(''); setBars(new Array(LEVEL_BARS).fill(0)); barsRef.current = new Array(LEVEL_BARS).fill(0)
     try {
       const d = await startDictation(token, {
         onStatus: (s: DictationStatus) => {
           // 手指已松开、但录音器才刚起来 —— 别把状态往回拨
-          if (s === 'recording' && holdRef.current) setPhase('listening')
+          if (s === 'recording') { setMicReady(true); if (holdRef.current) setPhase('listening') }
+        },
+        onLive: (t) => setLive(t),
+        onLevel: (v) => {
+          // 每 85ms 一次回调，直接 setState 会把主线程打满；压到 ~9fps 足够画波形
+          const now = performance.now()
+          if (now - lastLevelAt.current < 110) return
+          lastLevelAt.current = now
+          barsRef.current = [...barsRef.current.slice(1), Math.min(1, v * 9)]
+          setBars(barsRef.current)
         },
         onError: (m) => setErr(explainDictationError(m)),
       })
@@ -178,13 +207,17 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     const recSecs = recSecRef.current
     setPhase('transcribing')
     let text = ''
-    try { text = await d.stop() } catch { /* 转写失败已由 onError 说明 */ }
-    const final = (text || '').trim()
+    let failure = ''
+    try { text = await d.stop() } catch (e) { failure = e instanceof Error ? e.message : String(e) }
+    // 收尾那一段没回来时，用已经逐段转出来的文字兜底 —— 总比一个字都不给强
+    const final = (text || liveRef.current || '').trim()
     if (!final) {
       setPhase('idle')
-      setNotice(recSecs < 0.6
-        ? `按住才录了 ${recSecs.toFixed(1)} 秒 —— 说一句话再松手。`
-        : `录了 ${recSecs.toFixed(1)} 秒，但没识别出内容。再说一次，或点 ⌨ 用输入法。`)
+      setNotice(failure
+        ? explainDictationError(failure)
+        : recSecs < 0.6
+          ? `按住才录了 ${recSecs.toFixed(1)} 秒 —— 说一句话再松手。`
+          : `录了 ${recSecs.toFixed(1)} 秒，但没识别出内容。再说一次，或点 ⌨ 用输入法。`)
       return
     }
     setRawText(final); setDraft(final); setPhase('review')
@@ -210,7 +243,8 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
 
   /** 兜底：调起输入法（含它的语音键），走同一条文本框 */
   const focusDraft = () => {
-    setPhase((p) => (p === 'idle' ? 'review' : p))
+    setNotice('')     // 上一次"没识别出内容"之类的提示不该一直挂在屏幕上
+    setPhase((p) => (p === 'listening' || p === 'transcribing' ? p : 'review'))
     // 文本框要等这一轮 render 出来才存在，rAF 有时仍早一拍，给个短延时
     setTimeout(() => document.getElementById('walkie-draft')?.focus(), 60)
   }
@@ -249,12 +283,14 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
       if (chanKeyRef.current === key) {
         setElapsed(Math.round((Date.now() - started) / 1000))
         if (r.stage) setStage(r.stage)
+        setPaneTail(r.paneTail || [])
+        setHint(r.hint || '')
       }
       if (r.done) {
         clearPoll(key)
         cacheRef.current.set(key, { reply: r, summary: '', sent: sentText })
         if (chanKeyRef.current === key) {
-          setReply(r); setPhase('reply')
+          setReply(r); setPhase('reply'); setPaneTail([]); setHint('')
           void autoSpeak(r.text, key)
         }
         return
@@ -282,7 +318,9 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     const text = draftRef.current.trim()
     if (!text) return
 
-    setErr(''); setSent(text); setReply(null); setSummary(''); setElapsed(0); setPhase('waiting')
+    setErr(''); setNotice(''); setSent(text); setReply(null); setSummary(''); setElapsed(0)
+    setStage(''); setPaneTail([]); setHint('')
+    setPhase('waiting')
 
     try {
       await sendPrompt(token, project.name, channel.index, text)
@@ -308,7 +346,8 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     dictRef.current = null
 
     setProjIdx(pi); setChanIdx(ci)
-    setErr(''); setNotice(''); setStage(''); setDraft(''); setRawText(''); setRefined(false); setRefining(false); setElapsed(0)
+    setErr(''); setNotice(''); setStage(''); setPaneTail([]); setHint(''); setLive('')
+    setDraft(''); setRawText(''); setRefined(false); setRefining(false); setElapsed(0)
 
     const key = `${p.name}:${c.index}`
     const cached = cacheRef.current.get(key)
@@ -325,6 +364,16 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
       setReply(r); setPhase('reply')
     }).catch(() => { /* peek 失败无所谓 */ })
   }, [projects, projIdx, chanIdx, token])
+
+  /** 去经典终端看这一轮的完整过程。把当前 project/channel 写进它读的那两个键，
+      切过去就是这一格，不用再自己找。 */
+  const openInTerminal = () => {
+    try {
+      if (project) localStorage.setItem('nexus_session', project.name)
+      if (channel) localStorage.setItem('nexus_window', String(channel.index))
+    } catch { /* 隐私模式 */ }
+    onExit?.()
+  }
 
   const reset = () => {
     void stopSpeaking(); setSpeakingNow(false)
@@ -346,6 +395,11 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
         </div>
         <div className="walkie-top-actions">
           {data?.llm && <span className="walkie-note">{data.llm.label}</span>}
+          {data && !data.asr && (
+            <span className="walkie-note walkie-note-warn" title="按住说话要用本机转写，它没在跑">
+              转写服务未启动
+            </span>
+          )}
           <button type="button" className="walkie-chip" onClick={() => void reload(true)}>刷新</button>
           {onExit && <button type="button" className="walkie-chip" onClick={onExit}>经典</button>}
         </div>
@@ -373,15 +427,18 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
         {phase === 'listening' && (
           <div className="walkie-card">
             <div className="walkie-card-label">
-              <span className="walkie-rec"><i />录音中</span>
-              <span>{recSec.toFixed(1)}s · 松手结束</span>
+              <span className="walkie-rec"><i />{micReady ? '录音中' : '正在打开麦克风…'}</span>
+              <span>{micReady ? `${recSec.toFixed(1)}s · 松手结束` : '首次会弹权限确认'}</span>
             </div>
-            {/* 上一版这里显示"边说边出字"，但那条路在国产 ROM 上是死的。
-                现在改成本机转写，代价是没有实时预览 —— 所以用一条随时间起伏的
-                波形告诉你"确实在录"，而不是让你对着静止的文字猜。 */}
+            {/* 边说边出字：转写是分段送出去的，一段回来就接上一段。
+                波形是真实音量（麦克风采到的 RMS），不是装饰动画 —— 一眼能看出
+                到底有没有在收音，这比"录音中"三个字有用得多。 */}
+            <div className="walkie-draft walkie-live" data-empty={live ? '0' : '1'}>
+              {live || '说吧…'}
+            </div>
             <div className="walkie-levels" aria-hidden="true">
-              {Array.from({ length: 28 }, (_, i) => (
-                <i key={i} style={{ animationDelay: `${(i % 7) * 90}ms` }} />
+              {bars.map((b, i) => (
+                <i key={i} style={{ height: `${14 + b * 86}%`, opacity: 0.35 + b * 0.65 }} />
               ))}
             </div>
           </div>
@@ -389,7 +446,8 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
 
         {phase === 'transcribing' && (
           <div className="walkie-card">
-            <div className="walkie-wait"><i /><i /><i /><span>本机转写中…</span></div>
+            <div className="walkie-wait"><i /><i /><i /><span>转写最后一段…</span></div>
+            {live && <div className="walkie-draft walkie-live" style={{ marginTop: 8 }}>{live}</div>}
           </div>
         )}
 
@@ -431,14 +489,24 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
           <div className="walkie-card">
             <div className="walkie-wait">
               <i /><i /><i />
-              <span>{stage || 'Claude 在干活…'}（{elapsed}s）</span>
+              <span>{stage || '已投递…'}（{elapsed}s）</span>
             </div>
+            {/* 把目标窗口当前的样子透出来。没有这个，"AI 在干活但界面上什么都没有"
+                就只能干等；有了它，卡在信任提示、卡在 shell、正在跑工具，一眼可见。 */}
+            {paneTail.length > 0 && (
+              <pre className="walkie-pane"><code>{paneTail.join('\n')}</code></pre>
+            )}
+            {hint && <div className="walkie-hint-bad">{hint}</div>}
           </div>
         )}
 
-        {phase === 'reply' && reply && (
+        {/* 看回复时按 ⌨ 起新一轮：回复不撤走，留在输入框上面当上下文 */}
+        {(phase === 'reply' || phase === 'review') && reply && (
           <div className="walkie-card">
-            <div className="walkie-card-label"><span>AI 回复</span></div>
+            <div className="walkie-card-label">
+              <span>AI 回复</span>
+              {reply.via === 'grew-fallback' && <span>（靠文件增长猜的，可能不是这一条）</span>}
+            </div>
             <div className="walkie-reply">{reply.text || '（这一轮没有说话，可能只动了文件）'}</div>
             <div className="walkie-inline">
               {summary && (
@@ -452,6 +520,9 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
                 </button>
               )}
               <button type="button" className="walkie-mini" onClick={reset}>再问一句</button>
+              {onExit && (
+                <button type="button" className="walkie-mini" onClick={openInTerminal}>看完整过程</button>
+              )}
             </div>
             {summary && <div className="walkie-note" style={{ marginTop: 8 }}>摘要：{summary}</div>}
           </div>
@@ -466,7 +537,7 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
           {/* 输入法兜底入口。只在"手上没话要说"的两个状态出现：
               说话中说这个没意义；已在看回复或等回复时，用「再问一句」起新的一轮，
               而不是把回复从眼前顶掉。 */}
-          {!canSend && (phase === 'idle' || phase === 'review') && (
+          {!canSend && phase !== 'listening' && phase !== 'transcribing' && (
             <button type="button" className="walkie-key" onClick={focusDraft} title="用输入法输入">
               <IconKeyboard />
             </button>

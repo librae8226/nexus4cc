@@ -14,7 +14,7 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { WalkieProject } from './api'
-import { haptic, primeFeedback, thunk, tick } from './feedback'
+import { hapticSnap, hapticTick, primeFeedback, thunk, tick } from './feedback'
 
 /** 相邻两项的夹角。项少时留白太空，项多时挤成一团，两头都夹一下。 */
 const stepFor = (n: number) => Math.max(26, Math.min(60, 300 / Math.max(n, 1)))
@@ -60,7 +60,7 @@ function detent(strength: number) {
   if (now - lastTickAt < 38) return
   lastTickAt = now
   tick(strength)
-  haptic(6)
+  hapticTick()
 }
 
 export default function ChannelDial({ projects, projIdx, chanIdx, onChange }: Props) {
@@ -109,7 +109,7 @@ export default function ChannelDial({ projects, projIdx, chanIdx, onChange }: Pr
     drag.current = { ring, lastAngle: angleAt(e.clientX, e.clientY), moved: 0 }
     dragging.current = true
     setActive(ring)
-    haptic(10)
+    hapticSnap()
     ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
   }
 
@@ -158,7 +158,7 @@ export default function ChannelDial({ projects, projIdx, chanIdx, onChange }: Pr
       const hit = (e.target as HTMLElement).closest('[data-ring]') as HTMLElement | null
       if (hit?.dataset.ring) {
         const idx = Number(hit.dataset.idx)
-        haptic(10)
+        hapticSnap()
         if (hit.dataset.ring === 'outer') { setOuterVal(idx); setInnerVal(0); onChange(idx, 0) }
         else { setInnerVal(idx); onChange(projIdx, idx) }
       }
@@ -166,7 +166,7 @@ export default function ChannelDial({ projects, projIdx, chanIdx, onChange }: Pr
     }
 
     thunk()                                          // 吸附到位的"咚"
-    haptic(14)
+    hapticSnap()
     if (d.ring === 'outer') {
       const pi = Math.round(outerVal)
       const ci = Math.max(0, Math.min(Math.round(innerVal), (projects[pi]?.channels.length ?? 1) - 1))
@@ -218,11 +218,13 @@ export default function ChannelDial({ projects, projIdx, chanIdx, onChange }: Pr
     <>
       {/* 读数放在旋钮上方：中文在这里能完整显示，也不用绕着圈读 */}
       <div className="walkie-readout">
-        <div className="walkie-readout-row">
+        <div className={`walkie-readout-row${active === 'outer' ? ' is-turn' : ''}`}>
+          <i className="walkie-swatch walkie-swatch-outer" aria-hidden="true" />
           <span className="walkie-readout-key">PROJECT</span>
           <span className="walkie-readout-val">{curProject?.name ?? '—'}</span>
         </div>
-        <div className="walkie-readout-row walkie-readout-sub">
+        <div className={`walkie-readout-row walkie-readout-sub${active === 'inner' ? ' is-turn' : ''}`}>
+          <i className="walkie-swatch walkie-swatch-inner" aria-hidden="true" />
           <span className="walkie-readout-key">CHANNEL</span>
           <span className="walkie-readout-val">
             {curChannel?.name ?? '—'}

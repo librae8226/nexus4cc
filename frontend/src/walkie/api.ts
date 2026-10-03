@@ -21,6 +21,8 @@ export interface WalkieProject {
 export interface ChannelList {
   projects: WalkieProject[]
   llm: { label: string; model: string } | null
+  /** 本机转写服务（PM2 `intake`）在不在。不在就先告诉用户，别等他按下去才发现 */
+  asr: boolean
   tmux: boolean
 }
 
@@ -35,6 +37,14 @@ export interface ReplyState {
   sessionId?: string | null
   via?: string | null
   elapsedMs?: number
+  /**
+   * 目标 pane 底部几行的纯文本。等回复的时候把它显示出来 ——
+   * "AI 在干活但界面上什么都没有"是最没法自查的状态：有了这个，
+   * 卡在权限对话框、卡在 shell、正在跑工具，一眼就能看出来。
+   */
+  paneTail?: string[]
+  /** 后端给的排障提示（认领会话失败、目标不是 claude 等） */
+  hint?: string | null
 }
 
 async function req<T>(path: string, token: string, init?: RequestInit): Promise<T> {
