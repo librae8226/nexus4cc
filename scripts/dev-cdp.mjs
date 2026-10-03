@@ -11,6 +11,7 @@
  *
  * 选项：
  *   --mobile           按 iPhone 尺寸（390x844, dpr2）渲染
+ *   --size <WxH>       自定义视口（如 800x1000）—— 验折叠屏展开/平板那种宽版面
  *   --wait <ms>        加载后额外等多久（默认 1200）
  *   --set k=v          加载后写 localStorage 再刷新（可重复；登录 token 用得上）
  *   --eval "<js>"      在截图前执行一段 JS（可重复，按顺序）
@@ -35,10 +36,11 @@ const CDP = process.env.CDP_BASE || 'http://127.0.0.1:9222'
 
 function parseArgs(argv) {
   const [cmd, url, out] = argv
-  const opts = { mobile: false, wait: 1200, set: [], eval: [], keep: false, attach: '', hold: null, tap: null, drag: null, shotAt: 0 }
+  const opts = { mobile: false, size: null, wait: 1200, set: [], eval: [], keep: false, attach: '', hold: null, tap: null, drag: null, shotAt: 0 }
   for (let i = 3; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--mobile') opts.mobile = true
+    else if (a === '--size') { const [w, h] = String(argv[++i]).split('x').map(Number); if (w > 0 && h > 0) opts.size = [w, h] }
     else if (a === '--keep') opts.keep = true
     else if (a === '--attach') opts.attach = argv[++i]
     else if (a === '--hold') opts.hold = { sel: argv[++i], ms: Number(argv[++i]) }
@@ -131,9 +133,11 @@ async function main() {
   await s.send('Runtime.enable')
 
   // attach 到真实 WebView 时不要再覆盖尺寸 —— 那会伪造出一个和真机不一样的视口
-  if (opts.mobile && !opts.attach) {
+  if ((opts.mobile || opts.size) && !opts.attach) {
+    // --size 用来验折叠屏/平板那种"宽但仍是手机"的版面（竖屏手机验不出宽屏规则）
+    const [w, h] = opts.size || [390, 844]
     await s.send('Emulation.setDeviceMetricsOverride', {
-      width: 390, height: 844, deviceScaleFactor: 2, mobile: true,
+      width: w, height: h, deviceScaleFactor: 2, mobile: true,
     })
     await s.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 })
   }

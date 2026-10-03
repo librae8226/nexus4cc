@@ -118,3 +118,10 @@ node scripts/dev-cdp.mjs shot "http://127.0.0.1:59000/?ui=walkie" /tmp/w.png \
 
 `?ui=walkie` 直接进对讲机界面；`--mobile` 按 390×844 渲染并开触摸模拟。
 它**只操作自己新建的 tab**，用完就关，不碰你正在用的页面。
+
+验折叠屏展开/平板那种"宽版面"用 `--size`（竖屏手机验不出宽屏规则）：
+
+```bash
+node scripts/dev-cdp.mjs shot "http://127.0.0.1:59000/?ui=walkie" /tmp/w-wide.png \
+  --size 860x1000 --set nexus_token=$TOKEN --set nexus_walkie_state='{"last":"main:1"}'
+```

@@ -313,6 +313,10 @@
   border: 1px solid color-mix(in srgb, var(--nexus-warning) 38%, transparent);
   color: var(--nexus-text); font-size: 12.5px; line-height: 1.5;
 }
+.walkie-blocked em {
+  display: block; margin-top: 3px; font-style: normal;
+  color: var(--nexus-muted); font-size: 11.5px; line-height: 1.5;
+}
 /* "它在等你选"不是告警，是它在等你 —— 用中性色，别吓人 */
 .walkie-blocked.is-ask {
   background: color-mix(in srgb, var(--nexus-accent) 12%, transparent);
@@ -510,6 +514,16 @@
 .walkie-opt-name { font-size: 14px; font-weight: 600; }
 .walkie-opt-id { flex: 0 0 auto; font-size: 11px; color: var(--nexus-muted); }
 .walkie-set-note { font-size: 11.5px; color: var(--nexus-muted); line-height: 1.6; padding: 6px 4px 0; }
+.walkie-set-note.is-bad { color: var(--nexus-warning); }
+.walkie-set-field { display: flex; align-items: center; gap: 8px; padding: 0 4px; }
+.walkie-set-field input {
+  flex: 1 1 auto; min-width: 0;
+  background: var(--nexus-bg); border: 1px solid var(--nexus-border); border-radius: 10px;
+  padding: 10px 12px; color: var(--nexus-text); font: inherit;
+  font-size: 16px;                 /* 16px：再小 iOS 会在聚焦时把整页放大 */
+  outline: none;
+}
+.walkie-set-field input:focus { border-color: color-mix(in srgb, var(--nexus-accent) 55%, var(--nexus-border)); }
 
 /* ── 第一次打开（对讲机风味包的首启页）─────────────────
    它是这一屏的"开箱"，所以长得和这一屏一样：同一个圆点、同一句人话。
@@ -580,3 +594,16 @@
   color: var(--nexus-text); font: inherit; font-size: 14px; outline: none;
 }
 .walkie-newchan input:focus { border-color: color-mix(in srgb, var(--nexus-accent) 55%, var(--nexus-border)); }
+
+/* ── 宽屏（折叠屏展开 / 平板）──────────────────────────
+   一行拉得太长，眼睛得来回扫 —— 而这一屏的全部职责就是"扫一眼"。
+   所以内容给一个阅读宽度居中；输入那一行跟着收窄，否则底下的框和上面的流对不齐。 */
+@media (min-width: 700px) {
+  .walkie-stage { padding-left: 24px; padding-right: 24px; }
+  .walkie-stage-inner { width: 100%; max-width: 760px; margin: 0 auto; }
+  .walkie-compose { padding-left: 24px; padding-right: 24px; }
+  .walkie-compose > * { max-width: 760px; margin-left: auto; margin-right: auto; }
+  .walkie-top,
+  .walkie-absent, .walkie-nowline, .walkie-missed, .walkie-blocked,
+  .walkie-sheet-body { max-width: 760px; margin-left: auto; margin-right: auto; }
+}

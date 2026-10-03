@@ -580,13 +580,15 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
   // 每一步之后都**重新读一次面板**再决定下一步；对不上就停下报错，绝不盲发按键 ——
   // 盲发的后果是替你在另一个选项上按了回车，那比不答更糟。
   router.post('/answer', authMiddleware, async (req, res) => {
-    const { project, window: win, picks } = req.body || {}
+    const { project, window: win, picks, skip, qs } = req.body || {}
     if (!project || !NAME_RE.test(String(project))) return res.status(400).json({ error: 'invalid project' })
     if (!Number.isInteger(Number(win)) || Number(win) < 0) return res.status(400).json({ error: 'invalid window' })
-    if (!Array.isArray(picks) || !picks.length || picks.length > 6) return res.status(400).json({ error: 'invalid picks' })
-    for (const p of picks) {
-      if (!Array.isArray(p) || p.length > 4) return res.status(400).json({ error: 'invalid picks' })
-      for (const i of p) if (!Number.isInteger(i) || i < 0 || i > 3) return res.status(400).json({ error: 'invalid picks' })
+    if (!skip) {
+      if (!Array.isArray(picks) || !picks.length || picks.length > 6) return res.status(400).json({ error: 'invalid picks' })
+      for (const p of picks) {
+        if (!Array.isArray(p) || p.length > 4) return res.status(400).json({ error: 'invalid picks' })
+        for (const i of p) if (!Number.isInteger(i) || i < 0 || i > 3) return res.status(400).json({ error: 'invalid picks' })
+      }
     }
 
     const target = `${project}:${Number(win)}`
@@ -602,13 +604,36 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
           .split('\n')
       } catch { return [] }
     }
-    /** 面板上那几行选项：`❯ 1. [ ] 面条` → {n:1, cur:true, box:true, label:'面条'} */
-    const options = (lines) => lines.flatMap((l) => {
-      const m = /^\s*(❯)?\s*(\d+)\.\s*(.*)$/.exec(l)
-      if (!m) return []
-      const label = m[3].trim()
-      return [{ n: Number(m[2]), cur: !!m[1], box: label.startsWith('['), label }]
-    })
+    /**
+     * 面板上那几行选项：`❯ 1. [ ] 面条` → {n:1, cur:true, box:true, label:'面条'}。
+     *
+     * **必须只读面板自己那几行**。屏幕上别处也会有 "1. xxx" 这样的行 —— 模型写的
+     * 编号列表就紧贴在面板上面 —— 把它们算进来，"面板还在不在"的判断就会误判。
+     * 判据用面板自己的签名：最后那行键位提示（`Enter to select · ↑/↓ to navigate`）。
+     * 它不在，就是面板不在，一个字都不读。
+     */
+    const options = (lines) => {
+      const end = lines.findIndex((l) => /Enter to select|↑\/↓ to navigate/.test(l))
+      if (end < 0) return []
+      const rows = []
+      for (let i = end - 1; i >= 0 && rows.length < 10; i--) {
+        const l = lines[i]
+        const m = /^\s*(❯)?\s*(\d+)\.\s*(.*)$/.exec(l)
+        if (m) {
+          const n = Number(m[2])
+          const label = m[3].trim()
+          rows.push({ n, cur: !!m[1], box: label.startsWith('['), label })
+          // **到这里就够了**：选项从 1 开始编号，走到 1 就是列表顶 ——
+          // 再往上就是题目正文，进而就是屏幕上别的字（模型自己写的编号列表）。
+          // 别指望分隔线当中止条件：面板**下面**也有一条，先撞上的是它。
+          if (n === 1) break
+          continue
+        }
+        if (/^\s*$/.test(l) || /^\s*─{5,}/.test(l) || /^\s{3,}\S/.test(l)) continue
+        break                                  // 正文 —— 面板到此为止
+      }
+      return rows.reverse()
+    }
     const send = (...keys) => {
       try { execFileSync('tmux', ['send-keys', '-t', target, ...keys], { stdio: 'pipe' }) } catch { /* 下面读面板时会发现 */ }
     }
@@ -617,6 +642,43 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     const sleep = (ms) => new Promise((r) => { setTimeout(r, ms) })
 
     const rows = options(readPane())
+
+    /**
+     * 屏幕上那道题，是不是你要答的那道题。
+     *
+     * 这道检查防的是一个真实会发生的竞态：你在电脑前顺手把题答了（或者按了回车），
+     * 手机上那条"它在问你"还没消失（流最多 5 秒才刷一次），你这时点一个选项 ——
+     * 面板早就翻页/关掉了，盲发按键就会按在**下一个还能按的东西**上。
+     * 答错比不答糟得多，所以宁可不发。
+     *
+     * 比对前把所有空白去掉，长问题在终端里折行也不影响。
+     */
+    const showsQuestion = (lines, text) => {
+      // 收答案那页（"Review your answers / Ready to submit"）上**也会印着题目**，
+      // 光对题目会对上 —— 但它那页的回车是"提交现有答案"，不是"选这一项"。
+      if (lines.some((l) => /Ready to submit/i.test(l))) return false
+      const q = norm(text)
+      if (!q) return true                       // 前端没给题目就不拦（老客户端）
+      const flat = norm(lines.join(''))
+      return flat.includes(q) || flat.includes(q.slice(0, 10))
+    }
+
+    /**
+     * 跳过这道题（面板里那一项写着 `Type something.`，还有 Esc —— 两条实测等价）。
+     * 用它来**用自己的话回答**：面板收掉之后，你那句话就是一条普通消息发过去，
+     * 它照样接着办。这不是"取消"，是"这道题我不从你给的选项里选"。
+     */
+    if (skip) {
+      if (!rows.length) return res.json({ ok: true, wasUp: false })
+      send('Escape')
+      await sleep(400)
+      if (options(readPane()).length) {
+        return res.status(409).json({ error: 'skip-not-taken', hint: '没能收掉终端里那道题 —— 到经典界面看一眼。' })
+      }
+      audit?.('walkie-answer', req, { target, skip: true })
+      return res.json({ ok: true, wasUp: true })
+    }
+
     if (!rows.length) {
       return res.status(409).json({ error: 'no-question-up', hint: '终端里没找到那道题 —— 可能你已经答过了，或者它被别处取消了。' })
     }
@@ -636,9 +698,15 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
 
     const sent = []
     for (let qi = 0; qi < picks.length; qi++) {
-      if (qi > 0) {                      // 翻到下一道题的页
-        send('Right'); await sleep(220)
-        if (!options(readPane()).length) break   // 已经不在面板上了（上一题可能就是单选直提）
+      // **只有多选才需要手动翻页。** 单选答完一题，面板会自己翻到下一题
+      // （实测：答完"喝什么"，标签从 ☐ 变 ☒ 并且光标已经在"几点起"上了）——
+      // 这时候再补一个 →，就会跳过一整道题。
+      if (qi > 0 && checkbox) { send('Right'); await sleep(220) }
+      if (!showsQuestion(readPane(), (qs || [])[qi])) {
+        return res.status(409).json({
+          error: 'question-mismatch',
+          hint: '终端里现在显示的不是这道题 —— 你可能已经在电脑前答过了。刷新一下再看看。',
+        })
       }
       for (const oi of picks[qi]) {
         if (!await moveTo(oi + 1)) {
@@ -650,14 +718,15 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
       }
     }
 
-    // 单选：回车已经提交，面板应当自己关掉。多选：还要走到 Submit 那页确认一次。
-    if (checkbox) {
-      for (let guard = 0; guard < picks.length + 2; guard++) {
-        const lines = readPane()
-        if (lines.some((l) => /Ready to submit/i.test(l))) { send('Enter'); break }
-        if (!options(lines).length) break                  // 面板已经不在了，别再发
-        send('Right'); await sleep(220)
-      }
+    // 收尾：走到 Submit 那一页确认一次。
+    // · 单选单题：上面那个回车已经把它提交了，面板没了 → 一个字都不再发。
+    // · 单选多题：答完最后一题它自己停在 Submit 页 → 这里直接回车。
+    // · 多选（每题都是复选框）：勾完还停在题的页上 → 用 → 走到 Submit 再回车。
+    for (let guard = 0; guard < picks.length + 3; guard++) {
+      const lines = readPane()
+      if (lines.some((l) => /Ready to submit/i.test(l))) { send('Enter'); break }
+      if (!options(lines).length) break                  // 面板已经不在了，别再发
+      send('Right'); await sleep(220)
     }
 
     await sleep(400)

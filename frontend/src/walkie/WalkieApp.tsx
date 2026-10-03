@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } fro
 import type { WorkspaceBrowserHandle } from '../WorkspaceBrowser'
 import {
   getStream, getReply, refineText, summarizeText, sendPrompt, uploadAttachment, createWorkspace, resolvePath,
-  answerQuestion, getConfigs, getVersion,
+  answerQuestion, skipAnswer, getConfigs, getVersion,
   type StreamEvent, type ReplyState, type WalkieProject, type WalkieStep, type WalkieNow,
   type WalkieConfig, type Ask,
 } from './api'
@@ -26,6 +26,7 @@ import {
   setMuted as setMutedFeedback, whoosh,
 } from './feedback'
 import { speak, stopSpeaking } from './tts'
+import { getActiveProfile, upsertProfile, setActiveProfileId, newProfileId, normalizeUrl, isValidUrl } from '../baseUrl'
 import Markdown, { Preview } from './Markdown'
 import './walkie.css'
 
@@ -224,6 +225,9 @@ export default function WalkieApp({ token }: { token: string }) {
     try { return localStorage.getItem(PROFILE_KEY) || '' } catch { return '' }
   })
   const [about, setAbout] = useState<{ current: string; clean: boolean } | null>(null)
+  /** 设置里那台机器的地址（改了要重连，所以单独存草稿，点保存才生效） */
+  const [addr, setAddr] = useState('')
+  const [addrErr, setAddrErr] = useState('')
 
   // 滚动：贴在底部就跟着走，翻上去看历史时不打扰
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -258,6 +262,19 @@ export default function WalkieApp({ token }: { token: string }) {
   }, [projects])
   const cur = findChannel(target)
   const blocked = !!cur && cur.channel.kind !== 'claude'
+
+  /**
+   * 这个频道现在是不是挂着一个问题在等你。
+   *
+   * 两个来源都要看：流里那条"它在问你"（别人/别处发起的），和**你自己追的这一轮**
+   * （你发出去、它中途停下来问你的那种）。只看前者的话，你亲手发起的那一轮里
+   * 它问你的时候，输入框会照常把字吞掉。
+   */
+  const pendingAskFor = useCallback((key: string) => {
+    if (!key) return null
+    if (round?.ask && round.key === key) return round.ask
+    return events.find((e) => e.ch === key && e.ask)?.ask ?? null
+  }, [events, round])
 
   // ── 流 ──────────────────────────────────────────────────
   const pollStream = useCallback(async () => {
@@ -509,6 +526,18 @@ export default function WalkieApp({ token }: { token: string }) {
     if (!body) return
     const withFiles = files.length ? `${body}\n\n${files.map((f) => `[附件] ${f.path}`).join('\n')}` : body
 
+    // 它正停在那儿等一个选择，而你要说的不是它给的选项 —— **先把那道题收掉再发**。
+    // 顺序不能反：题还开着的时候，打进输入框的字会被它吞掉。
+    // 收不掉就停下报错，绝不把话丢进一个会吃掉它的地方。
+    if (pendingAskFor(targetRef.current) && cur) {
+      try {
+        await skipAnswer(token, cur.project.name, cur.channel.index)
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e))
+        return
+      }
+    }
+
     whoosh(); hapticSnap(); setErr('')
     rememberHeard(targetRef.current)
     setAbsentRead(true)
@@ -529,7 +558,7 @@ export default function WalkieApp({ token }: { token: string }) {
       return
     }
     startPoll(r0)
-  }, [token, cur, refining, files, startPoll, rememberHeard])
+  }, [token, cur, refining, files, startPoll, rememberHeard, pendingAskFor])
 
   const toggleMute = () => { const next = !muted; setMutedFeedback(next); setMutedState(next) }
 
@@ -537,9 +566,9 @@ export default function WalkieApp({ token }: { token: string }) {
    * 回答它问的题。**不生成任何文案** —— 送回的就是选项本身的字，那是它自己写的，
    * 我们改写一个字都可能让它对不上。答完立刻补一次流，让那张卡尽快变回"它说"。
    */
-  const answer = useCallback(async (project: string, win: number, picks: number[][]) => {
+  const answer = useCallback(async (project: string, win: number, picks: number[][], questions: string[]) => {
     try {
-      await answerQuestion(token, project, win, picks)
+      await answerQuestion(token, project, win, picks, questions)
       hapticTap()
       window.setTimeout(() => { void pollStream() }, 700)
     } catch (e) {
@@ -565,8 +594,8 @@ export default function WalkieApp({ token }: { token: string }) {
    * 而回车会替你按在**当前高亮的那一项**上 —— 实测就是这个行为。也就是说，
    * 不拦的话你会得到一个"我没选它，它却收到了"的答案，这比不让发糟得多。
    */
-  const asking = items.find((e) => e.ch === target && e.ask)?.ask ?? null
-  const canSend = !!draft.trim() && !busy && !blocked && !asking
+  const asking = pendingAskFor(target)
+  const canSend = !!draft.trim() && !busy && !blocked
   const showAbsent = !absentRead && since > 0 && Date.now() - since > ABSENT_MIN_MS && items.some((e) => e.kind === 'it' && e.at > since)
   const absentCount = since ? items.filter((e) => e.kind === 'it' && e.at > since).length : 0
 
@@ -681,7 +710,30 @@ export default function WalkieApp({ token }: { token: string }) {
     if (!settings) return
     if (!profiles) void getConfigs(token).then(setProfiles).catch(() => setProfiles([]))
     void getVersion(token).then(setAbout).catch(() => { /* 拿不到就不显示，不编一个版本号 */ })
+    setAddrErr('')
+    try { setAddr(getActiveProfile()?.url || '') } catch { setAddr('') }
   }, [settings, profiles, token])
+
+  /**
+   * 改这台机器连的是哪台服务器。
+   *
+   * 为什么它必须在界面上有一处：APK 里的地址是**装的时候就带上的**（server.json），
+   * 一旦那台机器的地址变了（tailnet IP 换了、换了机器），手机上就没有任何地方能改 ——
+   * 只能清掉 App 数据重来。设置里没这一项，等于把用户锁在出厂值上。
+   */
+  const saveAddr = useCallback(() => {
+    const url = normalizeUrl(addr)
+    if (!isValidUrl(url)) { setAddrErr('这不像一个地址 —— 应该是 http://主机:端口'); return }
+    try {
+      const cur = getActiveProfile()
+      const p = cur ? { ...cur, url } : { id: newProfileId(), name: '我的机器', url }
+      upsertProfile(p)
+      setActiveProfileId(p.id)
+      location.reload()
+    } catch {
+      setAddrErr('存不下来（浏览器隐私模式？）—— 到经典界面试试')
+    }
+  }, [addr])
 
   /**
    * 点一条消息 = "我要回复给这个人"。
@@ -765,7 +817,12 @@ export default function WalkieApp({ token }: { token: string }) {
     <>
       {/* 为什么发不出去，必须在**看得见的地方**说 —— 全屏编辑时它盖住整屏，
           所以这条说明也得跟着进来，不然你看到的就是一个按不动的发送键。 */}
-      {asking && <div className="walkie-blocked is-ask">它在等你选一个 —— 就在上面那条消息里。选完就能接着说话。</div>}
+      {asking && (
+        <div className="walkie-blocked is-ask">
+          它在等你选一个 —— 选项就在上面那条消息里。
+          <em>或者直接说：我会跳过它的问题，把你说的话原样发过去。</em>
+        </div>
+      )}
       {files.length > 0 && (
         <div className="walkie-files">
           {files.map((f) => (
@@ -785,14 +842,14 @@ export default function WalkieApp({ token }: { token: string }) {
           onChange={onDraftInput}
           onPaste={() => { pastedRef.current = true }}
           onFocus={() => { primeFeedback(); setErr('') }}
-          placeholder={full ? '说点什么…' : '说点什么…'}
+          placeholder={asking ? '或者自己说一句…' : '说点什么…'}
         />
         <input id={FILE_INPUT_ID} type="file" multiple hidden onChange={onPickFiles} />
         {/* 常驻的文件入口。它常驻是因为"这台机器上的文件"不是某一轮的产物 ——
             任何时刻你都想去看一眼，而它必须**永远在同一个地方**（同一个位置 = 不用找）。
             点开的是**你正对着的那个人**的目录：你已经选好了地方，文件就是那个地方的。 */}
         <button type="button" className="walkie-roundbtn" title="文件"
-          onClick={() => openBrowser(cur?.channel.cwd || '')}>
+          onClick={() => { if (!cur) setErr('还没选好寄给谁'); else openBrowser(cur.channel.cwd) }}>
           <IconFolder />
         </button>
         <button type="button" className="walkie-roundbtn" disabled={uploading}
@@ -909,7 +966,8 @@ export default function WalkieApp({ token }: { token: string }) {
                 </div>
                 {e.ask && (
                   <AskCard key={e.ask.id} ask={e.ask}
-                    onPick={(picks) => void answer(e.project, e.window, picks)} />
+                    onPick={(picks) => void answer(e.project, e.window, picks,
+                      e.ask!.questions.map((q) => q.question))} />
                 )}
               </div>
             )
@@ -944,7 +1002,8 @@ export default function WalkieApp({ token }: { token: string }) {
               {/* 它在这一轮里停下来问你 —— 选项就长在卡片上，不用切到别处去答 */}
               {round.state === 'waiting' && round.ask && (
                 <AskCard key={round.ask.id} ask={round.ask}
-                  onPick={(picks) => void answer(round.project, round.window, picks)} />
+                  onPick={(picks) => void answer(round.project, round.window, picks,
+                    round.ask!.questions.map((q) => q.question))} />
               )}
 
               {round.state === 'done' && round.reply?.text && (
@@ -1117,6 +1176,18 @@ export default function WalkieApp({ token }: { token: string }) {
                   : '这台机器上还没有配置过 profile。'}
             </div>
 
+            <div className="walkie-set-h">这台机器在哪</div>
+            <div className="walkie-set-field">
+              <input value={addr} inputMode="url" autoCapitalize="off" autoCorrect="off" spellCheck={false}
+                placeholder="http://主机:59000"
+                onChange={(e) => { setAddr(e.target.value); setAddrErr('') }}
+                onKeyDown={(e) => { if (e.key === 'Enter') saveAddr() }} />
+              <button type="button" className="walkie-mini" onClick={saveAddr}>保存并重连</button>
+            </div>
+            {addrErr
+              ? <div className="walkie-set-note is-bad">{addrErr}</div>
+              : <div className="walkie-set-note">改完重新加载。这是这台手机连的那台机器。</div>}
+
             <div className="walkie-set-h">关于</div>
             <div className="walkie-set-note">
               Nexus {about?.current || '—'}
@@ -1204,8 +1275,9 @@ function AskCard({ ask, onPick }: { ask: Ask; onPick: (picks: number[][]) => voi
           {q.multiSelect && <span className="walkie-ask-hint">可选多个</span>}
         </div>
       ))}
+      {/* 每一道题都要有答案才让送 —— 差一道就送出去，终端那边会停在半道上 */}
       {multi && (
-        <button type="button" className="walkie-ask-go" disabled={sent || !sel.some((c) => c.length)}
+        <button type="button" className="walkie-ask-go" disabled={sent || !sel.every((c) => c.length)}
           onClick={() => { setSent(true); onPick(sel) }}>
           {sent ? '已送出' : '就这样'}
         </button>

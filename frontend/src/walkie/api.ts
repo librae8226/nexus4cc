@@ -262,11 +262,26 @@ export const sendPrompt = (token: string, project: string, window: number, text:
  * 界面这一侧只有一个语义，"我选了这一项"。
  */
 export const answerQuestion = (
-  token: string, project: string, window: number, picks: number[][],
+  token: string, project: string, window: number, picks: number[][], questions: string[] = [],
 ) =>
   req<{ ok: boolean; sent: string[] }>('/api/walkie/answer', token, {
     method: 'POST',
-    body: JSON.stringify({ project, window, picks }),
+    // `qs` 是题目原文：后端拿它在终端里**核对屏幕上那道题是不是这一道**。
+    // 答错比不答糟得多 —— 详见后端 showsQuestion 那段。
+    body: JSON.stringify({ project, window, picks, qs: questions }),
+  })
+
+/**
+ * 跳过它问的那道题（"我不从你给的选项里选"）。
+ *
+ * 这是**用自己的话回答**那条路的第一步：面板收掉之后，你那句话就是一条普通消息，
+ * 它照样接着办 —— 实测反馈是「记下了」。`wasUp:false` 表示面板已经不在（你或者
+ * 别处已经处理过了），那就没什么可跳过的。
+ */
+export const skipAnswer = (token: string, project: string, window: number) =>
+  req<{ ok: boolean; wasUp: boolean }>('/api/walkie/answer', token, {
+    method: 'POST',
+    body: JSON.stringify({ project, window, skip: true }),
   })
 
 export const getVersion = (token: string) =>
