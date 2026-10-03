@@ -1,6 +1,6 @@
 # ROADMAP — Nexus
 
-**锚点**: `docs/NORTH-STAR.md` | **PRD**: `docs/PRD.md` | **更新**: 2026-07-15
+**锚点**: `docs/NORTH-STAR.md` | **PRD**: `docs/PRD.md` | **更新**: 2026-10-04
 
 ---
 
@@ -14,6 +14,7 @@ F-01 to F-12, F-15, F-18 complete.（F-13/14/16/17 已移除，F-19/F-20 提前�
 
 | **F-23 Android 客户端** 🚧 | Capacitor 壳 + 原生层（后台常驻/通知/语音/相机/SAF/分享/生物识别）。需求与技术方案见 `docs/ANDROID-APP.md`，里程碑 M0-M6。**M0 代码侧完成**（CORS 白名单 + 前端 base-URL 抽象 + Capacitor 工程 + Docker 工具链，debug APK 4.4MB 可构建），待真机裁决 `androidScheme` 与 `ws://` 混内容行为 |
 | **总管 agent（不在 Nexus 做）** | 2026-10-03 提出：project/channel 太多，切换本身成了瓶颈。**已定**：另起独立项目 `~/work/rich`（Rich 派活、盯进度、维护组织架构）；**Nexus 北极星不变**，继续做人工直接接管所有 agent 的控制台。Rich 指挥 agent 不经过 Nexus UI |
+| **pi durable 前端**（Nexus 里开持久 pi 会话） | 2026-10-04 提出：pi 窗口创建时加「持久会话」勾选框（**勾与不勾 = 持久 vs 普通，就一个勾的区别**）；勾选后窗口挂到 pi-durable 服务器上的持久会话——关窗/断线/重启不丢，随时挂回。需求梳理、方案草图与验收标准见 `docs/PI-DURABLE-SESSIONS.md`。**待排期** |
 | Open-source polish | Git history rewrite, rate limits, etc. |
 | History mode redesign | In-place swap 方案（见 `docs/HISTORY_MODE_REDESIGN.md`） |
 | ANSI output in file viewer | 文件内容 ANSI 渲染 |
