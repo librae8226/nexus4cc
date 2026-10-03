@@ -34,7 +34,7 @@ function audio(): AudioContext | null {
   if (!ctx) {
     ctx = new Ctor()
     master = ctx.createGain()
-    master.gain.value = 0.32          // 够清楚但不吵
+    master.gain.value = 0.55          // 手机小喇叭本来就弱，宁可响一点（有静音开关兜底）
     master.connect(ctx.destination)
   }
   if (ctx.state === 'suspended') void ctx.resume()
@@ -48,7 +48,7 @@ export function primeFeedback(): void {
 
 export function setMuted(next: boolean): void {
   muted = next
-  if (master) master.gain.value = next ? 0 : 0.32
+  if (master) master.gain.value = next ? 0 : 0.55
 }
 
 export function isMuted(): boolean {
@@ -64,9 +64,9 @@ export function tick(strength = 1): void {
   const t = c.currentTime
   const s = Math.max(0.15, Math.min(1, strength))
 
-  // 1) 噪声瞬态：那声"嗒"的锐利部分。带通放宽（Q 从 1.05 降到 0.8）、
-  //    中心从 2.3k 下到 1.8k —— 太窄太高会变成"嘶"，宽一点低一点才有"嗒"的实体感。
-  const dur = 0.048
+  // 1) 噪声瞬态：那声"嗒"的锐利部分。带通放宽、中心放低 ——
+  //    太窄太高会变成"嘶"，宽一点低一点才有"嗒"的实体感。
+  const dur = 0.055
   const len = Math.max(1, Math.floor(c.sampleRate * dur))
   const buf = c.createBuffer(1, len, c.sampleRate)
   const data = buf.getChannelData(0)
@@ -82,7 +82,7 @@ export function tick(strength = 1): void {
   bp.Q.value = 0.8
   const ng = c.createGain()
   ng.gain.setValueAtTime(0.0001, t)
-  ng.gain.exponentialRampToValueAtTime(0.5 * s, t + 0.0015)
+  ng.gain.exponentialRampToValueAtTime(0.78 * s, t + 0.0015)
   ng.gain.exponentialRampToValueAtTime(0.0001, t + dur)
   noise.connect(bp)
   bp.connect(ng)
@@ -90,9 +90,23 @@ export function tick(strength = 1): void {
   noise.start(t)
   noise.stop(t + dur)
 
+  // 1.5) 低频"body"：一个很短的 380Hz。手机小喇叭在 300–600Hz 反而比 1.5kHz 出得来，
+  //      这一层负责让节点听起来**有分量**，和细分的"嗒"拉开差距。
+  {
+    const osc = c.createOscillator()
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(430, t)
+    osc.frequency.exponentialRampToValueAtTime(300, t + 0.04)
+    const bg = c.createGain()
+    bg.gain.setValueAtTime(0.28 * s, t)
+    bg.gain.exponentialRampToValueAtTime(0.0001, t + 0.055)
+    osc.connect(bg); bg.connect(master)
+    osc.start(t); osc.stop(t + 0.06)
+  }
+
   // 2) 谐振体：三个不同衰减速度的谐波叠在一起，像金属件被拨了一下。
   //    只留两个会听出"电子滴答"，加个高频短衰减的才有"咔"的边。
-  for (const [freq, amp, decay] of [[1250, 0.13, 0.05], [2500, 0.10, 0.036], [4300, 0.05, 0.02]] as const) {
+  for (const [freq, amp, decay] of [[1250, 0.22, 0.055], [2500, 0.17, 0.04], [4300, 0.09, 0.022]] as const) {
     const osc = c.createOscillator()
     osc.type = 'triangle'
     osc.frequency.value = freq * (0.96 + Math.random() * 0.08)
@@ -119,20 +133,22 @@ export function tickFine(): void {
   const c = audio()
   if (!c || !master || muted) return
   const t = c.currentTime
-  const dur = 0.013
+  const dur = 0.018
   const len = Math.max(1, Math.floor(c.sampleRate * dur))
   const buf = c.createBuffer(1, len, c.sampleRate)
   const data = buf.getChannelData(0)
-  for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-(i / len) * 30)
+  for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-(i / len) * 26)
   const noise = c.createBufferSource()
   noise.buffer = buf
   const bp = c.createBiquadFilter()
   bp.type = 'bandpass'
-  bp.frequency.value = 3200 + Math.random() * 700   // 比节点高一个八度，听起来更"细"
-  bp.Q.value = 1.3
+  // 原来放在 3.2k：手机小喇叭在这个频段衰减很快，推不出来就"听不见"。
+  // 挪到 2.2k 左右，既还比节点高、听得出"细"，又能真的响。
+  bp.frequency.value = 2100 + Math.random() * 600
+  bp.Q.value = 1.0
   const g = c.createGain()
   g.gain.setValueAtTime(0.0001, t)
-  g.gain.exponentialRampToValueAtTime(0.13, t + 0.001)
+  g.gain.exponentialRampToValueAtTime(0.34, t + 0.001)
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
   noise.connect(bp); bp.connect(g); g.connect(master)
   noise.start(t); noise.stop(t + dur)
@@ -193,16 +209,31 @@ function isNative(): boolean {
   return !!w.Capacitor?.isNativePlatform?.()
 }
 
-/** 过一格：最轻的触感，跟手用 */
-export function hapticTick(): void {
-  if (isNative()) { Haptics.selectionChanged().catch(() => {}); return }
-  try { navigator.vibrate?.(6) } catch { /* 桌面不支持就算了 */ }
+/**
+ * 三档震动，用的是插件在 Android 上的实际参数（读 HapticsImpactType.java 得到的）：
+ *   LIGHT  50ms @ 振幅 110
+ *   MEDIUM 43ms @ 振幅 180   ← 比 LIGHT 更短更实，"格"用这个
+ *   HEAVY  60ms @ 振幅 255   ← 吸附用这个
+ *
+ * 不用 selectionChanged：它必须先 selectionStart() 才会震（插件源码里
+ * `if (this.selectionStarted)`），没调就是彻底空转 —— 早先版本"每过一格震一下"
+ * 其实一次都没震过，用户摸到的只有吸附那一下。
+ */
+export function hapticDown(): void {
+  if (isNative()) { Haptics.impact({ style: ImpactStyle.Light }).catch(() => {}); return }
+  try { navigator.vibrate?.(10) } catch { /* 桌面不支持就算了 */ }
 }
 
-/** 吸附到位 / 按下：明显一点的一声 */
-export function hapticSnap(): void {
+/** 过一次节点 */
+export function hapticTick(): void {
   if (isNative()) { Haptics.impact({ style: ImpactStyle.Medium }).catch(() => {}); return }
-  try { navigator.vibrate?.(16) } catch { /* 桌面不支持就算了 */ }
+  try { navigator.vibrate?.(18) } catch { /* 桌面不支持就算了 */ }
+}
+
+/** 吸附到位 */
+export function hapticSnap(): void {
+  if (isNative()) { Haptics.impact({ style: ImpactStyle.Heavy }).catch(() => {}); return }
+  try { navigator.vibrate?.(32) } catch { /* 桌面不支持就算了 */ }
 }
 
 /**

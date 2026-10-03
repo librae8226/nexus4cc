@@ -47,6 +47,12 @@ const REFINE_WAIT_MS = 3000
 const TAP_MS = 300          // 按下短于这个时长才算"轻点"
 const LEVEL_BARS = 26
 
+// 草稿落盘。手机锁屏、切走再回来、甚至 WebView 被系统回收，打了一半的字都不该丢。
+// 按频道各存一份：切走再切回来，那一格自己的半成品还在。
+const STORE_KEY = 'nexus_walkie_state'
+interface DraftState { draft: string; raw: string; refined: boolean }
+interface Persisted { last?: string; drafts: Record<string, DraftState> }
+
 const IconMic = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
     <rect x="9" y="3" width="6" height="11" rx="3" />
@@ -133,11 +139,26 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   const lastLevelAt = useRef(0)
   const liveRef = useRef('')
   const deliverRef = useRef<((override?: string) => void) | null>(null)
+  const storeRef = useRef<Persisted>({ drafts: {} })
+  const draftStateRef = useRef<DraftState>({ draft: '', raw: '', refined: false })
   const stageRef = useRef<HTMLDivElement | null>(null)
   const browserRef = useRef<WorkspaceBrowserHandle | null>(null)
   draftRef.current = draft
   chanKeyRef.current = chanKey
   liveRef.current = live
+  draftStateRef.current = { draft, raw: rawText, refined }
+
+  const persist = useCallback(() => {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(storeRef.current)) } catch { /* 隐私模式 */ }
+  }, [])
+
+  /** 把当前草稿归到某个频道名下（空的就删掉，别在盘上留一堆空壳） */
+  const stashDraft = useCallback((key: string) => {
+    if (!key) return
+    const cur = draftStateRef.current
+    if (cur.draft.trim()) storeRef.current.drafts[key] = cur
+    else delete storeRef.current.drafts[key]
+  }, [])
 
   const clearPoll = useCallback((key: string) => {
     const t = pollsRef.current.get(key)
@@ -156,6 +177,16 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
       setLoadErr(e instanceof Error ? e.message : String(e))
     }
   }, [token])
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORE_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as Persisted
+        storeRef.current = { last: parsed.last, drafts: parsed.drafts || {} }
+      }
+    } catch { /* 坏的就当作没有 */ }
+  }, [])
 
   useEffect(() => { void reload(false) }, [reload])
   useEffect(() => attachAudioUnlock(), [])
@@ -178,11 +209,25 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     return () => clearInterval(t)
   }, [phase, micReady])
 
-  // 首帧：落到该项目的活动窗口（用户上次在用的那个）
+  // 首帧：先试"上次停在哪一格"，没有就落到该项目的活动窗口（用户上次在用的那个）
   const initedRef = useRef(false)
   useEffect(() => {
     if (initedRef.current || !projects.length) return
     initedRef.current = true
+    const last = storeRef.current.last
+    if (last) {
+      for (let pi = 0; pi < projects.length; pi++) {
+        const ci = projects[pi].channels.findIndex((c) => `${projects[pi].name}:${c.index}` === last)
+        if (ci >= 0) {
+          setProjIdx(pi); setChanIdx(ci)
+          const saved = storeRef.current.drafts[last]
+          if (saved?.draft) {
+            setDraft(saved.draft); setRawText(saved.raw); setRefined(saved.refined); setPhase('review')
+          }
+          return
+        }
+      }
+    }
     const act = projects[0].channels.findIndex((c) => c.active)
     setChanIdx(act >= 0 ? act : 0)
   }, [projects])
@@ -191,6 +236,17 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     const n = projects[projIdx]?.channels.length ?? 0
     if (n && chanIdx > n - 1) setChanIdx(0)
   }, [projects, projIdx, chanIdx])
+
+  // 草稿一变就落盘（防抖 400ms）。锁屏或 WebView 被回收之后回来，字还在。
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (!chanKey) return
+      stashDraft(chanKey)
+      storeRef.current.last = chanKey
+      persist()
+    }, 400)
+    return () => clearTimeout(t)
+  }, [draft, rawText, refined, chanKey, stashDraft, persist])
 
   // 动作流：新的一行进来就把内容区滚到底，"在动"这件事才看得见
   useEffect(() => {
@@ -419,8 +475,11 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     }
     // 已发出的就清出文本框：否则「发送」会一直亮着，一点就重复发同一句
     setDraft(''); setRawText(''); setRefined(false)
+    draftStateRef.current = { draft: '', raw: '', refined: false }
+    delete storeRef.current.drafts[`${project.name}:${channel.index}`]
+    persist()
     startPoll(`${project.name}:${channel.index}`, project.name, channel.index, text)
-  }, [token, project, channel, refining, startPoll])
+  }, [token, project, channel, refining, startPoll, persist])
   deliverRef.current = (override?: string) => { void deliver(override) }
 
   // ── 换频道 ──────────────────────────────────────────────
@@ -438,6 +497,18 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     setDraft(''); setRawText(''); setRefined(false); setRefining(false); setElapsed(0); setSteps([])
 
     const key = `${p.name}:${c.index}`
+    // 切走之前先把自己这半句收好，再取新那一格自己的草稿 —— 打了一半的字不该因为
+    // 转了下旋钮就没了（这是真机上被明确抱怨过的一条）
+    stashDraft(chanKey)
+    storeRef.current.last = key
+    persist()
+    const saved = storeRef.current.drafts[key]
+    if (saved?.draft) {
+      setDraft(saved.draft); setRawText(saved.raw); setRefined(saved.refined); setPhase('review')
+      setSent(''); setReply(null); setSummary(''); setSteps([])
+      return
+    }
+
     const cached = cacheRef.current.get(key)
     if (cached) {
       setSent(cached.sent); setReply(cached.reply); setSummary(cached.summary); setPhase('reply')
@@ -451,7 +522,7 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
       cacheRef.current.set(key, { reply: r, summary: '', sent: '' })
       setReply(r); setSteps(r.steps || []); setPhase('reply')
     }).catch(() => { /* peek 失败无所谓 */ })
-  }, [projects, projIdx, chanIdx, token])
+  }, [projects, projIdx, chanIdx, token, stashDraft, persist])
 
   /** 去经典终端看这一轮的完整过程。把当前 project/channel 写进它读的那两个键，
       切过去就是这一格，不用再自己找。 */

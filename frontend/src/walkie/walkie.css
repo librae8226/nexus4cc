@@ -7,11 +7,11 @@
   /* 钉死。旋钮是个实物 —— 会随内容多少缩水的物理旋钮不成立。
      只跟屏幕宽度有关（小屏也得放得下），跟上面有多少内容无关。 */
   --walkie-dial: min(84vw, 330px);
-  /* 两个圈各自的颜色。这不是装饰：外圈/内圈谁是 PROJECT 谁是 CHANNEL，
-     原来只能靠读上方的字去猜。给了颜色之后，看读数前面那个小色块就知道
-     该拧哪个圈 —— 圈上的刻度、指针、中心读数全用同一套色。 */
-  --ring-outer: #f0a03c;
-  --ring-inner: #3b82f6;
+  /* 两个圈各自的颜色。这不是装饰：看读数前面那个小色块就知道该拧哪个圈。
+     名字按**语义**取（工作区 / Agent）而不是按内外 —— 内外是会换的，
+     上一版把它们对调之后，叫 --ring-outer 的那条却画在内圈上，读起来很绕。 */
+  --ring-ws: #f0a03c;      /* 工作区（内圈）—— 琥珀 */
+  --ring-agent: #3b82f6;   /* Agent（外圈）—— 蓝 */
   display: flex;
   flex-direction: column;
   height: 100dvh;
@@ -136,8 +136,8 @@
   width: 7px; height: 7px; border-radius: 2px; flex: 0 0 auto;
   box-shadow: 0 0 8px currentColor;
 }
-.walkie-swatch-outer { background: var(--ring-outer); color: var(--ring-outer); }
-.walkie-swatch-inner { background: var(--ring-inner); color: var(--ring-inner); }
+.walkie-swatch-ws { background: var(--ring-ws); color: var(--ring-ws); }
+.walkie-swatch-agent { background: var(--ring-agent); color: var(--ring-agent); }
 
 .walkie-dial {
   position: relative;
@@ -166,7 +166,7 @@
 }
 
 /* 浅色主题下琥珀要压深一点才看得清 */
-:root.light .walkie-root { --ring-outer: #d97706; }
+:root.light .walkie-root { --ring-ws: #d97706; }
 
 /* 两个旋钮本体。都是独立圆盘，各自带自己的齿纹和阴影，转动时一起转。 */
 .walkie-knob {
@@ -220,7 +220,7 @@
 /* 齿纹带上各自圈的颜色，转起来时能看出"这一圈是哪个" */
 .walkie-ridges-outer {
   background: repeating-conic-gradient(from 0deg,
-    color-mix(in srgb, var(--ring-outer) 58%, var(--nexus-text)) 0deg 1.6deg,
+    color-mix(in srgb, var(--ring-agent) 58%, var(--nexus-text)) 0deg 1.6deg,
     transparent 1.6deg 8deg);
   -webkit-mask: radial-gradient(circle closest-side, transparent 0 88%, #000 88% 100%);
   mask: radial-gradient(circle closest-side, transparent 0 88%, #000 88% 100%);
@@ -228,7 +228,7 @@
 }
 .walkie-ridges-inner {
   background: repeating-conic-gradient(from 0deg,
-    color-mix(in srgb, var(--ring-inner) 55%, var(--nexus-text)) 0deg 1.1deg,
+    color-mix(in srgb, var(--ring-ws) 55%, var(--nexus-text)) 0deg 1.1deg,
     transparent 1.1deg 8deg);
   -webkit-mask: radial-gradient(circle closest-side, transparent 0 88%, #000 88% 100%);
   mask: radial-gradient(circle closest-side, transparent 0 88%, #000 88% 100%);
@@ -249,23 +249,22 @@
   margin: -4.5px 0 0 -1px;
   border-radius: 1px;
 }
-.walkie-notch-outer { background: color-mix(in srgb, var(--ring-outer) 30%, var(--nexus-text)); }
+.walkie-notch-outer { background: color-mix(in srgb, var(--ring-agent) 34%, var(--nexus-text)); }
 .walkie-notch-outer.is-sel {
   width: 3.5px; height: 18px;
   margin: -9px 0 0 -1.75px;
-  background: var(--ring-outer);
-  box-shadow: 0 0 12px color-mix(in srgb, var(--ring-outer) 90%, transparent);
+  background: var(--ring-agent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--ring-agent) 90%, transparent);
 }
-.walkie-notch-inner { height: 7px; margin: -3.5px 0 0 -1px; background: color-mix(in srgb, var(--ring-inner) 30%, var(--nexus-text)); }
+.walkie-notch-inner { height: 7px; margin: -3.5px 0 0 -1px; background: color-mix(in srgb, var(--ring-ws) 34%, var(--nexus-text)); }
 .walkie-notch-inner.is-sel {
   width: 3.5px; height: 14px;
   margin: -7px 0 0 -1.75px;
-  background: var(--ring-inner);
-  box-shadow: 0 0 12px color-mix(in srgb, var(--ring-inner) 90%, transparent);
+  background: var(--ring-ws);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--ring-ws) 90%, transparent);
 }
 
-/* 中心读数是**频道**号，所以用内圈的颜色 */
-.walkie-hub-num { color: var(--ring-inner); }
+
 
 /* 转动中的圈：把非活动的那一圈压暗一点，"我在拧哪个"一目了然 */
 .walkie-dial.is-turning-inner .walkie-knob-outer { opacity: .45; transition: opacity .18s; }
@@ -704,7 +703,7 @@
 .walkie-step.is-now { color: var(--nexus-text); }
 .walkie-step.is-now .walkie-step-ico { color: var(--nexus-accent); }
 .walkie-step.k-think .walkie-step-text { color: var(--nexus-muted); font-style: italic; }
-.walkie-step.k-edit .walkie-step-ico { color: var(--ring-outer); }
+.walkie-step.k-edit .walkie-step-ico { color: var(--ring-ws); }
 .walkie-step-open {
   flex: 0 0 auto;
   border: 1px solid var(--nexus-border);
