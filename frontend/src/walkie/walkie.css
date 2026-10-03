@@ -543,26 +543,49 @@
 }
 .walkie-pane code { font: inherit; }
 
-/* ── 他在干什么：一行一步 ─────────────────────────── */
-.walkie-steps {
+/* ── 他在干什么：他说的话当标题，工具是它下面的证据 ─────────────
+   老版本是一行行工具名（Read / Grep / 推理中…）—— 那是**实现细节**，
+   不是"他在干嘛"。现在每一章 = 他的一句人话 + 支撑它的那几步。 */
+.walkie-story {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  max-height: 210px;
+  gap: 9px;
+  max-height: 230px;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+}
+.walkie-chapter { animation: walkie-in .18s ease-out; }
+
+/* 他说的话。这一屏上除他回复之外**最该被读**的东西，所以字号只比正文小半号 */
+.walkie-say {
+  margin: 0 0 3px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--nexus-text);
+  /* 左边一道细线：这些字是"叙述"，不是"动作"，两者别混成一片 */
+  border-left: 2px solid color-mix(in srgb, var(--nexus-accent) 42%, transparent);
+  padding-left: 9px;
+}
+
+.walkie-doings {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 .walkie-step {
   display: flex;
   align-items: baseline;
   gap: 7px;
-  padding: 3px 2px;
-  font-size: 12.5px;
+  padding: 2px 2px;
+  font-size: 12px;
   line-height: 1.45;
-  color: var(--nexus-text-2);
+  color: var(--nexus-muted);
   animation: walkie-in .16s ease-out;
 }
 .walkie-step-ico {
@@ -579,11 +602,48 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 最新的一行亮起来 —— "在动"这件事靠它表达 */
-.walkie-step.is-now { color: var(--nexus-text); }
-.walkie-step.is-now .walkie-step-ico { color: var(--nexus-accent); }
-.walkie-step.k-think .walkie-step-text { color: var(--nexus-muted); font-style: italic; }
+/* 还在跑的那一步：亮起来，图标转一圈 —— "现在动的是这条" */
+.walkie-step.is-running { color: var(--nexus-text-2); }
+.walkie-step.is-running .walkie-step-ico { color: var(--nexus-accent); animation: walkie-pulse 1.1s ease-in-out infinite; }
+/* 改文件的动作比"看"重要 —— 它在动你的仓库 */
+.walkie-step.k-edit { color: var(--nexus-text-2); }
 .walkie-step.k-edit .walkie-step-ico { color: var(--tone-ws); }
+.walkie-step.k-edit .walkie-step-text { font-weight: 600; }
+@keyframes walkie-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .3 } }
+
+/* ── 此刻：一行，永远在最底下 ─────────────────────────────
+   它是一条**状态**，不是"做过的事"。混进上面的列表就变成"每想一次记一笔"的噪音 ——
+   用户的原话："显示一个动作调用动作，然后显示推理中，完全不知道它在干嘛。" */
+.walkie-now {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--nexus-border) 60%, transparent);
+  font-size: 12.5px;
+  color: var(--nexus-text-2);
+}
+.walkie-now-dot {
+  flex: 0 0 auto;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--nexus-accent);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--nexus-accent) 55%, transparent);
+  animation: walkie-breathe 1.6s ease-out infinite;
+}
+@keyframes walkie-breathe {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--nexus-accent) 55%, transparent) }
+  70% { box-shadow: 0 0 0 7px transparent }
+  100% { box-shadow: 0 0 0 0 transparent }
+}
+.walkie-now-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .walkie-step-open {
   flex: 0 0 auto;
   border: 1px solid var(--nexus-border);

@@ -24,7 +24,7 @@ import type { WorkspaceBrowserHandle } from '../WorkspaceBrowser'
 import Tuner from './Tuner'
 import {
   getChannels, getReply, refineText, sendPrompt, summarizeText,
-  type ChannelList, type ReplyState, type WalkieStep,
+  type ChannelList, type ReplyState, type WalkieStep, type WalkieNow,
 } from './api'
 import {
   dictationSupported, explainDictationError, startDictation,
@@ -122,6 +122,8 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   const [sent, setSent] = useState('')
   const [reply, setReply] = useState<ReplyState | null>(null)
   const [steps, setSteps] = useState<WalkieStep[]>([])
+  /** 此刻正在做的那件事（状态，不是「做过的事」） */
+  const [now, setNow] = useState<WalkieNow | null>(null)
   const [stage, setStage] = useState('')
   const [paneTail, setPaneTail] = useState<string[]>([])
   const [hint, setHint] = useState('')
@@ -247,7 +249,7 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
       if (r.state === 'running') {
         const said = r.sent || ''
         setSent(said); setReply(null); setSummary(''); setErr('')
-        setSteps(r.steps || []); setPaneTail(r.paneTail || []); setHint(r.hint || '')
+        setSteps(r.steps || []); setNow(r.now ?? null); setPaneTail(r.paneTail || []); setHint(r.hint || '')
         setStage(r.stage || ''); setPhase('waiting')
         startPollRef.current?.(key, projName, win, said, r.elapsedMs || 0)
         return
@@ -344,7 +346,7 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     setRecSec(0); setDraft(''); setRawText(''); setRefined(false)
     // 注意：**不清 reply**。他上一轮说的话留在屏上（暗一档、折三行）——
     // 你在回他，不是在对空气说话；发出去的那一刻它才让位给这一轮。
-    setSent(''); setSummary(''); setStage(''); setSteps([]); setExpanded(false); setMineOpen(false)
+    setSent(''); setSummary(''); setStage(''); setSteps([]); setNow(null); setExpanded(false); setMineOpen(false)
     setLive(''); setBars(EMPTY_BARS()); barsRef.current = EMPTY_BARS()
     try {
       const d = await startDictation(token, {
@@ -375,6 +377,21 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     }
   }, [phase, token])
 
+  /**
+   * 松手后自动精炼。**输入法那条路也走同一个函数** —— 见 onDraftInput。
+   */
+  const refineNow = useCallback((raw: string) => {
+    setRefining(true)
+    const p = refineText(token, raw)
+      .then((r) => {
+        if (r.text && r.text !== raw) land()   // 稿子被换掉了 —— 得让你注意到
+        setDraft((cur) => (cur === raw ? r.text : cur)); setRefined(r.refined)
+      })
+      .catch(() => { /* 精炼失败就保持原文 */ })
+      .finally(() => setRefining(false))
+    refineP.current = p
+  }, [token])
+
   const endTalk = useCallback(async () => {
     const d = dictRef.current
     if (!d) return
@@ -398,17 +415,30 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     }
     roger()                         // 电台的"通话结束"音。听得见的"这一轮我说完了"
     setRawText(final); setDraft(final); setPhase('review')
+    refineNow(final)
+  }, [token, refineNow])
 
-    setRefining(true)
-    const p = refineText(token, final)
-      .then((r) => {
-        if (r.text && r.text !== final) land()   // 稿子被换掉了 —— 得让你注意到
-        setDraft((cur) => (cur === final ? r.text : cur)); setRefined(r.refined)
-      })
-      .catch(() => { /* 精炼失败就保持原文 */ })
-      .finally(() => setRefining(false))
-    refineP.current = p
-  }, [token])
+  /**
+   * 输入框里进来的字。**输入法语音键走的就是这里。**
+   *
+   * 为什么值得单独处理：微信输入法/搜狗那类"按住说话"的识别质量比本机模型好，
+   * 而我们**没办法**从 App 里去按别人键盘上的麦克风（输入法是另一个进程，
+   * 它的按钮不对我们开放）。所以正解不是再做一个更差的语音输入，而是
+   * **让用输入法说出来的话也拿到这一屏的全部好处**：一样自动精炼、一样落到同一条流程里。
+   *
+   * 判据是"一次性塞进来一长串"：语音输入是一次提交整句，打字是一下一个字符。
+   * 打字绝不会一次 +6 个字符，所以这条几乎不会误伤。万一误伤也能点「还原原文」。
+   */
+  const onDraftInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const next = e.target.value
+    const burst = next.length - draft.length
+    setDraft(next)
+    if (burst >= 6 && next.trim()) {
+      const t = next.trim()
+      setRawText(t)
+      refineNow(t)
+    }
+  }
 
   const onPttDown = (e: React.PointerEvent) => {
     e.preventDefault()
@@ -469,12 +499,13 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
         setPaneTail(r.paneTail || [])
         setHint(r.hint || '')
         if (r.steps) setSteps(r.steps)
+        setNow(r.now ?? null)
       }
       if (r.done) {
         clearPoll(key)
         cacheRef.current.set(key, { reply: r, summary: '', sent: sentText })
         if (chanKeyRef.current === key) {
-          setReply(r); setPhase('reply'); setPaneTail([]); setHint(''); setExpanded(false)
+          setReply(r); setPhase('reply'); setPaneTail([]); setHint(''); setNow(null); setExpanded(false)
           if (r.steps) setSteps(r.steps)
           roger()                                // 他答完了 —— 也是这一声
           void autoSpeak(r.text, key)
@@ -518,7 +549,7 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     whoosh()                                  // 送出去了
     hapticSnap()
     setErr(''); setNotice(''); setSent(text); setReply(null); setSummary(''); setElapsed(0); setExpanded(false)
-    setStage(''); setPaneTail([]); setHint(''); setSteps([])
+    setStage(''); setPaneTail([]); setHint(''); setSteps([]); setNow(null)
     setPhase('waiting')
 
     try {
@@ -549,7 +580,7 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
 
     setProjIdx(pi); setChanIdx(ci)
     setErr(''); setNotice(''); setStage(''); setPaneTail([]); setHint(''); setLive('')
-    setDraft(''); setRawText(''); setRefined(false); setRefining(false); setElapsed(0); setSteps([])
+    setDraft(''); setRawText(''); setRefined(false); setRefining(false); setElapsed(0); setSteps([]); setNow(null)
     setExpanded(false)
 
     const key = `${p.name}:${c.index}`
@@ -561,7 +592,7 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     const saved = storeRef.current.drafts[key]
     if (saved?.draft) {
       setDraft(saved.draft); setRawText(saved.raw); setRefined(saved.refined); setPhase('review')
-      setSent(''); setReply(null); setSummary(''); setSteps([])
+      setSent(''); setReply(null); setSummary(''); setSteps([]); setNow(null)
       return
     }
 
@@ -602,7 +633,7 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   const reset = () => {
     void stopSpeaking(); setSpeaking(null)
     setPhase('idle'); setDraft(''); setRawText(''); setSent(''); setReply(null)
-    setSummary(''); setErr(''); setSteps([]); setExpanded(false)
+    setSummary(''); setErr(''); setSteps([]); setNow(null); setExpanded(false)
   }
 
   const toggleMute = () => { const next = !muted; setMutedFeedback(next); setMutedState(next) }
@@ -627,19 +658,57 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   const showSteps = (phase === 'waiting' || phase === 'reply') && steps.length > 0
   const folded = !summary && !!reply?.text && reply.text.length > FOLD_AT && !expanded
 
-  const stepList = (rows: WalkieStep[], tail?: boolean) => (
-    <ul className="walkie-steps">
-      {rows.map((s, i) => (
-        <li key={`${s.at}-${i}`} className={`walkie-step k-${s.kind}${tail && i === rows.length - 1 ? ' is-now' : ''}`}>
-          <span className="walkie-step-ico">{STEP_ICON[s.kind] || STEP_ICON.tool}</span>
-          <span className="walkie-step-text">{s.label}</span>
-          {s.path && (
-            <button type="button" className="walkie-step-open" onClick={() => openBrowser(s.path)}>打开</button>
-          )}
-        </li>
-      ))}
-    </ul>
-  )
+  /** 此刻在做的事，说成人话："正在读 docs/WALKIE.md"，而不是一个光秃秃的文件名 */
+  const NOW_VERB: Record<string, string> = {
+    bash: '正在运行', read: '正在读', edit: '正在改', search: '正在搜',
+    task: '正在派子任务', web: '正在查', todo: '正在更新清单', tool: '正在调用', think: '正在推理',
+  }
+
+  /**
+   * 把动作流折成"章"。**这句话说什么是标题，工具是它下面的证据。**
+   *
+   * 为什么要这么折：老版本是一行行工具名（Read / Grep / Edit / 推理中…），
+   * 那是**实现细节**，不是"他在干嘛" —— 用户的原话是"显示一个动作调用动作，
+   * 然后显示推理中，完全不知道它在干嘛"。而他其实已经把意图用大白话写下来了
+   * （transcript 里每条工具调用之间都夹着一句），我们原来把它扔进"回复"里、
+   * 只在最后才拿出来。
+   *
+   * 反了。**等待的时候你想知道的是"他在干嘛"，那句话就是答案。**
+   */
+  const story = (rows: WalkieStep[]) => {
+    const chapters: { say?: WalkieStep; tools: WalkieStep[] }[] = []
+    for (const s of rows) {
+      if (s.kind === 'say') chapters.push({ say: s, tools: [] })
+      else {
+        if (!chapters.length) chapters.push({ tools: [] })
+        chapters[chapters.length - 1].tools.push(s)
+      }
+    }
+    // 纯"推理中"不留章 —— 它现在只在底部那条"此刻"里出现
+    const shown = chapters.filter((c) => c.say || c.tools.length)
+    return (
+      <ol className="walkie-story">
+        {shown.map((c, i) => (
+          <li key={i} className="walkie-chapter">
+            {c.say && <p className="walkie-say">{c.say.label}</p>}
+            {c.tools.length > 0 && (
+              <ul className="walkie-doings">
+                {c.tools.map((s, j) => (
+                  <li key={j} className={`walkie-step k-${s.kind}${s.done === false ? ' is-running' : ''}`}>
+                    <span className="walkie-step-ico">{STEP_ICON[s.kind] || STEP_ICON.tool}</span>
+                    <span className="walkie-step-text">{s.label}</span>
+                    {s.path && (
+                      <button type="button" className="walkie-step-open" onClick={() => openBrowser(s.path)}>打开</button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </li>
+        ))}
+      </ol>
+    )
+  }
 
   /** 讲话键。它是这一屏的主角，所以整块都是命中区 —— 拇指不用瞄。 */
   const talkButton = (() => {
@@ -754,8 +823,8 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
               id="walkie-draft"
               className="walkie-draft"
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder="按住说话，或直接在这里输入"
+              onChange={onDraftInput}
+              placeholder="按住说话，或点 ⌨ 用输入法的语音键"
             />
             <div className="walkie-inline">
               {rawText && draft.trim() !== rawText.trim() && (
@@ -772,9 +841,10 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
             左边一道竖线就够认出"这是我说的话"，卡片会把它抬到和他回复同级。 */}
         {(phase === 'waiting' || phase === 'reply') && sent && (
           <div className="walkie-mine" onClick={() => setMineOpen((v) => !v)}>
+            {/* 秒表只在讲话键上走：那儿是拇指区、永远看得见。
+                这里再来一个就是同一个数字在同一屏出现两次。 */}
             <div className="walkie-card-label">
               <span>你说 · {channel?.name}</span>
-              <span>{phase === 'waiting' ? `${elapsed}s` : ''}</span>
             </div>
             <p className={mineOpen ? '' : 'is-clamp'}>{sent}</p>
           </div>
@@ -782,13 +852,22 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
 
         {phase === 'waiting' && (
           <div className="walkie-card">
-            {/* 他在干什么：一行一步，从 transcript 的结构化工具调用里提炼出来的 */}
+            {/* 他在干什么：**他说的那句话**当标题，工具退成它下面的证据。
+                见 story() 里为什么要把这两样反过来摆。 */}
             {showSteps
-              ? stepList(steps.slice(-14), true)
+              ? story(steps.slice(-18))
               /* 动作流还没接上（还没认领会话）时退回显示窗口现状，总比一片空白强 */
               : paneTail.length > 0
                 ? <pre className="walkie-pane"><code>{paneTail.join('\n')}</code></pre>
-                : <div className="walkie-wait"><i /><i /><i /><span>{stage || '已投递…'}</span></div>}
+                : null}
+            {/* 此刻：一行，永远在最底下。它是一条**状态**，所以不跟上面那些
+                "做过的事"排在一起 —— 混进去就变成"每想一次记一笔"的噪音。 */}
+            <div className="walkie-now">
+              <span className="walkie-now-dot" />
+              <span className="walkie-now-text">
+                {now ? `${NOW_VERB[now.kind] || '正在处理'}${now.kind === 'think' ? '…' : ` ${now.label}`}` : '正在连接…'}
+              </span>
+            </div>
             {hint && <div className="walkie-hint-bad">{hint}</div>}
           </div>
         )}
@@ -828,7 +907,8 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
               {reply.text && (
                 <button type="button" className="walkie-mini"
                   onClick={() => (speaking === 'full' ? hush() : void play(reply.text, 1.06, 'full'))}>
-                  {speaking === 'full' ? '⏹ 停止' : '▶ 全文'}
+                  {/* 没有摘要时，屏上这段**就是**全文 —— 再写"全文"是个说不通的标签 */}
+                  {speaking === 'full' ? '⏹ 停止' : summary ? '▶ 全文' : '▶ 读一遍'}
                 </button>
               )}
               <button type="button" className="walkie-mini" onClick={() => openBrowser()}>看文件</button>
@@ -851,8 +931,8 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
             这一屏就有两张一样重的卡，读的人得先决定该看哪张。 */}
         {showSteps && phase === 'reply' && (
           <details className="walkie-steps-fold">
-            <summary>他做了 {steps.length} 步</summary>
-            <div className="walkie-steps-body">{stepList(steps.slice(-20))}</div>
+            <summary>他做了什么（{steps.filter((s) => s.kind !== 'say').length} 步）</summary>
+            <div className="walkie-steps-body">{story(steps.slice(-24))}</div>
           </details>
         )}
         </div>
