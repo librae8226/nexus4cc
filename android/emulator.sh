@@ -67,9 +67,12 @@ case "${1:-}" in
         "$IMAGE" sleep infinity >/dev/null
     fi
     ensure_avd
-    # 注意：不能用 `pgrep -f qemu-system` —— 跑 pgrep 的 sh 自己的命令行里就含这个词，
-    # 会匹配到自己，于是永远"已在运行"，模拟器根本不启动（踩过）。
-    if in_container pgrep -x qemu-system-x86_64 >/dev/null 2>&1; then
+    # 判断"在不在跑"有两个坑，都踩过：
+    #   1) `pgrep -f qemu-system`：跑 pgrep 的 sh 自己命令行里就含这个词，匹配到自己，
+    #      于是永远"已在运行"，emulator 根本不启动。`[q]` 就是用来排除它自己的。
+    #   2) `pgrep -x qemu-system-x86_64`：**也匹配不上** —— 内核的 comm 只保留 15 个字符，
+    #      真实进程名 `qemu-system-x86_64-headless` 被截成 `qemu-system-x86`。
+    if in_container pgrep -f '[q]emu-system-x86' >/dev/null 2>&1; then
       echo "[emulator] 模拟器已在运行"
     else
       echo "[emulator] 启动 emulator（首帧较慢）"

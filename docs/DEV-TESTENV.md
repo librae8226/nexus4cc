@@ -35,8 +35,15 @@ KVM 用 `--device /dev/kvm` 直通 —— 宿主 `librae` 对 `/dev/kvm` 有 ACL
 容器 `--network host`，所以模拟器里的 **`10.0.2.2` 就是这台宿主机**，直连本机 Nexus `:59000`。
 
 **两个坑**（都踩过）：
-- 判断"模拟器是否在跑"**不能用 `pgrep -f qemu-system`** —— 跑 pgrep 的 sh 自己命令行里
-  就含这个词，会匹配到自己，于是永远"已在运行"，emulator 根本不启动。用 `pgrep -x qemu-system-x86_64`。
+- 判断"模拟器是否在跑"有两个坑，**两个都踩过**：
+  1. `pgrep -f qemu-system` —— 跑 pgrep 的 sh 自己命令行里就含这个词，会匹配到自己，
+     于是永远"已在运行"，emulator 根本不启动；
+  2. `pgrep -x qemu-system-x86_64` —— 同样匹配不上：内核的 `comm` 只保留 15 个字符，
+     真实进程名 `qemu-system-x86_64-headless` 被截成 `qemu-system-x86`。
+  **用 `pgrep -f '[q]emu-system-x86'`**（`[q]` 是为了让它别匹配到自己）。
+  症状是"模拟器其实起来了，脚本却说没起"，或者反过来卡在"已在运行"—— 两种都见过。
+- 万一判断失误、容器在跑但模拟器没起来，手工补一刀：
+  `docker exec -d nexus-emulator bash -lc 'export ANDROID_HOME=/opt/android-sdk; exec emulator -avd nexus -no-window -no-boot-anim -no-snapshot -gpu swiftshader_indirect'`
 - 启动要 `docker exec -d`；在 `docker exec` 里 `nohup … &` 会随 exec 会话一起被收掉。
 
 ---
