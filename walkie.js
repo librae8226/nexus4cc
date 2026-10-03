@@ -455,8 +455,19 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
 
     let step = null
     if (b.type === 'thinking') {
-      // 内容会很长且没意义，只表达"在推理"
-      step = { kind: 'think', label: '推理中…' }
+      // **不再进列表**。"推理中"是个**状态**，不是一件做过的事 —— 把它和
+      // "读了 X""改了 Y"并排成一行行，读的人会以为这也是一步进展，而它什么信息都没有。
+      // 现在它只出现在底部那行"此刻"，见 t.now。
+      if (!t.now || t.now.kind !== 'think') t.now = { kind: 'think', label: '正在推理', since: Date.now() }
+      return
+    }
+    if (b.type === 'text') {
+      // 【这一步是这次改动的核心】他说的话才是"他在干嘛"。
+      // transcript 里每条工具调用之间都夹着一句人话（"我先看一下现在的实现"），
+      // 那是免费的意图说明 —— 以前它被扔进 replyParts、只在最后才拿出来，
+      // 于是等待期间屏上只剩下一串工具名，用户的原话是"完全不知道它在干嘛"。
+      const say = String(b.text || '').replace(/\s+/g, ' ').trim()
+      if (say) step = { kind: 'say', label: say.length > 90 ? say.slice(0, 90) + '…' : say }
     } else if (b.type === 'tool_use') {
       const input = b.input || {}
       const desc = String(input.description || '').trim()
@@ -488,8 +499,28 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     }
     if (!step) return
     step.at = Date.now()
+    if (b.type === 'tool_use') {
+      // 记下 id：工具跑完（tool_result 回来）要把它标成 done，
+      // 好让底部那行"此刻"说得出**具体在跑哪一条**，而不是笼统的"正在工作"。
+      step.id = b.id
+      step.done = false
+      // kind 用**这一步自己的**（read/edit/bash…），前端据此说"正在读 / 正在改"，
+      // 而不是笼统的"正在调用"。
+      t.now = { kind: step.kind, label: step.label, since: Date.now(), id: b.id }
+    }
     t.steps.push(step)
     if (t.steps.length > 60) t.steps = t.steps.slice(-60)   // 长任务不至于把响应撑爆
+  }
+
+  /**
+   * 工具跑完了。把对应那一步标成 done，并把它从"此刻"上撤下来 ——
+   * 撤下来之后底部那行会退回"正在推理"，直到下一个工具开始。
+   */
+  function finishStep(t, block) {
+    if (!t.now || t.now.id !== block.tool_use_id) return
+    const s = (t.steps || []).find((x) => x.id === block.tool_use_id)
+    if (s) s.done = true
+    t.now = { kind: 'think', label: '正在推理', since: Date.now() }
   }
 
   /** 路径只留最后两段：手机上看得见，也知道在哪个目录 */
@@ -528,6 +559,22 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     return null
   }
 
+  /**
+   * 这一轮"他答了什么" = **最后一段话**，不是所有话拼起来。
+   *
+   * 一轮里会有很多段 text：中间那些是**过程叙述**（"看一下现在的实现"、
+   * "找到问题了，是重复旋转"），最后那段才是结论。拼起来会得到两样都坏的东西：
+   * 屏上是一堵前后不搭的墙，TTS 会把整场独白念给你听。
+   * （实测：本仓一个长回合有 57 段 text。）
+   *
+   * 过程本身没丢 —— 它随 pushStep 进了动作流，答完之后折在「他做了什么」里。
+   */
+  function lastWords(t) {
+    const parts = (t.replyParts || []).filter((x) => String(x || '').trim())
+    if (!parts.length) return ''
+    return String(parts[parts.length - 1]).trim()
+  }
+
   const publicState = (t) => {
     // 只在还没答完的时候抓 pane：完成之后前端看的是回复卡，不需要这些
     const pane = t.state === 'running' ? paneTail(t.project, t.win) : []
@@ -547,6 +594,10 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
       paneTail: pane,
       hint: hintFor(t, pane),
       steps: t.steps || [],
+      // 此刻正在发生的那一件事（"正在跑 读取 docs/WALKIE.md" / "正在推理"）。
+      // 它是一条**状态**，不属于"做过哪些事"的列表 —— 见 pushStep 里为什么
+      // 把"推理中"从 steps 里拿了出来。
+      now: t.now || null,
     }
   }
 
@@ -621,16 +672,25 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
         continue
       }
       if (!t.sawSent) continue
+      // 工具跑完的回报（tool_result）也走 human 那条 user 记录 —— 拿它把
+      // 对应那一步标成 done，底部"此刻"才知道该不该把它撤下来。
+      if (e.type === 'user') {
+        const c = e.message?.content
+        if (Array.isArray(c)) for (const b of c) if (b.type === 'tool_result') finishStep(t, b)
+        continue
+      }
       if (e.type === 'assistant') {
         const blocks = e.message?.content
         if (Array.isArray(blocks)) {
           for (const b of blocks) {
+            // 说话既进"回复"（回合结束后的正文），也进"动作流"（等待期间的故事）。
+            // 同一句话在两个阶段各有用处，不是重复。
             if (b.type === 'text' && b.text) t.replyParts.push(b.text)
-            else pushStep(t, b)
+            pushStep(t, b)
           }
         }
       } else if (e.type === 'system' && e.subtype === 'turn_duration') {
-        t.reply = t.replyParts.join('\n\n').trim()
+        t.reply = lastWords(t)
         t.state = 'done'
       }
     }
@@ -640,7 +700,7 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
       try {
         const quiet = Date.now() - statSync(t.file).mtimeMs
         if (quiet > 6000) {
-          t.reply = t.replyParts.join('\n\n').trim()
+          t.reply = lastWords(t)
           t.state = 'done'
           t.via = 'quiet-fallback'
         }

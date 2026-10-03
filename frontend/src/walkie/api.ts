@@ -22,11 +22,22 @@ export interface WalkieProject {
 
 /** 从 transcript 里提炼出的"一行动作"。见 walkie.js 的 pushStep。 */
 export interface WalkieStep {
-  kind: 'bash' | 'read' | 'edit' | 'search' | 'task' | 'todo' | 'web' | 'think' | 'tool'
+  /** say = 他自己说的一句话（**这才是"他在干嘛"**，工具是它的证据） */
+  kind: 'say' | 'bash' | 'read' | 'edit' | 'search' | 'task' | 'todo' | 'web' | 'think' | 'tool'
   label: string
   /** 带文件的操作会给路径，前端据此把这行做成可点开的 */
   path?: string
   at?: number
+  /** 工具调用 id + 跑完没有。没跑完的那条就是"此刻正在做的事" */
+  id?: string
+  done?: boolean
+}
+
+/** 此刻正在发生的那一件事（状态，不是"做过的事"） */
+export interface WalkieNow {
+  kind: WalkieStep['kind']
+  label: string
+  since: number
 }
 
 export interface ChannelList {
@@ -60,6 +71,8 @@ export interface ReplyState {
   hint?: string | null
   /** 他在干什么：从 transcript 提炼出的"一行动作"，一行一步 */
   steps?: WalkieStep[]
+  /** 此刻正在跑的那一件事（"推理中"是状态，不是一步） */
+  now?: WalkieNow | null
 }
 
 async function req<T>(path: string, token: string, init?: RequestInit): Promise<T> {
