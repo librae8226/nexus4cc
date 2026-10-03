@@ -26,6 +26,8 @@ export interface ChannelList {
 
 export interface ReplyState {
   state: 'idle' | 'running' | 'done' | 'timeout'
+  /** 后端给的阶段文案（认领会话 / 正在输出 / 已完成）——直接显示给用户 */
+  stage?: string
   text: string
   partial?: string
   done?: boolean

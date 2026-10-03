@@ -31,6 +31,9 @@ const TAIL_SCAN_BYTES = 256 * 1024   // 认领文件时只扫尾部这么多字�
 const MATCH_PREFIX = 24              // 文本比对取前 N 个字符（去掉空白后）
 const TMUX_BUF = 'nexus-walkie'      // 专用 paste buffer，避免和用户自己的 buffer 撞
 
+// 本地语音转写服务（~/work/intake，PM2 `intake`）。只连本机，不对外。
+const ASR_BASE = process.env.WALKIE_ASR_URL || 'http://127.0.0.1:59011'
+
 // 频道名/session 名允许的字符。tmux 目标串是我们拼的，白名单比转义可靠。
 const NAME_RE = /^[A-Za-z0-9._@-]+$/
 
@@ -277,6 +280,42 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     }
   })
 
+  // ── 4.5 语音转写：转发给本地 ASR ────────────────────────────────────────
+  // 为什么不用手机自带的 SpeechRecognizer：实测在国产 ROM 上「按下去、有权限、
+  // 但一句话都不吐」，而且它出错是静默的（见 docs/WALKIE.md）。改成「App 里录音
+  // → 上传到这里 → 本机转写」：不依赖 Google 语音服务、音频不出本机、
+  // 且转写实现只有一份（在 ~/work/intake）。
+  //
+  // 只监听本机 ⇒ 手机只能通过 Nexus 这一道门进来，转写服务本身不对外。
+  router.post('/transcribe', authMiddleware, express.raw({ type: () => true, limit: '25mb' }),
+    async (req, res) => {
+      const buf = req.body
+      if (!Buffer.isBuffer(buf) || buf.length === 0) return res.status(400).json({ error: 'empty audio' })
+      const name = String(req.query.name || 'clip.webm').replace(/[^\w.-]/g, '_').slice(-40)
+      const ac = new AbortController()
+      const timer = setTimeout(() => ac.abort(), 120_000)
+      try {
+        const r = await fetch(`${ASR_BASE}/transcribe?name=${encodeURIComponent(name)}`, {
+          method: 'POST',
+          headers: {
+            'content-type': req.headers['content-type'] || 'application/octet-stream',
+            'x-filename': name,
+          },
+          body: buf,
+          signal: ac.signal,
+        })
+        const data = await r.json().catch(() => null)
+        if (!r.ok || !data) {
+          return res.status(502).json({ error: 'asr failed', detail: (data && data.detail) || `HTTP ${r.status}` })
+        }
+        audit?.('walkie-transcribe', req, { bytes: buf.length, chars: (data.text || '').length, ms: data.elapsedMs })
+        res.json(data)
+      } catch (e) {
+        // intake 没在跑时给一个可识别的错误码，前端据此提示改用输入法
+        res.status(503).json({ error: 'asr-unavailable', detail: String(e?.message || e) })
+      } finally { clearTimeout(timer) }
+    })
+
   // ── 5. 回复 ──────────────────────────────────────────────────────────
   // 有活跃追踪就报它的状态；没有则回看该频道上一次的回复（peek）。
   router.get('/reply', authMiddleware, (req, res) => {
@@ -288,14 +327,18 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     const t = trackers.get(key)
     if (t) return res.json(publicState(t))
 
-    if (req.query.peek === '1') {
-      const s = sessions[key]
-      if (s?.file) {
-        try {
-          const { reply } = scanForLastTurn(s.file)
-          return res.json({ state: 'idle', text: reply, done: true, from: 'transcript', sessionId: s.sessionId })
-        } catch { /* 文件没了（归档/清理），当作没有 */ }
-      }
+    // 没有活跃追踪时**一律**回看该频道上一次的回复，而不是只认 peek=1。
+    // 追踪器是内存态：进程重启、或超过 KEEP_DONE_MS 被回收之后就没了，
+    // 而前端只会拿到 {state:'idle'} —— 表现就是「AI 在干活，但永远没有结果」，
+    // 一直转到它自己 10 分钟超时。真机上就是这么栽的。
+    const s = sessions[key]
+    if (s?.file) {
+      try {
+        const { reply } = scanForLastTurn(s.file)
+        if (reply) {
+          return res.json({ state: 'done', text: reply, done: true, from: 'transcript', sessionId: s.sessionId })
+        }
+      } catch { /* 文件没了（归档/清理），当作没有 */ }
     }
     return res.json({ state: 'idle', text: '' })
   })
@@ -327,8 +370,18 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     return claude
   }
 
+  /** 追踪到哪一步了。前端直接显示 —— 「不知道它在干嘛」本身就是个 bug。 */
+  const stageOf = (t) => {
+    if (t.state === 'done') return '已完成'
+    if (t.state === 'timeout') return '超时'
+    if (!t.file) return '正在认领会话…'
+    if (!t.replyParts.length) return '已投递，等它开口…'
+    return '正在输出…'
+  }
+
   const publicState = (t) => ({
     state: t.state,                       // running | done | timeout
+    stage: stageOf(t),
     text: t.reply || '',
     partial: t.replyParts.join(''),
     done: t.state === 'done',

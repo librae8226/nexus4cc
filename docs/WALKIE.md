@@ -52,33 +52,37 @@ Claude 会话**，而不是去操作一个终端面板。
 `calc(var(--walkie-dial) * k)` 的**绝对量** —— `translateY` 的百分比是相对元素自身高度算的，
 拿它当半径会把标签全堆到圆心。
 
-### 2. 说话 → 文字
+### 2. 说话 → 文字（v2：录音 + 本机转写）
 
-三条路按可用性依次退让：
+**v1 走的是 Android 原生 `SpeechRecognizer`，真机上废了。** 症状：权限给了、按下去也进了
+"松手结束"状态，但**一个字都不吐**。原因是国产 ROM 上没有可用的 Google 语音服务，而该插件
+`partialResults: true` 时 `start()` 立即 resolve，之后 `onError` 里的 `call.reject()` 打在
+一个已 resolve 的 call 上 —— **JS 侧收不到任何错误**，`listeningState` 也不发。于是按住说话
+变成按住没反应，且没有任何提示。
 
-| 环境 | 走哪条 |
-|---|---|
-| APK | Android 原生 `SpeechRecognizer`（`@capacitor-community/speech-recognition`） |
-| Chrome 桌面 | Web Speech API（方便在电脑上验证整条链路） |
-| 都没有 | 退化成 ⌨ 按钮，调起输入法用它自带的语音键 |
+现在改成：
 
-**Android 侧的两个坑**（读插件源码得到的，不是猜的）：
-- 该插件 `partialResults: true` 时 `start()` 立即 resolve，之后所有结果都从
-  `partialResults` 事件来。反过来讲，识别出错时 `onError` 里的 `call.reject()` 打在了一个
-  已 resolve 的 call 上 —— **JS 侧什么都收不到**；而 `onError` 又不像 `onEndOfSpeech` 那样
-  发 `listeningState` 事件。合起来的后果是：用户按住不吭声（SPEECH_TIMEOUT）或说了句识别
-  不出来的话（NO_MATCH），识别器就悄悄死了，按住说话变成按住没反应。
-- 该插件**不会自动重启**识别。Android 的识别器一次只吃一段（说完静音就结束），所以
-  「按住 = 一直听」必须自己实现成「不断重启 + 把每段拼起来」。
+```
+按住 → MediaRecorder 录音（WebView 内）
+松手 → POST /api/walkie/transcribe（音频 blob）
+     → Nexus 转发给本机 intake（:59011）
+     → sherpa-onnx SenseVoice-small-int8 转写
+     → 文本回到 App
+```
 
-`speech.ts` 因此不依赖插件事件的完整性：按住期间超过 2.2 秒没有任何事件，就当作一段结束，
-commit + 重启。正常分段结束（`onEndOfSpeech`）走同一套收尾逻辑，两条路都收敛到
-`finishSegment()`，不会互相打架。
+好处：
 
-> **v2 可以更好**：本机已有完全本地的 ASR（`~/work/intake`，SenseVoice-small-int8 via
-> sherpa-onnx，`py/asr.py` 有 CLI 入口）。把录音上传到 Nexus、在服务端转写，可以做到
-> 音频不出本机、且不受 Google 语音服务的可用性影响。代价是要在 WebView 里录
-> （MediaRecorder）并加一段服务端转写，属于另一次改动的量级，这一版没做。
+- **不依赖任何云端语音服务**，国产 ROM / 无 Google 服务 / 离线都能用；
+- **音频不出本机** —— 转写跑在 `~/work/intake`，与会议录音共用同一套 ASR，只有一份实现；
+- 出错能报：录不到、权限被拒、转写服务没起，各有明确文案（v1 全是静默）。
+
+代价：**失去"边说边出字"的实时预览**，松手后约 1.5–2 秒出结果。对讲机本来就是"说完再看到"，
+这个取舍可以接受；界面用一条随时间起伏的波形表示"确实在录"，而不是让你对着静止文字猜。
+
+真机上要能录音，`AndroidManifest.xml` 必须声明 `RECORD_AUDIO` 与 `MODIFY_AUDIO_SETTINGS`
+（Capacitor 的 `BridgeWebChromeClient.onPermissionRequest` 会把 WebView 的 AUDIO_CAPTURE
+请求映射到这两个权限）。另外页面必须是 secure context —— Capacitor 的本地服务在
+`http://localhost`，Chrome 视其为可信来源。
 
 ### 3. 口语 → 精确指令（松手即自动精炼）
 
@@ -175,7 +179,8 @@ cd frontend && npm run build          # 先出 web 产物
 ## 已知边界
 
 - **一次只认真追一轮**：同一频道重复发送会顶掉上一轮的追踪（新的一轮更重要）。
-- **识别靠系统语音服务**：Android 上默认走 Google/系统服务，可能联网。要全本地见上面 v2。
+- **转写依赖本机 intake 服务**：`intake` 没在跑时按住说话会明确报「本机转写服务没在跑」，
+  此时可点 ⌨ 用输入法语音键顶着。
 - **回复的粒度是「这一轮的文字输出」**：只调工具不说话的那一轮会显示「（这一轮没有说话，
   可能只动了文件）」。想看完整过程还是回经典界面。
 - **`turn_duration` 拿不到时**（老版本 Claude Code / 被中断）退化成「认领成功 + 有正文 +

@@ -1,0 +1,46 @@
+# nexus-android-emulator —— 给 Nexus 用的 Android 模拟器（无头）
+#
+# 为什么要有它：改 Android 相关的东西以前只能"盲改 + 丢给真机碰运气"，
+# 结果就是 APK 交到手上才发现按住说话根本没录音。有了这层，改完能自己装、
+# 自己点、自己截图看，验完再交出去。
+#
+# 为什么还是容器（按 ~/.claude/CLAUDE.md「能 Docker 不破坏原生环境」）：
+# emulator + system image 有 2~3 GB，装到宿主机就是永久污染；放镜像里换版本
+# 只要重建。KVM 用 --device /dev/kvm 直通（宿主 librae 对 /dev/kvm 有 ACL 写权限）。
+#
+# 注意：本镜像与 Dockerfile（构建镜像）刻意分开 —— 构建镜像不长驻、不需要 adb；
+# 这个镜像要长期挂在后台跑，并且必须有 adb 才能操作模拟器。
+FROM eclipse-temurin:21-jdk-jammy
+
+ARG CMDLINE_TOOLS_BUILD=16111833
+ARG API_LEVEL=34
+ARG SYSTEM_IMAGE=system-images;android-34;google_apis;x86_64
+
+ENV ANDROID_HOME=/opt/android-sdk \
+    ANDROID_SDK_ROOT=/opt/android-sdk \
+    PATH=/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/emulator:$PATH
+
+# libpulse0/libnss3/... 是 emulator 二进制的动态依赖，缺了它 -no-window 也起不来
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+         unzip curl ca-certificates \
+         libpulse0 libnss3 libxcomposite1 libxcursor1 libxdamage1 \
+         libxi6 libxtst6 libxrandr2 libxkbcommon0 libglu1-mesa libasound2 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p "${ANDROID_HOME}/cmdline-tools" \
+    && curl -fsSL -o /tmp/cmdline-tools.zip \
+       "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS_BUILD}_latest.zip" \
+    && unzip -q /tmp/cmdline-tools.zip -d "${ANDROID_HOME}/cmdline-tools" \
+    && mv "${ANDROID_HOME}/cmdline-tools/cmdline-tools" "${ANDROID_HOME}/cmdline-tools/latest" \
+    && rm /tmp/cmdline-tools.zip
+
+RUN yes | sdkmanager --licenses > /dev/null \
+    && sdkmanager --install \
+         "platform-tools" \
+         "emulator" \
+         "platforms;android-${API_LEVEL}" \
+         "${SYSTEM_IMAGE}" > /dev/null \
+    && sdkmanager --list_installed
+
+WORKDIR /work

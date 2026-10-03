@@ -1,268 +1,162 @@
-// walkie/speech.ts — 按住说话的语音转写
+// walkie/speech.ts — 按住说话的录音与转写
 //
-// 三条路，按可用性依次退让：
-//   1. 原生（APK）：Android SpeechRecognizer（@capacitor-community/speech-recognition）
-//   2. 浏览器：Web Speech API（Chrome 桌面可用，方便在电脑上验证整条链路）
-//   3. 都没有：返回 null，UI 退化成「点一下唤起输入法语音键」
+// 【为什么不再是 Android 的 SpeechRecognizer】
+// 上一版走 @capacitor-community/speech-recognition。真机实测：权限给了、按下去也进
+// 了"松手结束"状态，但**一个字都不吐**——国产 ROM 上没有可用的 Google 语音服务，
+// 而该插件出错是静默的（partialResults 模式下 onError 的 reject 打在已 resolve 的
+// call 上，JS 侧什么都收不到）。按住说话于是变成按住没反应。
 //
-// 【为什么要有看门狗】
-// 读插件源码（android/.../SpeechRecognition.java）得到的事实，不是猜测：
-//   - partialResults=true 时 start() 立即 resolve，之后所有结果都从 partialResults 事件来；
-//   - 但这意味着识别出错时 onError 里的 call.reject() 打在一个已 resolve 的 call 上，
-//     JS 侧**什么都收不到**；
-//   - 而 onError 又不像 onEndOfSpeech 那样发 listeningState 事件。
-// 合起来的后果：用户按住不吭声（SPEECH_TIMEOUT）或者说了句识别不出来（NO_MATCH），
-// 识别器就悄悄死了 —— 没有事件、没有报错、没有重启，按住说话变成按住没反应。
-// 所以这里不依赖插件的事件完整性：只要「按住期间超过 IDLE_RESTART_MS 没有任何事件」，
-// 就当作一段结束，commit + 重启。正常分段结束（onEndOfSpeech）也走同一套收尾逻辑，
-// 两条路都收敛到 finishSegment()，不会互相打架。
+// 现在改成：**App 里录音（MediaRecorder）→ 上传给 Nexus → 本机转写**。
+//   - 不依赖任何云端语音服务，国产 ROM 一样能用；
+//   - 音频不出本机（转写跑在 ~/work/intake 的 SenseVoice 上）；
+//   - 与会议录音共用同一套 ASR，只有一份实现。
+// 代价是失去"边说边出字"的实时预览：松手后约 1.5–2 秒出结果。对讲机本来就是
+// "说完再看到"，这个取舍可以接受。
 //
-// Android 的识别器一次只吃一段话（说完静音就结束），所以「按住 = 一直听」必然是
-// 「不断重启、把每段拼起来」。拼接规则见 joinSegments。
+// 环境要求：secure context。Capacitor 的本地服务在 http://localhost，
+// Chrome 视其为可信来源；Android 侧还需要 manifest 里的 RECORD_AUDIO 与
+// MODIFY_AUDIO_SETTINGS（Capacitor 的 onPermissionRequest 会把 WebView 的
+// 录音请求映射到这两个权限）。
 
-import { SpeechRecognition, type PermissionStatus } from '@capacitor-community/speech-recognition'
-import { isNative } from '../baseUrl'
-
-const IDLE_RESTART_MS = 2200   // 按住期间多久没动静就当作一段结束、重启识别
-const SEGMENT_SETTLE_MS = 320  // 收到 stopped 后等这么久，收尾那一刻的最终结果
-const RESTART_DELAY_MS = 220
-
-export type DictationStatus = 'starting' | 'listening' | 'idle'
+export type DictationStatus = 'starting' | 'recording' | 'transcribing' | 'idle'
 
 export interface DictationCallbacks {
-  /** 累计后的完整转写文本（每次变化都回调） */
-  onText: (text: string) => void
   onStatus?: (status: DictationStatus) => void
   onError?: (message: string) => void
 }
 
 export interface Dictation {
-  /** 松手：停止识别并返回最终文本 */
+  /** 松手：停止录音、上传转写、返回文本 */
   stop: () => Promise<string>
 }
 
-/** 只在本机跑得动原生插件；浏览器走 Web Speech API */
-export const isNativeShell = isNative
-
-/** 两条路都不通时，UI 要退化成输入法模式 */
-export function webSpeechSupported(): boolean {
-  const w = window as unknown as Record<string, unknown>
-  return !!(w.SpeechRecognition || w.webkitSpeechRecognition)
+/** 录音期间已录了多少秒（UI 显示用） */
+export interface RecordingInfo {
+  elapsedMs: number
 }
 
-// 中英混说时，两段之间该不该补空格：中文之间不补，ASCII 之间要补
-function needsSpace(a: string, b: string): boolean {
-  return /[A-Za-z0-9]$/.test(a) && /^[A-Za-z0-9]/.test(b)
+const MIME_CANDIDATES = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
+  'audio/ogg;codecs=opus',
+  'audio/mp4',
+]
+
+function pickMime(): string | undefined {
+  const MR = (window as unknown as { MediaRecorder?: typeof MediaRecorder }).MediaRecorder
+  if (!MR?.isTypeSupported) return undefined
+  return MIME_CANDIDATES.find((m) => MR.isTypeSupported(m))
 }
 
-export function joinSegments(a: string, b: string): string {
-  const x = a.trim(), y = b.trim()
-  if (!x) return y
-  if (!y) return x
-  return needsSpace(x, y) ? `${x} ${y}` : x + y
+/** 这个环境能不能录音。不能则 UI 退化成「点 ⌨ 用输入法」。 */
+export function dictationSupported(): boolean {
+  const w = window as unknown as { MediaRecorder?: unknown; isSecureContext?: boolean }
+  return !!w.MediaRecorder
+    && !!navigator.mediaDevices?.getUserMedia
+    && w.isSecureContext !== false
 }
 
-/** 检查/申请麦克风权限。返回 false 表示用户拒绝或设备不支持。 */
-export async function ensureMicPermission(): Promise<boolean> {
-  if (!isNative()) return true // 浏览器由 getDisplayMedia/Web Speech 自己弹权限
-  try {
-    const cur: PermissionStatus = await SpeechRecognition.checkPermissions()
-    if (cur.speechRecognition === 'granted') return true
-    const next: PermissionStatus = await SpeechRecognition.requestPermissions()
-    return next.speechRecognition === 'granted'
-  } catch {
-    return false
-  }
+export function isNativeShell(): boolean {
+  const w = window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }
+  return !!w.Capacitor?.isNativePlatform?.()
 }
 
 /**
- * 开始一次按住说话。返回的对象负责停止；文本通过 onText 持续回调。
+ * 开始一次按住说话。返回的对象负责停止。
  * 失败时抛异常，由调用方决定怎么提示。
  */
 export async function startDictation(
-  cb: DictationCallbacks,
-  lang = 'zh-CN',
+  token: string,
+  cb: DictationCallbacks = {},
 ): Promise<Dictation> {
-  return isNative() ? startNative(cb, lang) : startWeb(cb, lang)
-}
+  if (!dictationSupported()) throw new Error('NO_MEDIA_API')
 
-// ── 原生（Android）───────────────────────────────────────────────────────
-async function startNative(cb: DictationCallbacks, lang: string): Promise<Dictation> {
-  const available = await SpeechRecognition.available().catch(() => ({ available: false }))
-  if (!available.available) {
-    throw new Error('设备没有可用的语音识别服务')
+  cb.onStatus?.('starting')
+  let stream: MediaStream
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    })
+  } catch (e) {
+    const name = (e as { name?: string })?.name
+    if (name === 'NotAllowedError' || name === 'SecurityError') throw new Error('MIC_DENIED')
+    if (name === 'NotFoundError' || name === 'OverconstrainedError') throw new Error('MIC_MISSING')
+    throw new Error(`MIC_FAILED:${name || String(e)}`)
   }
 
-  let committed = ''      // 已结束分段的累计
-  let segText = ''        // 当前分段（会随 partial 反复改写）
-  let held = true
-  let finished = false    // stop() 之后为 true，禁止再重启
-  let restarting = false
-  let settleTimer: ReturnType<typeof setTimeout> | null = null
-  let lastEventAt = Date.now()
+  const mime = pickMime()
+  const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined)
+  const chunks: Blob[] = []
+  rec.ondataavailable = (ev) => { if (ev.data && ev.data.size) chunks.push(ev.data) }
 
-  const emit = () => cb.onText(joinSegments(committed, segText))
-
-  const handles: Array<{ remove: () => Promise<void> }> = []
-
-  const commitSegment = () => {
-    committed = joinSegments(committed, segText)
-    segText = ''
-    emit()
-  }
-
-  const restart = () => {
-    if (!held || finished || restarting) return
-    restarting = true
-    setTimeout(async () => {
-      restarting = false
-      if (!held || finished) return
-      try {
-        await SpeechRecognition.start({
-          language: lang,
-          maxResults: 3,
-          partialResults: true,   // 必须为 true：本插件只有这条路能持续吐字
-          popup: false,           // popup=true 时 Android 端不支持 partialResults
-        })
-        lastEventAt = Date.now()
-        cb.onStatus?.('listening')
-      } catch {
-        // start 被拒（RECOGNIZER_BUSY 等）不该中断按住 —— 隔一拍再试
-        if (held && !finished) setTimeout(restart, 400)
-      }
-    }, RESTART_DELAY_MS)
-  }
-
-  /** 一段结束：等一小会儿收下尾音，再 commit 并重启 */
-  const finishSegment = () => {
-    if (settleTimer) clearTimeout(settleTimer)
-    settleTimer = setTimeout(() => {
-      settleTimer = null
-      if (finished) { commitSegment(); return }
-      commitSegment()
-      restart()
-    }, SEGMENT_SETTLE_MS)
-  }
-
-  handles.push(await SpeechRecognition.addListener('partialResults', (data) => {
-    lastEventAt = Date.now()
-    const m = data?.matches?.[0]
-    if (typeof m === 'string' && m) { segText = m; emit() }
-  }))
-
-  handles.push(await SpeechRecognition.addListener('listeningState', (data) => {
-    lastEventAt = Date.now()
-    if (data?.status === 'stopped' && !finished) finishSegment()
-  }))
-
-  // 看门狗：插件出错时是静默的（见文件头），只能靠「太久没动静」兜底
-  const watchdog = setInterval(() => {
-    if (finished || !held) return
-    if (Date.now() - lastEventAt > IDLE_RESTART_MS) {
-      lastEventAt = Date.now()
-      commitSegment()
-      restart()
-    }
-  }, 900)
-
-  const cleanup = async () => {
-    finished = true
-    clearInterval(watchdog)
-    if (settleTimer) clearTimeout(settleTimer)
-    for (const h of handles) { try { await h.remove() } catch { /* 卸载失败无所谓 */ } }
-  }
-
-  cb.onStatus?.('listening')
-  await SpeechRecognition.start({
-    language: lang, maxResults: 3, partialResults: true, popup: false,
+  const stopped = new Promise<void>((resolve) => {
+    rec.onstop = () => resolve()
+    // 有些 WebView 在轨道被外部停掉时不发 onstop，兜一个底
+    setTimeout(() => resolve(), 4000)
   })
 
+  rec.start(250)
+  cb.onStatus?.('recording')
+
+  const releaseTracks = () => {
+    for (const t of stream.getTracks()) { try { t.stop() } catch { /* 已经停了 */ } }
+  }
+
   return {
     stop: async () => {
-      held = false
-      finished = true
-      clearInterval(watchdog)
-      if (settleTimer) { clearTimeout(settleTimer); settleTimer = null }
-      try { await SpeechRecognition.stop() } catch { /* 已经停了 */ }
-      commitSegment()
-      await cleanup()
-      cb.onStatus?.('idle')
-      return joinSegments(committed, segText)
-    },
-  }
-}
+      if (rec.state !== 'inactive') { try { rec.stop() } catch { /* 已停 */ } }
+      await stopped
+      releaseTracks()
 
-// ── 浏览器（Web Speech API）──────────────────────────────────────────────
-interface WebSR {
-  lang: string
-  continuous: boolean
-  interimResults: boolean
-  maxAlternatives: number
-  start: () => void
-  stop: () => void
-  abort: () => void
-  onresult: ((e: unknown) => void) | null
-  onerror: ((e: unknown) => void) | null
-  onend: (() => void) | null
-}
-
-async function startWeb(cb: DictationCallbacks, lang: string): Promise<Dictation> {
-  const w = window as unknown as { SpeechRecognition?: new () => WebSR; webkitSpeechRecognition?: new () => WebSR }
-  const Ctor = w.SpeechRecognition || w.webkitSpeechRecognition
-  if (!Ctor) throw new Error('NO_SPEECH_API')
-
-  let committed = ''
-  let segText = ''
-  let held = true
-  let rec: WebSR | null = null
-
-  const emit = () => cb.onText(joinSegments(committed, segText))
-
-  const build = () => {
-    const r = new Ctor()
-    r.lang = lang
-    r.continuous = true
-    r.interimResults = true
-    r.maxAlternatives = 1
-    r.onresult = (ev: unknown) => {
-      const e = ev as { resultIndex: number; results: { length: number; [i: number]: { isFinal: boolean; 0: { transcript: string } } } }
-      let interim = ''
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const res = e.results[i]
-        const t = res[0]?.transcript ?? ''
-        if (res.isFinal) committed = joinSegments(committed, t)
-        else interim += t
+      const blob = new Blob(chunks, { type: mime || 'audio/webm' })
+      if (blob.size < 1200) {                  // 一按就松：给个明确结果，别静默
+        cb.onStatus?.('idle')
+        return ''
       }
-      segText = interim
-      emit()
-    }
-    r.onerror = (ev: unknown) => {
-      const err = (ev as { error?: string })?.error
-      if (err && err !== 'no-speech' && err !== 'aborted') cb.onError?.(String(err))
-    }
-    r.onend = () => {
-      // Chrome 在静音后会自己结束；还按着就接着听
-      if (!held) return
-      committed = joinSegments(committed, segText)
-      segText = ''
-      emit()
-      setTimeout(() => { if (held) { try { rec = build(); rec.start() } catch { /* 忽略 */ } } }, RESTART_DELAY_MS)
-    }
-    return r
-  }
 
-  rec = build()
-  rec.start()
-  cb.onStatus?.('listening')
-
-  return {
-    stop: async () => {
-      held = false
-      try { rec?.stop() } catch { /* 已停 */ }
-      committed = joinSegments(committed, segText)
-      segText = ''
-      cb.onStatus?.('idle')
-      return committed
+      cb.onStatus?.('transcribing')
+      try {
+        const text = await uploadForTranscription(token, blob, mime)
+        cb.onStatus?.('idle')
+        return text
+      } catch (e) {
+        cb.onStatus?.('idle')
+        cb.onError?.(e instanceof Error ? e.message : String(e))
+        throw e
+      }
     },
   }
+}
+
+const EXT: Record<string, string> = {
+  'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/mp4': 'm4a', 'audio/mpeg': 'mp3',
+}
+
+async function uploadForTranscription(token: string, blob: Blob, mime?: string): Promise<string> {
+  const base = (mime || 'audio/webm').split(';')[0]
+  const name = `clip.${EXT[base] || 'webm'}`
+  const res = await fetch(`/api/walkie/transcribe?name=${encodeURIComponent(name)}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': base,
+      Authorization: `Bearer ${token}`,
+    },
+    body: blob,
+  })
+  const data = await res.json().catch(() => null) as { text?: string; error?: string; detail?: string } | null
+  if (!res.ok) {
+    if (res.status === 503) throw new Error('ASR_DOWN')
+    throw new Error(`TRANSCRIBE_FAILED:${data?.detail || data?.error || res.status}`)
+  }
+  return (data?.text || '').trim()
+}
+
+/** 把内部错误码翻成人话 */
+export function explainDictationError(msg: string): string {
+  if (msg === 'NO_MEDIA_API') return '这个环境不支持录音（需要 HTTPS 或 localhost）。点 ⌨ 用输入法语音键。'
+  if (msg === 'MIC_DENIED') return '没有麦克风权限。到系统设置里给 Nexus 打开「麦克风」，或点 ⌨ 用输入法语音键。'
+  if (msg === 'MIC_MISSING') return '找不到麦克风设备。'
+  if (msg === 'ASR_DOWN') return '本机转写服务没在跑（PM2 的 intake）。点 ⌨ 先用输入法语音键顶着。'
+  if (msg.startsWith('MIC_FAILED')) return `麦克风打不开：${msg.slice(11)}`
+  return `转写失败：${msg}`
 }
