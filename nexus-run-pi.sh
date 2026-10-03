@@ -79,6 +79,16 @@ PI_AGENT_DIR="${NEXUS_PI_AGENT_DIR:-$HOME/.pi/agent-nexus}"
 mkdir -p "$PI_AGENT_DIR"
 chmod 700 "$PI_AGENT_DIR"
 
+# pi 会把 agent 目录下的 AGENTS.md 当身份说明读进去（docs/configuration.md），
+# 所以这里挂上 L16 的员工手册 —— 每个 pi 频道一开口就知道自己是谁、向谁汇报。
+# 只在**完全不存在**时建（-e 见文件、-L 见软链，含断链），否则一律不碰：
+# 那可能是别人特意挂的，也可能已经被手工改成了真文件。手册不在就先不建，
+# 免得留一个断链。
+PI_IDENTITY="$HOME/work/rich/HANDBOOK.md"
+if [ ! -e "$PI_AGENT_DIR/AGENTS.md" ] && [ ! -L "$PI_AGENT_DIR/AGENTS.md" ] && [ -f "$PI_IDENTITY" ]; then
+    ln -s "$PI_IDENTITY" "$PI_AGENT_DIR/AGENTS.md" 2>/dev/null || true
+fi
+
 # ── 生成 models.json + settings.json ──────────────────────────────────────
 # 用 node 一次读完 data/configs/*.json，把「所有 profile」都写成一个 provider。
 # 为什么写全部而不是只写当前 profile：Nexus 是多窗口的，两个不同 profile 的
