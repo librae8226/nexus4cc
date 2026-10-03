@@ -3,8 +3,10 @@ import { useTranslation } from 'react-i18next'
 import Terminal from './Terminal'
 import ServerSettings from './ServerSettings'
 import WalkieApp from './walkie/WalkieApp'
+import FirstRun from './walkie/FirstRun'
 import { buildDefaultMode, rememberMode, resolveMode, type UiMode } from './walkie/mode'
-import { getApiBase, needsServerConfig, getActiveProfile, setActiveProfileUsername } from './baseUrl'
+import { ensureBakedServer } from './walkie/server'
+import { getApiBase, needsServerConfig, getActiveProfile, isNative, setActiveProfileUsername } from './baseUrl'
 
 const STORAGE_KEY = 'nexus_token'
 
@@ -21,16 +23,32 @@ export default function App() {
   //   2) 服务器回 400 "username and password required"（首次连多用户服务器）
   const [username, setUsername] = useState(() => getActiveProfile()?.username ?? '')
   const [needUsername, setNeedUsername] = useState(() => !!getActiveProfile()?.username)
-  // 一次性判定即可：登录页存活期间不会有人往里加 profile（加了也只能从这个
-  // 组件加，而它没渲染就没有入口）。规则见 baseUrl.needsServerConfig()。
-  const [showServer] = useState(needsServerConfig)
+  // 经典登录页要不要展开「服务器地址」那一块。规则见 baseUrl.needsServerConfig()。
+  // 现在它是可变的：APK 首启会先把出厂地址装进 profile（见 walkie/server.ts），
+  // 装上了就不该再让人看见地址这一栏。
+  const [showServer, setShowServer] = useState(needsServerConfig)
   // 界面模式（经典终端 / 对讲机）。判定规则见 walkie/mode.ts。
   // 初值 null = 还没判定完，先什么都不渲染，避免先闪一下经典终端再跳走。
   const [mode, setMode] = useState<UiMode | null>(null)
+  // **这个包出厂默认进哪个界面**（跟"上次停在哪"是两回事）。登录页的长相按它决定：
+  // 对讲机包给对讲机的首启页，经典包保持原样。
+  const [flavor, setFlavor] = useState<UiMode | null>(null)
   // 经典界面里要不要显示「回对讲机」的浮标：出厂默认就是对讲机的包装里有，
   // 或者用户自己从对讲机切过来（浏览器里也一样，否则切过去就回不来了）。
   const [showWalkieReturn, setShowWalkieReturn] = useState(false)
-  useEffect(() => { void resolveMode().then(setMode) }, [])
+  // 首启引导：**先把服务器地址装好，再决定登录页长什么样** —— 顺序反了会先闪一下
+  // 「Add server」再收回去。
+  const [booted, setBooted] = useState(!isNative())
+  useEffect(() => {
+    void (async () => {
+      if (isNative()) await ensureBakedServer()
+      setShowServer(needsServerConfig())
+      setBooted(true)
+      const m = await resolveMode()
+      setMode(m)
+      setFlavor(buildDefaultMode())
+    })()
+  }, [])
   const switchMode = (m: UiMode) => { rememberMode(m); setMode(m); setShowWalkieReturn(true) }
 
   async function handleLogin(e: React.FormEvent) {
@@ -69,6 +87,16 @@ export default function App() {
       setError(t('login.connectionFailed'))
     } finally {
       setLoading(false)
+    }
+  }
+
+  // 出厂就是对讲机的包：第一屏是对讲机的第一屏，不是终端的登录页。
+  // 还没探完（几毫秒，只在原生壳里）先铺这一屏自己的皮肤，别闪一下白底 ——
+  // 主题是 Terminal.tsx 在 import 时写进 :root 的，此刻可能是浅色。
+  if (!token && isNative()) {
+    if (!booted) return <div className="walkie-first" />
+    if (flavor === 'walkie') {
+      return <FirstRun onDone={(tok) => { localStorage.setItem(STORAGE_KEY, tok); setToken(tok) }} />
     }
   }
 

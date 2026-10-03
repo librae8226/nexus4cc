@@ -379,6 +379,21 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     () => (since ? events.filter((e) => e.kind === 'it' && e.at > since) : []),
     [events, since],
   )
+  const showAbsent = !absentRead && since > 0 && Date.now() - since > ABSENT_MIN_MS && absent.length > 0
+
+  /**
+   * 一条"现在"：把正在跑的那几件压成一行。
+   *
+   * 这是评审里"流没有摘要层"的一半。另一半（你不在的时候）要 LLM 写，
+   * 这一半**不需要** —— 机器现在在干什么本来就是确定的，让人自己从三张卡里
+   * 拼出来才是多余的。三件以上才值得占这一行。
+   */
+  const nowLine = useMemo(() => {
+    if (runningItems.length < 2) return ''
+    return runningItems
+      .map((e) => `${e.path} ${e.text.replace(/\s+/g, ' ').slice(0, 24)}`)
+      .join(' · ')
+  }, [runningItems])
 
   const play = useCallback(async (text: string, rate: number, which: string) => {
     if (!text) return
@@ -453,6 +468,28 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
       void speakEvent(e)
     }
   }, [events, speakEvent])
+
+  /**
+   * 「你不在的时候」那一句。只问一次 LLM —— 它是这一屏唯一一处"要动脑子"的摘要，
+   * 而且回来的那句要**念出来**（你不在这段时间发生的事，本来就该用耳朵收）。
+   */
+  const [digest, setDigest] = useState('')
+  const digestAskedRef = useRef(false)
+  const digestSpokenRef = useRef(false)
+  useEffect(() => {
+    if (!showAbsent || digestAskedRef.current) return
+    digestAskedRef.current = true
+    const raw = absent.slice(0, 8).map((e) => `· ${e.path}：${e.text.slice(0, 400)}`).join('\n')
+    summarizeText(token, raw)
+      .then((s) => { if (s.summarized && s.text) setDigest(s.text) })
+      .catch(() => { /* 没有摘要就只报条数，绝不编一句 */ })
+  }, [showAbsent, absent, token])
+
+  useEffect(() => {
+    if (!digest || digestSpokenRef.current) return
+    digestSpokenRef.current = true
+    void play(digest, 1.08, 'absent')
+  }, [digest, play])
 
   /** 顶栏那个「N 个在跑」点一下 = 让它用一句话告诉你机器现在在干什么 */
   const speakOverview = useCallback(() => {
@@ -578,11 +615,29 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
           「正在跑」钉在最上面 —— 那是这一屏最要紧的一件事。 */}
       <div className="walkie-stage" ref={streamRef}>
         <div className="walkie-stage-inner">
-          {/* 你不在的时候。这一屏是状态牌，第一句就该回答"有没有我不知道的事"。 */}
-          {!absentRead && since > 0 && Date.now() - since > ABSENT_MIN_MS && absent.length > 0 && (
-            <button type="button" className="walkie-absent" onClick={() => setAbsentRead(true)}>
-              <b>你不在的 {span(Date.now() - since)}里</b>
-              <span>{absent.length} 件办完了 · 点一下消掉</span>
+          {/* 你不在的时候。这一屏是状态牌，第一句就该回答"有没有我不知道的事"——
+              而且要回答"是什么事"，不是只报个数（只报个数等于让你自己去翻下面那堆）。 */}
+          {showAbsent && (
+            <div className="walkie-absent">
+              <b>你不在的 {span(Date.now() - since)}里 · {absent.length} 件办完了</b>
+              {digest && <p className="walkie-absent-say">{digest}</p>}
+              <div className="walkie-absent-acts">
+                {digest && (
+                  <button type="button" className="walkie-mini"
+                    onClick={() => (speaking === 'absent' ? (void stopSpeaking(), setSpeaking(null)) : void play(digest, 1.08, 'absent'))}>
+                    {speaking === 'absent' ? '⏹ 停止' : '🔊 再听一遍'}
+                  </button>
+                )}
+                <button type="button" className="walkie-mini" onClick={() => setAbsentRead(true)}>知道了</button>
+              </div>
+            </div>
+          )}
+
+          {/* 现在：把在跑的那几件压成一行。三件以上才占地方，两件以下那两张卡自己就说清了。 */}
+          {nowLine && (
+            <button type="button" className="walkie-nowline" onClick={speakOverview}>
+              <span className="walkie-now-dot" />
+              <span>{runningItems.length} 件在跑 · {nowLine}</span>
             </button>
           )}
 

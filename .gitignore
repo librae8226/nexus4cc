@@ -65,3 +65,7 @@ android/.gradle-home/
 
 # 构建出的 APK（便于取用，非源码）
 android/dist/
+
+# 对讲机包里出厂自带的服务器地址（环境相关，不进版本库）。
+# 缺了也能构建 —— 只是第一次要自己填一次地址。见 frontend/src/walkie/server.ts
+android/app/src/walkie/assets/public/server.json

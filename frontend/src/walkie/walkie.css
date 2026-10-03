@@ -20,6 +20,75 @@
 /* 能读的字要能选 */
 .walkie-reply, .walkie-you p, .walkie-it p, .walkie-step { -webkit-user-select: text; user-select: text; }
 
+/* 【这一屏自带皮肤，不跟经典界面的主题走】
+ *
+ * 为什么：主题是 Terminal.tsx 在**模块作用域**写进 :root 的（applyNexusCssVars
+ * 在 import 时就跑），而它取的是 `nexus_theme` 或**系统的 prefers-color-scheme**。
+ * 于是手机上只要系统是浅色，这一屏就会用一套**没人设计过**的颜色渲染 ——
+ * 它的 --tone-* 和所有 color-mix 透明度都是按深底调的（真机首启页上就是这么露馅的）。
+ *
+ * 定死一套，比让用户碰运气强；产品自己定颜色，也是这一屏该有的样子。
+ * （要浅色皮肤就改这一块，别去动 index.css —— 那是经典界面的。） */
+.walkie-root,
+.walkie-first {
+  --nexus-bg: #0f172a;
+  --nexus-bg2: #1e293b;
+  --nexus-border: #334155;
+  --nexus-text: #f1f5f9;
+  --nexus-text2: #94a3b8;
+  --nexus-muted: #475569;
+  --nexus-accent: #3b82f6;
+  --nexus-success: #22c55e;
+  --nexus-warning: #f59e0b;
+  --nexus-error: #ef4444;
+  color-scheme: dark;
+}
+
+/* ── 第一次打开（对讲机风味包的首启页）─────────────────
+   它是这一屏的"开箱"，所以长得和这一屏一样：同一个圆点、同一句人话、同样的暗底。
+   没有标题、没有副标题、没有「多用户」的解释 —— 一次性的事。 */
+.walkie-first {
+  min-height: 100dvh;
+  display: flex; align-items: center; justify-content: center;
+  padding: 28px 24px calc(28px + env(safe-area-inset-bottom, 0px));
+  background: var(--nexus-bg);
+  color: var(--nexus-text);
+}
+.walkie-first-card { width: 100%; max-width: 360px; }
+.walkie-first-brand { margin-bottom: 24px; font-size: 13px; }
+.walkie-first-say { font-size: 15px; line-height: 1.75; color: var(--nexus-text2); margin: 0 0 26px; }
+.walkie-first-form { display: flex; flex-direction: column; gap: 12px; }
+.walkie-first-field { display: flex; flex-direction: column; gap: 6px; }
+.walkie-first-field span { font-size: 11.5px; color: var(--nexus-muted); }
+.walkie-first-field input {
+  background: var(--nexus-bg2);
+  border: 1px solid var(--nexus-border);
+  border-radius: 12px;
+  padding: 13px 14px;
+  color: var(--nexus-text);
+  font: inherit;
+  /* 16px：再小 iOS 会在聚焦时把整页放大 */
+  font-size: 16px;
+  outline: none;
+}
+.walkie-first-field input:focus { border-color: color-mix(in srgb, var(--nexus-accent) 55%, var(--nexus-border)); }
+.walkie-first-err { color: var(--nexus-warning); font-size: 12.5px; line-height: 1.5; margin: 0; }
+.walkie-first-go {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--nexus-accent); color: #fff;
+  border: none; border-radius: 12px;
+  padding: 14px; margin-top: 6px;
+  font: inherit; font-size: 16px; font-weight: 650;
+  cursor: pointer;
+}
+.walkie-first-go svg { width: 18px; height: 18px; }
+.walkie-first-go[disabled] { opacity: .35; }
+.walkie-first-more {
+  margin-top: 18px; padding: 4px 0;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--nexus-muted); font: inherit; font-size: 12px;
+}
+
 /* ── 顶栏 ───────────────────────────────────────────── */
 .walkie-top {
   display: flex;
@@ -200,16 +269,28 @@
 }
 /* 你不在的时候 */
 .walkie-absent {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
-  width: 100%; text-align: left; cursor: pointer;
-  margin: 10px 0 4px; padding: 10px 12px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 7px;
+  margin: 10px 0 6px; padding: 11px 13px;
   border-radius: 10px;
   background: color-mix(in srgb, var(--nexus-accent) 13%, transparent);
   border: 1px solid color-mix(in srgb, var(--nexus-accent) 30%, transparent);
   color: var(--nexus-text);
 }
 .walkie-absent b { font-size: 13.5px; }
-.walkie-absent span { font-size: 11.5px; color: var(--nexus-text2); }
+.walkie-absent-say { margin: 0; font-size: 14px; line-height: 1.6; color: var(--nexus-text2); }
+.walkie-absent-acts { display: flex; gap: 8px; }
+
+/* 现在：在跑的那几件压成一行 */
+.walkie-nowline {
+  display: flex; align-items: center; gap: 7px;
+  width: 100%; text-align: left; cursor: pointer;
+  margin: 8px 0 2px; padding: 8px 2px;
+  background: transparent; border: none;
+  color: var(--nexus-text2); font: inherit; font-size: 12.5px; line-height: 1.5;
+}
+.walkie-nowline span:last-child {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
 
 /* ── 输入框：这一屏唯一的入口 ───────────────────────── */
 .walkie-compose {
