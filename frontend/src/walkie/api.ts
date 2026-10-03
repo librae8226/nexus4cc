@@ -10,12 +10,23 @@ export interface WalkieChannel {
   active: boolean
   /** 'other' = 该 pane 里没有 claude，发过去会被 shell 当命令执行，前端必须禁发 */
   kind: 'claude' | 'other'
+  /** 这一格现在忙不忙。ready = 还没聊过，不知道 */
+  status?: 'working' | 'idle' | 'ready' | 'offline'
 }
 
 export interface WalkieProject {
   name: string
   path: string
   channels: WalkieChannel[]
+}
+
+/** 从 transcript 里提炼出的"一行动作"。见 walkie.js 的 pushStep。 */
+export interface WalkieStep {
+  kind: 'bash' | 'read' | 'edit' | 'search' | 'task' | 'todo' | 'web' | 'think' | 'tool'
+  label: string
+  /** 带文件的操作会给路径，前端据此把这行做成可点开的 */
+  path?: string
+  at?: number
 }
 
 export interface ChannelList {
@@ -45,6 +56,8 @@ export interface ReplyState {
   paneTail?: string[]
   /** 后端给的排障提示（认领会话失败、目标不是 claude 等） */
   hint?: string | null
+  /** 他在干什么：从 transcript 提炼出的"一行动作"，一行一步 */
+  steps?: WalkieStep[]
 }
 
 async function req<T>(path: string, token: string, init?: RequestInit): Promise<T> {

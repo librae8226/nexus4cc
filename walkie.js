@@ -56,18 +56,25 @@ function readTail(file, maxBytes) {
 /** 读文件的 [offset, EOF) 段，返回 { lines, offset }。用于增量解析 transcript。 */
 function readFrom(file, offset) {
   let size
-  try { size = statSync(file).size } catch { return { lines: [], offset } }
-  if (size <= offset) return { lines: [], offset }
+  try { size = statSync(file).size } catch { return { lines: [], at: [], offset } }
+  if (size <= offset) return { lines: [], at: [], offset }
   const len = size - offset
   const buf = Buffer.allocUnsafe(len)
   const fd = openSync(file, 'r')
   try { readSync(fd, buf, 0, len, offset) } finally { closeSync(fd) }
   const text = buf.toString('utf8')
   const lastNl = text.lastIndexOf('\n')
-  if (lastNl === -1) return { lines: [], offset }      // 半行，等下次
+  if (lastNl === -1) return { lines: [], at: [], offset }   // 半行，等下次
   const complete = text.slice(0, lastNl)
-  const lines = complete.split('\n').map((l) => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
-  return { lines, offset: offset + Buffer.byteLength(complete, 'utf8') + 1 }
+  const lines = []
+  const at = []
+  let cursor = offset
+  for (const raw of complete.split('\n')) {
+    const bytes = Buffer.byteLength(raw, 'utf8') + 1
+    try { const e = JSON.parse(raw); lines.push(e); at.push(cursor) } catch { /* 坏行跳过 */ }
+    cursor += bytes
+  }
+  return { lines, at, offset: cursor }
 }
 
 // ── LLM 调用（精炼 / 摘要）───────────────────────────────────────────────
@@ -174,19 +181,34 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
       if (!proj) continue
       const panePid = Number(cols[5]) || 0
       if (!byProject.has(proj)) byProject.set(proj, [])
+      // 这一格现在忙不忙。旋钮同时是一块状态牌 —— 换过去之前就知道对方在不在干活。
+      // 判据是"我们记得的那个 transcript 文件最近 20 秒动过没有"：不额外抓 pane，
+      // 代价只有一次 stat。没聊过的频道就没有这个信息，如实报 ready。
+      let status = 'ready'
+      const remembered = sessions[`${proj}:${Number(idx)}`]
+      if (!claudePanes.has(panePid)) status = 'offline'
+      else if (remembered?.file) {
+        try { status = Date.now() - statSync(remembered.file).mtimeMs < 20_000 ? 'working' : 'idle' }
+        catch { status = 'ready' }          // 文件被清理了，当作没记录
+      }
+
       byProject.get(proj).push({
         index: Number(idx), name, cwd: cwd || '',
         active: cols[4] === '1',
         // 非 claude 的频道（纯 shell / 其它进程）发过去就是直接执行 —— 前端必须据此拦住，
         // 否则「更新一下 README」会被 zsh 当命令跑。这个标记是安全设施，不是装饰。
         kind: claudePanes.has(panePid) ? 'claude' : 'other',
+        status,
       })
     }
 
+    const home = homedir()
     const projects = [...byProject.entries()]
       .map(([name, channels]) => ({
         name,
-        path: channels[0]?.cwd || '',
+        // 界面上要显示的是"哪个文件夹"，不是 tmux 的 session 名 —— 路径本身就是它的意思。
+        // 家目录缩成 ~，否则一排 /home/librae/... 会把读数挤爆。
+        path: (channels[0]?.cwd || '').replace(home, '~'),
         channels: channels.sort((a, b) => a.index - b.index),
       }))
       // 主 session 钉在最前 —— 它是最常用的那一个，每次都要转过去很烦
@@ -397,6 +419,70 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
   }
 
   /**
+   * 把 assistant 的一个 content block 提炼成"一行动作"。
+   *
+   * 数据源是 Claude Code 自己写的 transcript，不是去解析终端画面 —— 里面每个工具调用
+   * 都是结构化的（name + input，很多还自带一句人话 description），比从 TUI 上刮文字
+   * 可靠得多。用户要的"他每一步的工作，提炼到屏幕上，放在一行显示"就是从这里来的。
+   *
+   * 带 file_path 的那几种会把路径一起给出去，前端据此把这一行做成可点开的。
+   */
+  function pushStep(t, b) {
+    if (!b || !b.type) return
+    if (!t.steps) t.steps = []
+    if (!t.stepIds) t.stepIds = new Set()
+
+    // thinking / tool_use 都会随流式输出重复出现，按 id 去重（同一个 id 只记一次）
+    const id = b.id || (b.type === 'thinking' ? 'think:' + String(b.thinking || '').slice(0, 40) : '')
+    if (id) { if (t.stepIds.has(id)) return; t.stepIds.add(id) }
+
+    let step = null
+    if (b.type === 'thinking') {
+      // 内容会很长且没意义，只表达"在推理"
+      step = { kind: 'think', label: '推理中…' }
+    } else if (b.type === 'tool_use') {
+      const input = b.input || {}
+      const desc = String(input.description || '').trim()
+      const file = input.file_path || input.notebook_path || ''
+      const name = String(b.name || 'Tool')
+      const cut = (s, n) => { const x = String(s || '').replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n) + '…' : x }
+      switch (name) {
+        case 'Bash':
+          step = { kind: 'bash', label: desc || cut(input.command, 64) }
+          break
+        case 'Read': case 'Edit': case 'Write': case 'MultiEdit': case 'NotebookEdit':
+          step = { kind: name === 'Read' ? 'read' : 'edit', label: shortPath(file), path: file }
+          break
+        case 'Grep': case 'Glob':
+          step = { kind: 'search', label: cut(input.pattern, 40) || '(全部)' }
+          break
+        case 'Task':
+          step = { kind: 'task', label: desc || cut(input.prompt, 48) || '派了个子任务' }
+          break
+        case 'TodoWrite':
+          step = { kind: 'todo', label: '更新任务清单' }
+          break
+        case 'WebFetch': case 'WebSearch':
+          step = { kind: 'web', label: cut(input.query || input.url, 48) }
+          break
+        default:
+          step = { kind: 'tool', label: name }
+      }
+    }
+    if (!step) return
+    step.at = Date.now()
+    t.steps.push(step)
+    if (t.steps.length > 60) t.steps = t.steps.slice(-60)   // 长任务不至于把响应撑爆
+  }
+
+  /** 路径只留最后两段：手机上看得见，也知道在哪个目录 */
+  function shortPath(p) {
+    if (!p) return ''
+    const parts = String(p).split('/').filter(Boolean)
+    return parts.slice(-2).join('/')
+  }
+
+  /**
    * 目标 pane 底部几行。等回复时把它透给前端 —— 「AI 在干活但界面上什么都没有」
    * 是最没法自查的状态，有了这几行，卡在信任提示 / 卡在 shell / 正在跑工具，
    * 一眼就能看出来。
@@ -440,6 +526,7 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
       elapsedMs: Date.now() - t.startedAt,
       paneTail: pane,
       hint: hintFor(t, pane),
+      steps: t.steps || [],
     }
   }
 
@@ -479,22 +566,48 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
 
     // 第一件事永远是：认领对应的 transcript 文件
     if (!t.file) { claimFile(t); if (!t.file) return }
+    // 文件认了、但里面始终没有"我们刚发的那句" —— 说明这条消息没能进到会话里
+    // （卡在信任提示、claude 早退了、或者目标根本不是这个会话）。
+    // 明确报出来，别让界面一直转到超时。
+    if (!t.sawSent && Date.now() - t.startedAt > 60_000) {
+      t.state = 'timeout'
+      t.error = '这条消息没有出现在会话记录里 —— 它可能没送达，或者那个 claude 已经不在对话界面上了'
+      return
+    }
 
-    const { lines, offset } = readFrom(t.file, t.fileOffset)
+    const { lines, at, offset } = readFrom(t.file, t.fileOffset)
     if (lines.length) t.fileOffset = offset
 
-    for (const e of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const e = lines[i]
       if (e.isSidechain) continue
       if (e.type === 'user' && !t.sawSent) {
         const c = e.message?.content
-        if (typeof c === 'string' && sameText(c, t.sentText)) t.sawSent = true
+        if (typeof c === 'string') {
+          // 认「我们那句话」**主要看位置，不靠文本对得上**。
+          // 为什么：真机上出现过 transcript 里多出一个字符（消息在终端里被谁多敲了一下），
+          // 前 24 字比对就失效了。之前那种情况下会一直等下去 —— 正是「AI 在干活但永远
+          // 没有结果」那个老毛病。位置判据是：发送前记下的文件末尾之后追加的第一条
+          // 人类发言，就是我们刚发的那句。
+          const exact = sameText(c, t.sentText)
+          const afterSend = at[i] >= (t.baseOffset ?? 0) - 4096
+          const human = (e.origin?.kind ?? 'human') === 'human'
+          if (exact || (afterSend && human)) {
+            t.sawSent = true
+            t.via = t.via || (exact ? 'text' : 'position')
+            t.sentAt = at[i]
+          }
+        }
         continue
       }
       if (!t.sawSent) continue
       if (e.type === 'assistant') {
         const blocks = e.message?.content
         if (Array.isArray(blocks)) {
-          for (const b of blocks) if (b.type === 'text' && b.text) t.replyParts.push(b.text)
+          for (const b of blocks) {
+            if (b.type === 'text' && b.text) t.replyParts.push(b.text)
+            else pushStep(t, b)
+          }
         }
       } else if (e.type === 'system' && e.subtype === 'turn_duration') {
         t.reply = t.replyParts.join('\n\n').trim()
@@ -520,17 +633,27 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     }
   }
 
-  /** 找出「刚被我们写进一句话」的那个 jsonl。判据是内容，不是 mtime。 */
+  /**
+   * 找出「刚被我们写进一句话」的那个 jsonl。
+   *
+   * 两轮判据，第一轮靠内容、第二轮靠**位置**：
+   *   1. 发送后变大、且尾部有哪条人类发言和我们发的那段文本对得上 —— 最可靠；
+   *   2. 对不上也得认：挑长得最多的那个文件，把读取起点**回退到发送前的文件末尾**，
+   *      接下来的 tick 就会把「那之后追加的第一条人类发言」当成我们发的那句。
+   *
+   * 第 2 条是关键。老版本只有第 1 条，匹配一失败就再也找不到，于是永远等下去 ——
+   * 真机上的确发生过（消息在终端里被多敲了一个字，文本就对不上了）。
+   * 现在只要位置对，认领就一定成立。
+   */
   function claimFile(t) {
     t.polls = (t.polls || 0) + 1
     let files
     try { files = readdirSync(t.cwdDir).filter((f) => f.endsWith('.jsonl')) } catch { return }
 
-    // 优先看发送后变大的文件；都没变大就全扫一遍（可能有轮转/新建）
-    const grew = files.filter((f) => {
-      const prev = t.before.get(f)
-      try { return prev === undefined || statSync(join(t.cwdDir, f)).size > prev } catch { return false }
-    })
+    const sizeOf = (f) => { try { return statSync(join(t.cwdDir, f)).size } catch { return -1 } }
+    const grew = files.filter((f) => { const cur = sizeOf(f); return cur >= 0 && cur > (t.before.get(f) ?? -1) })
+
+    // 第一轮：文本对得上
     for (const f of grew.length ? grew : files) {
       const full = join(t.cwdDir, f)
       let tail
@@ -540,37 +663,34 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
         try { e = JSON.parse(line) } catch { continue }
         if (e.type !== 'user' || e.isSidechain) continue
         const c = e.message?.content
-        if (typeof c === 'string' && sameText(c, t.sentText)) {
-          t.file = full
-          t.sessionId = e.sessionId || f.replace(/\.jsonl$/, '')
-          // 认领成功就落盘：就算这一轮没答完/被中断，重启后也知道该回看哪个文件
-          sessions[t.key] = { sessionId: t.sessionId, file: t.file, cwd: t.cwd, updatedAt: new Date().toISOString() }
-          saveSessions()
-          return
-        }
+        if (typeof c === 'string' && sameText(c, t.sentText)) { claim(t, full, f, sizeOf(f), 'text'); return }
       }
     }
 
-    // 严格匹配失败、而且已经等够 ~10 秒 —— 退一步认「发送后长得最多的那个文件」。
-    // 同目录多开 claude 时这不如内容匹配可靠，但总比一个字都不给强；落一个
-    // via=grew-fallback，界面上说清楚这是猜的。
-    if (t.polls >= 8) {
-      let best = null, bestGrow = 0
-      for (const f of files) {
-        const full = join(t.cwdDir, f)
-        let size
-        try { size = statSync(full).size } catch { continue }
-        const grow = size - (t.before.get(f) ?? 0)
-        if (grow > bestGrow) { bestGrow = grow; best = f }
-      }
-      if (best && bestGrow > 200) {
-        t.file = join(t.cwdDir, best)
-        t.sessionId = best.replace(/\.jsonl$/, '')
-        t.via = 'grew-fallback'
-        sessions[t.key] = { sessionId: t.sessionId, file: t.file, cwd: t.cwd, updatedAt: new Date().toISOString() }
-        saveSessions()
-      }
+    // 第二轮：位置。等到第 4 拍（约 5 秒）还没对上文本，就不再指望它。
+    if (t.polls < 4) return
+    let best = null, bestGrow = 0
+    for (const f of files) {
+      const grow = sizeOf(f) - (t.before.get(f) ?? 0)
+      if (grow > bestGrow) { bestGrow = grow; best = f }
     }
+    if (best && bestGrow > 120) {
+      const full = join(t.cwdDir, best)
+      // 起点回退到发送前的末尾 —— tick 从那之后扫，第一条人类发言就是我们的
+      claim(t, full, best, sizeOf(best) - bestGrow, 'position-pending')
+      t.via = null            // 真正确认由 tick 里设成 position / text
+    }
+  }
+
+  function claim(t, full, f, sizeAtSend, how) {
+    t.file = full
+    t.sessionId = f.replace(/\.jsonl$/, '')
+    t.baseOffset = Math.max(0, sizeAtSend)
+    t.fileOffset = Math.max(0, t.baseOffset - 4096)   // 留一点重叠，别切在半行上
+    t.via = how === 'text' ? 'text' : null
+    // 认领成功就落盘：就算这一轮没答完/被中断，重启后也知道该回看哪个文件
+    sessions[t.key] = { sessionId: t.sessionId, file: t.file, cwd: t.cwd, updatedAt: new Date().toISOString() }
+    saveSessions()
   }
 
   // 归一化后比前缀：粘贴进 TUI 的文本可能被折行/加尾随空白，逐字比会漏

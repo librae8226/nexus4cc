@@ -21,6 +21,9 @@ interface Props {
   overlay?: boolean
   hideSidebar?: boolean
   onEditingChange?: (editing: boolean) => void
+  /** 覆盖头部标题。默认是"选择工作目录"——那是给目录选择器写的，
+      对讲机把它当文件浏览器用，标题得说人话。 */
+  title?: string
 }
 
 function formatSize(bytes?: number): string {
@@ -208,9 +211,11 @@ function createMarkedRenderer() {
 
 export interface WorkspaceBrowserHandle {
   closeEditor: () => void
+  /** 从外部直接打开一个绝对路径的文件（对讲机点"打开"用）。会先把目录切过去。 */
+  openPath: (absPath: string) => void
 }
 
-const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function WorkspaceBrowser({ token, onClose, initialPath = '', currentSession, embedded, overlay, hideSidebar, onEditingChange }: Props, ref) {
+const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function WorkspaceBrowser({ token, onClose, initialPath = '', currentSession, embedded, overlay, hideSidebar, onEditingChange, title }: Props, ref) {
   const { t } = useTranslation()
   const [workspaceRoot, setWorkspaceRoot] = useState('')
 
@@ -324,6 +329,7 @@ const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function Work
 
   // 文件编辑器状态
   const [editingFile, setEditingFile] = useState<{ name: string; path: string; content: string } | null>(null)
+  const loadEntriesRef = useRef<((p: string) => void) | null>(null)
   const [editorContent, setEditorContent] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const [isPreviewMode, setIsPreviewMode] = useState(false)
@@ -343,7 +349,18 @@ const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function Work
       setEditingFile(null)
       setEditorContent('')
     },
-  }), [])
+    /** 从外部直接打开一个绝对路径的文件（对讲机点"打开"用）。
+        先把目录切过去，再走正常的打开流程 —— 这样面包屑和侧栏也会跟着对。 */
+    openPath: (absPath: string) => {
+      const i = absPath.lastIndexOf('/')
+      const dir = i > 0 ? absPath.slice(0, i) : '/'
+      const name = absPath.slice(i + 1)
+      if (!name) return
+      setCurrentPath(dir)
+      loadEntriesRef.current?.(dir)
+      void openEditorPath(dir, name)
+    },
+  }), [openEditorPath])
 
   // TOC state
   const [showToc, setShowToc] = useState(false)
@@ -428,6 +445,9 @@ const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function Work
       setLoading(false)
     }
   }, [token, showHidden])
+  // loadEntries 是 useCallback、声明在 useImperativeHandle 之后，用 ref 兜一层，
+  // 免得把上面的 handle 挪下来（那会打断"handle 紧跟着组件签名"的读法）
+  loadEntriesRef.current = (p: string) => { void loadEntries(p) }
 
   // 当 currentPath 确定后加载内容
   useEffect(() => {
@@ -608,8 +628,17 @@ const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function Work
 
   // 打开文件（查看）
   function openFile(name: string) {
-    const url = getFileUrl(name)
-    if (!url) return
+    if (!currentPath || !workspaceRoot) return
+    const filePath = currentPath.endsWith('/') ? `${currentPath}${name}` : `${currentPath}/${name}`
+    openExternal(filePath)
+  }
+
+  /** 用绝对路径打开（外部调用：对讲机点某一行"打开"）。二进制文件也走这里。 */
+  function openExternal(filePath: string) {
+    if (!filePath || !workspaceRoot) return
+    // 这个值会进 <a href>，不走 window.fetch，所以必须显式过 apiUrl()，
+    // 否则在 APK 里会被解析成 http://localhost/workspace?…
+    const url = apiUrl(`/workspace?path=${encodeURIComponent(filePath)}&token=${encodeURIComponent(token)}`)
     const a = document.createElement('a')
     a.href = url
     a.target = '_blank'
@@ -682,14 +711,20 @@ const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function Work
   }
 
   // 打开文件编辑器（文本文件→编辑器；二进制文件→浏览器原生打开）
-  async function openEditor(name: string) {
+  function openEditor(name: string) {
     if (!currentPath) return
+    return openEditorPath(currentPath, name)
+  }
+
+  /** 同上，但目录是显式给的 —— 外部要打开任意绝对路径时走这个 */
+  async function openEditorPath(dir: string, name: string) {
+    if (!dir) return
+    const filePath = dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`
     // 前端预检：已知二进制后缀直接走浏览器原生打开
     if (!isTextFile(name)) {
-      openFile(name)
+      openExternal(filePath)
       return
     }
-    const filePath = currentPath.endsWith('/') ? `${currentPath}${name}` : `${currentPath}/${name}`
     try {
       const r = await fetch(`/api/workspace/file?path=${encodeURIComponent(filePath)}`, { headers })
       if (!r.ok) {
@@ -942,7 +977,7 @@ const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function Work
         <div className="flex items-center gap-2.5 min-w-0">
           <Icon name="folder" size={20} />
           <span className="text-nexus-text font-semibold text-base truncate">
-            {t('workspace.title')}
+            {title || t('workspace.title')}
           </span>
         </div>
         <button
@@ -957,7 +992,7 @@ const WorkspaceBrowser = forwardRef<WorkspaceBrowserHandle, Props>(function Work
       {/* Embedded / Overlay mode header */}
       {(embedded || overlay) && (
         <div className="flex items-center justify-between px-3 py-2 border-b border-nexus-border flex-shrink-0">
-          <span className="text-nexus-text font-medium text-sm">{t('workspace.title')}</span>
+          <span className="text-nexus-text font-medium text-sm">{title || t('workspace.title')}</span>
           <button
             onClick={onClose}
             className="bg-transparent border-none text-nexus-text-2 cursor-pointer p-1 flex items-center justify-center rounded hover:text-nexus-text"

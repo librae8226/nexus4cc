@@ -106,6 +106,70 @@ export function tick(strength = 1): void {
   }
 }
 
+/**
+ * 细分格的轻"嗒"。
+ *
+ * 为什么要有它：只在节点出声的话，两格之间是死寂的，划起来像在拨一个接触不良的开关。
+ * 真实的编码器（带格的那种）每转一点点都有细微的动静，节点只是**更重**而已。
+ *
+ * 为什么细分不震：一秒钟能划过十几个细分，每个都震会把马达变成背景噪音、手指发麻，
+ * 反而把"到节点了"这个信息淹掉。震动只留给节点，节点才显得重。
+ */
+export function tickFine(): void {
+  const c = audio()
+  if (!c || !master || muted) return
+  const t = c.currentTime
+  const dur = 0.013
+  const len = Math.max(1, Math.floor(c.sampleRate * dur))
+  const buf = c.createBuffer(1, len, c.sampleRate)
+  const data = buf.getChannelData(0)
+  for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-(i / len) * 30)
+  const noise = c.createBufferSource()
+  noise.buffer = buf
+  const bp = c.createBiquadFilter()
+  bp.type = 'bandpass'
+  bp.frequency.value = 3200 + Math.random() * 700   // 比节点高一个八度，听起来更"细"
+  bp.Q.value = 1.3
+  const g = c.createGain()
+  g.gain.setValueAtTime(0.0001, t)
+  g.gain.exponentialRampToValueAtTime(0.13, t + 0.001)
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+  noise.connect(bp); bp.connect(g); g.connect(master)
+  noise.start(t); noise.stop(t + dur)
+}
+
+/**
+ * "发出去了"的一声。必须和旋钮的咔嗒明显不同 —— 发送是圆心轻点触发的，
+ * 手势本身没有位移，声音是唯一能确证"这一下真的发出去了"的反馈。
+ * 做成一声上扬的气流（带通从 900Hz 扫到 2600Hz），听起来像"送去"。
+ */
+export function whoosh(): void {
+  const c = audio()
+  if (!c || !master || muted) return
+  const t = c.currentTime
+  const dur = 0.16
+  const len = Math.max(1, Math.floor(c.sampleRate * dur))
+  const buf = c.createBuffer(1, len, c.sampleRate)
+  const data = buf.getChannelData(0)
+  for (let i = 0; i < len; i++) {
+    const x = i / len
+    data[i] = (Math.random() * 2 - 1) * (1 - x) * Math.min(1, x * 8)   // 快速起、缓慢落
+  }
+  const noise = c.createBufferSource()
+  noise.buffer = buf
+  const bp = c.createBiquadFilter()
+  bp.type = 'bandpass'
+  bp.Q.value = 1.1
+  bp.frequency.setValueAtTime(900, t)
+  bp.frequency.exponentialRampToValueAtTime(2600, t + dur)
+  const g = c.createGain()
+  g.gain.setValueAtTime(0.0001, t)
+  g.gain.exponentialRampToValueAtTime(0.3, t + 0.012)
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+  noise.connect(bp); bp.connect(g); g.connect(master)
+  noise.start(t); noise.stop(t + dur)
+}
+
 /** 吸附到位的低沉一点的一声 */
 export function thunk(): void {
   const c = audio()

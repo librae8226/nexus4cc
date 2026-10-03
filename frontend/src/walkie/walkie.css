@@ -4,7 +4,9 @@
 .walkie-root {
   /* 闲置时旋钮是主角，占满剩下的空间；手里有内容时再收小让位给文字。
      两个值分别是「空手」和「有内容」，见下面的 .has-content。 */
-  --walkie-dial: min(78vw, 320px);
+  /* 钉死。旋钮是个实物 —— 会随内容多少缩水的物理旋钮不成立。
+     只跟屏幕宽度有关（小屏也得放得下），跟上面有多少内容无关。 */
+  --walkie-dial: min(84vw, 330px);
   /* 两个圈各自的颜色。这不是装饰：外圈/内圈谁是 PROJECT 谁是 CHANNEL，
      原来只能靠读上方的字去猜。给了颜色之后，看读数前面那个小色块就知道
      该拧哪个圈 —— 圈上的刻度、指针、中心读数全用同一套色。 */
@@ -23,27 +25,16 @@
   -webkit-touch-callout: none;
 }
 
-/* 手里有内容时把旋钮收小、让出中间的大块版面给文字 */
-.walkie-root.has-content { --walkie-dial: min(48vw, 180px); }
 
-/* 旋钮的容器：
-   闲置时独占剩余高度，把旋钮垂直居中（否则中间会空一大片，旋钮孤零零吊在顶上）；
-   有内容时收成自然高度，把空间交给下面的文字区。 */
+/* 下半屏：读数面板 + 旋钮 + 圆心，作为一整块钉在底部。
+   它不吃剩余高度、也不随内容伸缩 —— 旋钮是手用的，不是眼睛看的。 */
 .walkie-dial-wrap {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-/* 有内容时旋钮顶到最上面，给指针三角留出头顶的余地，别贴着顶栏 */
-.walkie-root.has-content .walkie-dial-wrap { flex: 0 0 auto; padding: 8px 0 8px; }
-
-.walkie-dial-col {
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
+  padding: 8px 0 calc(12px + env(safe-area-inset-bottom));
 }
 .walkie-hint {
   font-size: 13px;
@@ -69,6 +60,19 @@
   text-transform: uppercase;
 }
 .walkie-top-actions { display: flex; gap: 8px; align-items: center; }
+.walkie-icon-btn {
+  width: 34px; height: 34px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 10px;
+  border: 1px solid var(--nexus-border);
+  background: transparent;
+  color: var(--nexus-text-2);
+  font-size: 15px;
+  cursor: pointer;
+  padding: 0;
+}
+.walkie-icon-btn svg { width: 18px; height: 18px; }
+.walkie-icon-btn:active { background: var(--nexus-bg-2); }
 .walkie-chip {
   background: transparent;
   border: 1px solid var(--nexus-border);
@@ -91,7 +95,35 @@
 
 /* 读数放在旋钮上方。中文绕在圆周上必然被截断，而且两个圈的字混在一起
    分不清内外 —— 移到上方之后一眼可读，圈上只留刻度。 */
-.walkie-readout { text-align: center; width: 100%; display: flex; flex-direction: column; gap: 1px; }
+/* 读数面板 —— 车载电台旋钮上方那块屏。凹进去的质感，和凸起的旋钮是一对。 */
+.walkie-readout {
+  width: min(84vw, 330px);
+  margin: 0 auto;
+  padding: 9px 15px 10px;
+  border-radius: 13px;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, #000 30%, var(--nexus-bg-2)),
+    color-mix(in srgb, #000 8%, var(--nexus-bg-2)));
+  border: 1px solid var(--nexus-border);
+  box-shadow: inset 0 2px 9px color-mix(in srgb, #000 40%, transparent);
+  display: flex; flex-direction: column; gap: 3px;
+  transition: width .26s ease;
+}
+.walkie-workspace {
+  font-size: 15px; font-weight: 650; color: var(--nexus-text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.walkie-agent { font-size: 13.5px; font-weight: 600; color: var(--nexus-text-2); }
+/* 状态点：换过去之前就知道对方忙不忙 */
+.walkie-status { margin-left: 8px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px; }
+.walkie-status i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.walkie-status.is-working { color: var(--nexus-accent); }
+.walkie-status.is-working i { animation: walkie-blink 1.1s ease-in-out infinite; }
+.walkie-status.is-idle { color: var(--nexus-success); }
+.walkie-status.is-ready { color: var(--nexus-muted); }
+.walkie-status.is-offline { color: var(--nexus-warning); }
+@keyframes walkie-blink { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
 .walkie-readout-row {
   display: flex; align-items: center; justify-content: center; gap: 7px;
   transition: transform .16s ease, opacity .16s ease;
@@ -99,14 +131,6 @@
 /* 正在拧哪个圈，哪一行读数就亮起来、微微放大 —— 视觉上把"手"和"读数"接上 */
 .walkie-readout-row.is-turn { transform: scale(1.06); }
 .walkie-readout-row.is-turn .walkie-readout-val { color: #fff; }
-.walkie-readout-key {
-  font-size: 9.5px; letter-spacing: .2em; color: var(--nexus-muted);
-  text-transform: uppercase; flex: 0 0 auto;
-}
-.walkie-readout-val {
-  font-size: 15px; font-weight: 650; color: var(--nexus-text);
-  max-width: 56vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
 /* 小色块 = 这个读数的圈是什么颜色。就是"哪个是外圈哪个是内圈"的答案。 */
 .walkie-swatch {
   width: 7px; height: 7px; border-radius: 2px; flex: 0 0 auto;
@@ -114,11 +138,6 @@
 }
 .walkie-swatch-outer { background: var(--ring-outer); color: var(--ring-outer); }
 .walkie-swatch-inner { background: var(--ring-inner); color: var(--ring-inner); }
-.walkie-readout-sub .walkie-readout-val { color: var(--nexus-text-2); font-weight: 550; }
-.walkie-readout-warn { color: var(--nexus-warning); font-style: normal; font-size: 11px; margin-left: 6px; }
-.walkie-root.has-content .walkie-readout-val { font-size: 13px; }
-.walkie-root.has-content .walkie-readout-key { font-size: 9px; }
-.walkie-root.has-content .walkie-swatch { width: 6px; height: 6px; }
 
 .walkie-dial {
   position: relative;
@@ -252,7 +271,74 @@
 .walkie-dial.is-turning-inner .walkie-knob-outer { opacity: .45; transition: opacity .18s; }
 .walkie-dial.is-turning-outer .walkie-knob-inner { opacity: .45; transition: opacity .18s; }
 
-.walkie-hub {
+/* 圆心 = 按住说话 + 轻点发送。它是这一屏最重要的操作，所以做得像一颗
+   按下去会动的实体按钮：有高光、有落影、按下时轻微下沉。 */
+.walkie-hub-btn {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: calc(var(--walkie-dial) * 0.34);
+  height: calc(var(--walkie-dial) * 0.34);
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--nexus-accent) 40%, var(--nexus-border));
+  background:
+    radial-gradient(circle at 50% 28%,
+      color-mix(in srgb, var(--nexus-accent) 16%, var(--nexus-bg-2)),
+      var(--nexus-bg-2) 68%);
+  color: var(--nexus-text);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  cursor: pointer;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  box-shadow:
+    inset 0 2px 0 color-mix(in srgb, #fff 14%, transparent),
+    0 8px 20px color-mix(in srgb, #000 45%, transparent);
+  transition: transform .12s ease, background .14s ease, box-shadow .14s ease;
+  z-index: 6;
+}
+.walkie-hub-btn svg { width: calc(var(--walkie-dial) * 0.085); height: calc(var(--walkie-dial) * 0.085); }
+.walkie-hub-btn span { font-size: calc(var(--walkie-dial) * 0.042); font-weight: 650; letter-spacing: .04em; }
+.walkie-hub-btn em { font-size: calc(var(--walkie-dial) * 0.032); font-style: normal; color: var(--nexus-muted); }
+.walkie-hub-btn:active { transform: translate(-50%, -50%) scale(.965); }
+.walkie-hub-btn:disabled { opacity: .55; }
+/* 有草稿时圆心变成发送键 —— 从"说"切成"发"，颜色跟着变，不用读字也知道 */
+.walkie-hub-btn.is-send {
+  border-color: transparent;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--nexus-accent) 88%, #fff),
+    var(--nexus-accent));
+  color: #fff;
+  box-shadow: 0 10px 26px color-mix(in srgb, var(--nexus-accent) 45%, transparent);
+}
+.walkie-hub-btn.is-send em { color: color-mix(in srgb, #fff 78%, transparent); }
+/* 收音中：红 + 向外扩散的圈，和旋钮的琥珀/蓝都拉开 */
+.walkie-hub-btn.is-live {
+  border-color: transparent;
+  background: radial-gradient(circle at 50% 30%,
+    color-mix(in srgb, var(--nexus-error) 82%, #fff),
+    var(--nexus-error));
+  color: #fff;
+  transform: translate(-50%, -50%) scale(1.05);
+  box-shadow: 0 0 0 7px color-mix(in srgb, var(--nexus-error) 20%, transparent),
+              0 0 34px color-mix(in srgb, var(--nexus-error) 50%, transparent);
+}
+.walkie-hub-btn.is-live::after {
+  content: '';
+  position: absolute;
+  inset: -7px;
+  border-radius: 50%;
+  border: 2px solid var(--nexus-error);
+  animation: walkie-pulse 1.5s ease-out infinite;
+  pointer-events: none;
+}
+
+/* 旧的"CH 05"圆心牌已废（那块地方现在是操作区） */
+.walkie-hub-old {
   position: absolute;
   left: 50%; top: 50%;
   transform: translate(-50%, -50%);
@@ -292,9 +378,9 @@
 
 /* ── 舞台（转写 / 回复）───────────────────────────────── */
 .walkie-stage {
-  /* 闲置时只占自身高度（就一行提示），把空间让给居中的旋钮；
-     有内容时才长开来吃满剩余高度。 */
-  flex: 0 1 auto;
+  /* 中间那块永远是弹性区：上面顶到顶栏、下面顶到旋钮面板，
+     内容多了自己滚，旋钮一动不动。 */
+  flex: 1 1 auto;
   min-height: 0;
   margin: 0 14px;
   display: flex;
@@ -303,7 +389,6 @@
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
-.walkie-root.has-content .walkie-stage { flex: 1 1 auto; }
 .walkie-empty {
   flex: 1;
   display: flex;
@@ -578,6 +663,92 @@
   mask-image: linear-gradient(to bottom, transparent 0, #000 22px);
 }
 .walkie-pane code { font: inherit; }
+
+/* ── 他在干什么：一行一步 ─────────────────────────── */
+.walkie-steps {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 210px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.walkie-step {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 3px 2px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--nexus-text-2);
+  animation: walkie-in .16s ease-out;
+}
+.walkie-step-ico {
+  flex: 0 0 auto;
+  width: 13px;
+  text-align: center;
+  color: var(--nexus-muted);
+  font-size: 12px;
+}
+.walkie-step-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 最新的一行亮起来 —— "在动"这件事靠它表达 */
+.walkie-step.is-now { color: var(--nexus-text); }
+.walkie-step.is-now .walkie-step-ico { color: var(--nexus-accent); }
+.walkie-step.k-think .walkie-step-text { color: var(--nexus-muted); font-style: italic; }
+.walkie-step.k-edit .walkie-step-ico { color: var(--ring-outer); }
+.walkie-step-open {
+  flex: 0 0 auto;
+  border: 1px solid var(--nexus-border);
+  background: transparent;
+  color: var(--nexus-text-2);
+  border-radius: 6px;
+  padding: 1px 7px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* ── 回复里的文件引用：可点，直接开文件浏览器 ──────────── */
+.walkie-filelink {
+  display: inline;
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: var(--nexus-accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+.walkie-filelink code { background: transparent; color: inherit; padding: 0; }
+.walkie-link { color: var(--nexus-accent); }
+.walkie-code {
+  background: var(--nexus-bg);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: .92em;
+}
+.walkie-full { margin-top: 10px; }
+.walkie-full > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--nexus-muted);
+  list-style: none;
+}
+.walkie-full > summary::-webkit-details-marker { display: none; }
+.walkie-full > summary::before { content: '▸ '; }
+.walkie-full[open] > summary::before { content: '▾ '; }
 
 .walkie-hint-bad {
   margin-top: 9px;

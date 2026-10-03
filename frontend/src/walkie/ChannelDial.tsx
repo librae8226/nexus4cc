@@ -12,9 +12,10 @@
 //
 // 齿轮纹是关键：静止的刻度看不出动，会动的齿纹一眼就知道转了多少。
 
+import type React from 'react'
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { WalkieProject } from './api'
-import { hapticSnap, hapticTick, primeFeedback, thunk, tick } from './feedback'
+import { hapticSnap, hapticTick, primeFeedback, thunk, tick, tickFine } from './feedback'
 
 /** 相邻两项的夹角。项少时留白太空，项多时挤成一团，两头都夹一下。 */
 const stepFor = (n: number) => Math.max(26, Math.min(60, 300 / Math.max(n, 1)))
@@ -36,6 +37,8 @@ interface Props {
   projIdx: number
   chanIdx: number
   onChange: (projIdx: number, chanIdx: number) => void
+  /** 圆心。放在 .walkie-dial 里，这样绝对定位天然居中，不用去算读数面板多高。 */
+  children?: React.ReactNode
 }
 
 type RingName = 'outer' | 'inner'
@@ -53,8 +56,11 @@ const normDelta = (d: number) => {
   return x
 }
 
+/** 一格分几个细分。4 是个折中：2 个听不出连续感，8 个会糊成一片 */
+const SUB = 4
+
 let lastTickAt = 0
-/** 每过一格"咔"一下。划得快时别把马达和耳朵都震麻，加最小间隔。 */
+/** 走完一整格：重"咔" + 震动。划得快时加最小间隔，别把马达震麻。 */
 function detent(strength: number) {
   const now = Date.now()
   if (now - lastTickAt < 38) return
@@ -63,7 +69,25 @@ function detent(strength: number) {
   hapticTick()
 }
 
-export default function ChannelDial({ projects, projIdx, chanIdx, onChange }: Props) {
+let lastFineAt = 0
+/** 走过一个细分：只有轻响，不震。见 feedback.ts 里为什么细分不震。 */
+function subDetent() {
+  const now = Date.now()
+  if (now - lastFineAt < 18) return
+  lastFineAt = now
+  tickFine()
+}
+
+/**
+ * 拿连续值跟上一帧比：跨过细分就轻响，跨过整数格才重响 + 震。
+ * 两个判断分开做，所以"轻"和"重"是叠加的层次，不是二选一。
+ */
+function emitForMove(prev: number, next: number) {
+  if (Math.floor(next * SUB) !== Math.floor(prev * SUB)) subDetent()
+  if (Math.round(next) !== Math.round(prev)) detent(Math.min(1, 0.5 + Math.abs(next - prev) * 2))
+}
+
+export default function ChannelDial({ projects, projIdx, chanIdx, onChange, children }: Props) {
   const boxRef = useRef<HTMLDivElement | null>(null)
   const drag = useRef<DragState | null>(null)
   const dragging = useRef(false)
@@ -99,6 +123,10 @@ export default function ChannelDial({ projects, projIdx, chanIdx, onChange }: Pr
   const onPointerDown = (e: React.PointerEvent) => {
     const el = boxRef.current
     if (!el) return
+    // 圆心那颗按钮长在旋钮里面，指针事件会冒泡到这里。旋钮一旦 setPointerCapture，
+    // 后续的 pointerup 就全被它截走，圆心的按下/松手再也收不到 ——
+    // 表现就是按住说话停不下来。所以圆心上的事件旋钮一律不碰。
+    if ((e.target as HTMLElement).closest('.walkie-hub-btn')) return
     primeFeedback()                                 // 借这次手势解锁音频
     const r = el.getBoundingClientRect()
     const dx = e.clientX - (r.left + r.width / 2)
@@ -120,26 +148,21 @@ export default function ChannelDial({ projects, projIdx, chanIdx, onChange }: Pr
     const delta = normDelta(a - d.lastAngle)
     d.lastAngle = a
     d.moved += Math.abs(delta)
-    // 转得越快，咔嗒越响
-    const strength = Math.min(1, 0.45 + Math.abs(delta) / 14)
-
     if (d.ring === 'outer') {
       setOuterVal((v) => {
         const next = clamp(v - delta / outerStep, projects.length - 1)
-        if (Math.round(next) !== Math.round(v)) {
-          detent(strength)
-          const pi = Math.round(next)
-          if (pi !== projIdx) {
-            const maxCh = (projects[pi]?.channels.length ?? 1) - 1
-            setInnerVal((ci) => Math.min(ci, Math.max(0, maxCh)))
-          }
+        emitForMove(v, next)
+        const pi = Math.round(next)
+        if (pi !== Math.round(v) && pi !== projIdx) {
+          const maxCh = (projects[pi]?.channels.length ?? 1) - 1
+          setInnerVal((ci) => Math.min(ci, Math.max(0, maxCh)))
         }
         return next
       })
     } else {
       setInnerVal((v) => {
         const next = clamp(v - delta / innerStep, channels.length - 1)
-        if (Math.round(next) !== Math.round(v)) detent(strength)
+        emitForMove(v, next)
         return next
       })
     }
@@ -217,18 +240,18 @@ export default function ChannelDial({ projects, projIdx, chanIdx, onChange }: Pr
   return (
     <>
       {/* 读数放在旋钮上方：中文在这里能完整显示，也不用绕着圈读 */}
+      {/* 读数面板 = 车载电台旋钮上方那块屏：我这一格通的是谁、他忙不忙。
+          第一行是**文件夹路径**（"哪个工作区"本来就该用路径说），第二行是人。 */}
       <div className="walkie-readout">
         <div className={`walkie-readout-row${active === 'outer' ? ' is-turn' : ''}`}>
           <i className="walkie-swatch walkie-swatch-outer" aria-hidden="true" />
-          <span className="walkie-readout-key">PROJECT</span>
-          <span className="walkie-readout-val">{curProject?.name ?? '—'}</span>
+          <span className="walkie-workspace">{curProject?.path || curProject?.name || '—'}</span>
         </div>
         <div className={`walkie-readout-row walkie-readout-sub${active === 'inner' ? ' is-turn' : ''}`}>
           <i className="walkie-swatch walkie-swatch-inner" aria-hidden="true" />
-          <span className="walkie-readout-key">CHANNEL</span>
-          <span className="walkie-readout-val">
-            {curChannel?.name ?? '—'}
-            {curChannel?.kind === 'other' && <em className="walkie-readout-warn">不是 Claude</em>}
+          <span className="walkie-agent">{curChannel?.name ?? '—'}</span>
+          <span className={`walkie-status is-${statusOf(curChannel)}`}>
+            <i />{STATUS_TEXT[statusOf(curChannel)]}
           </span>
         </div>
       </div>
@@ -258,13 +281,9 @@ export default function ChannelDial({ projects, projIdx, chanIdx, onChange }: Pr
           {renderTicks(channels.length, innerVal, innerStep, 'inner', R_INNER)}
         </div>
 
-        {/* 中心：只放档位数字。这是个机械读数，不是名字，不会截断。 */}
-        <div className="walkie-hub">
-          <div className="walkie-hub-num">
-            {String((curChannel?.index ?? 0) + 1).padStart(2, '0')}
-          </div>
-          <div className="walkie-hub-cap">CH</div>
-        </div>
+        {/* 圆心：由外面传进来（按住说话 / 发送）。以前这里显示"CH 05"，
+            那是个没意义的编号 —— 现在圆心是这一屏最重要的操作。 */}
+        {children}
       </div>
     </>
   )
@@ -272,4 +291,18 @@ export default function ChannelDial({ projects, projIdx, chanIdx, onChange }: Pr
 
 function clamp(v: number, max: number) {
   return Math.max(0, Math.min(max, v))
+}
+
+type Status = 'working' | 'idle' | 'ready' | 'offline'
+/** 换过去之前就知道对方在不在干活 —— 这一格同时是一块状态牌 */
+export const STATUS_TEXT: Record<Status, string> = {
+  working: '工作中',
+  idle: '空闲',
+  ready: '就绪',
+  offline: '不是 Claude 会话',
+}
+function statusOf(c?: { kind: string; status?: string }): Status {
+  if (!c) return 'ready'
+  if (c.kind === 'other') return 'offline'
+  return (c.status as Status) || 'ready'
 }
