@@ -68,6 +68,12 @@ if [ -z "$PI_BIN" ]; then
 fi
 PI_DIR="$(cd "$(dirname "$PI_BIN")" && pwd)"
 
+# pi 包根目录 —— 只为去读它内置的模型 catalog（生成器的 host→provider 映射，见下）。
+# PI_BIN 一般是指向 <root>/dist/bundle/cli.js 的软链，所以从真实路径往上三级。
+# 推不出来也不要紧：生成器会退回自造 provider（老行为）。
+PI_REAL="$(readlink -f "$PI_BIN" 2>/dev/null || true)"
+PI_PKG_ROOT="$(cd "$(dirname "$PI_REAL")/../.." 2>/dev/null && pwd || true)"
+
 # ── agent 目录（独立，绝不碰 ~/.pi/agent）──────────────────────────────────
 PI_AGENT_DIR="${NEXUS_PI_AGENT_DIR:-$HOME/.pi/agent-nexus}"
 mkdir -p "$PI_AGENT_DIR"
@@ -82,12 +88,62 @@ chmod 700 "$PI_AGENT_DIR"
 # 密钥不落盘：apiKey 用 "$ENV" 插值，真正明文只存在于本进程的环境变量里。
 PI_META="$("$NODE_BIN" -e '
 const fs = require("fs"), path = require("path");
-const dir = process.argv[1], agentDir = process.argv[2], profile = process.argv[3];
+const dir = process.argv[1], agentDir = process.argv[2], profile = process.argv[3], pkgRoot = process.argv[4];
 
 // profile id → 环境变量名：非字母数字一律换成下划线并大写
 const envName = (id) => "NEXUS_PI_KEY_" + id.replace(/[^A-Za-z0-9]/g, "_").toUpperCase();
 
+// ── pi 内置 catalog 索引：host → [{ provider, models }] ────────────────────
+// 目的：profile 指向的 endpoint 如果 pi 本来就认识（deepseek / moonshotai-cn /
+// openrouter …），就**别再造 provider**，把 profile 交回给 pi 的内置 provider，
+// 我们只注入密钥。这样 baseUrl / api / 模型清单 / 能力字段全部由 pi 的 catalog
+// 提供 —— pi 升级加字段我们自动跟上，零维护，也不再需要手抄能力表。
+//
+// 索引是从 pi 包内的数据文件现读的（内部布局）。**读不到就整体退回自造
+// provider**（下面的兜底分支，功能完整），不报错 —— 升级 pi 换了目录最多是
+// 退回兜底，不会挂。
+const CATALOG_DIR = path.join(
+  pkgRoot || "", "node_modules", "@earendil-works", "pi-ai", "dist", "providers", "data"
+);
+const byHost = {};
+let catalogRead = false;
+try {
+  for (const f of fs.readdirSync(CATALOG_DIR)) {
+    if (!f.endsWith(".json")) continue;
+    const prov = f.replace(/\.json$/, "");
+    const doc = JSON.parse(fs.readFileSync(path.join(CATALOG_DIR, f), "utf8"));
+    const models = new Set(), hosts = new Set();
+    for (const grp of Object.values(doc)) {
+      for (const v of Object.values(grp)) {
+        if (!v || typeof v !== "object") continue;
+        if (v.id) models.add(v.id);
+        if (v.baseUrl) {
+          try { hosts.add(new URL(v.baseUrl.replace(/\{[^}]*\}/g, "x")).host) } catch { /* 模板 URL 跳过 */ }
+        }
+      }
+    }
+    for (const h of hosts) (byHost[h] = byHost[h] || []).push({ prov, models });
+  }
+  catalogRead = true;
+} catch { /* 读不到 catalog：所有 profile 走兜底 */ }
+
+/**
+ * profile 能不能交给 pi 的内置 provider。返回 provider id，或 null（= 自造）。
+ * 判据两条：host 对得上，**且该 provider 的 catalog 里真有这个模型 id**。
+ * 第二条不能省：模型不在 catalog 里的话（如 openrouter 的 x-ai/grok-4.1-fast
+ * 已被上游下线），交给内置 provider 会让 pi 在启动时找不到模型而直接失败，
+ * 比留在兜底分支（窗口起码能开）更糟。
+ */
+function builtinFor(baseUrl, model) {
+  if (!catalogRead) return null;
+  let host; try { host = new URL(baseUrl).host } catch { return null; }
+  const hit = (byHost[host] || []).find((c) => c.models.has(model));
+  return hit ? hit.prov : null;
+}
+
 const providers = {};
+/** profile id → 内置 provider id（没映射上就不在表里） */
+const mapped = {};
 for (const f of fs.readdirSync(dir)) {
   if (!f.endsWith(".json")) continue;
   let cfg; try { cfg = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")); } catch { continue; }
@@ -96,13 +152,28 @@ for (const f of fs.readdirSync(dir)) {
   if (!baseUrl) continue;   // 无 BASE_URL（Anthropic 官方）走 pi 内置 provider，见下
   const model = (cfg.DEFAULT_MODEL || "").trim();
   if (!model) continue;
+
+  // ① 首选：交回 pi 的内置 provider。只写 apiKey，其它（baseUrl / api / 模型清单 /
+  //    能力字段）全部由 pi 的 catalog 提供 —— 这就是「零维护」的全部代价。
+  //    两个 profile 指向同一个内置 provider 时（都是 openrouter 之类）共用一条，
+  //    先到的那条的密钥生效；一个 provider 本来就只能有一份凭据。
+  const builtin = builtinFor(baseUrl, model);
+  if (builtin) {
+    mapped[id] = builtin;
+    providers[builtin] = providers[builtin] || { apiKey: "$" + envName(id) };
+    continue;
+  }
+
+  // ② 兜底：自造 provider。catalog 里没这个 host（公司网关、自建反代…），
+  //    或 catalog 里没这个模型 id。这时只能自己写全 —— 代价是能力字段要手抄。
+
   // endpoint 协议：OpenRouter 是 OpenAI 格式，其余（deepseek/kimi 的 /anthropic）是 Anthropic 格式
   const api = /openrouter\.ai/i.test(baseUrl) ? "openai-completions" : "anthropic-messages";
   // pi 对 openai-completions 是「baseUrl + /chat/completions」拼法，baseUrl 必须带 /v1。
   // 实测 openrouter.ai/api → 404，openrouter.ai/api/v1 → 通；profile 里的写法是给 claude 用的，
   // 不能直接照搬，这里补一次（已经是 /v1 结尾的不动）。
   if (api === "openai-completions" && !/\/v1$/.test(baseUrl)) baseUrl += "/v1";
-  // 能力字段必须写全。models[] 里的条目是**整体替换** catalog 条目，不是打补丁
+  // 【兜底分支专属】能力字段必须写全。models[] 里的条目是**整体替换** catalog 条目，不是打补丁
   // （provider-composer.js: applyModelsJson → models[i] = modelFromJson(...)，而
   // modelFromJson 里 reasoning 默认 false、input 默认 ["text"]、maxTokens 默认 16384）。
   // 漏写 = 对 pi 声明「这个模型不支持思考、不能看图、输出上限 16K」，而 pi 会照信 ——
@@ -173,22 +244,29 @@ for (const [key, name] of [["models", "models.json"], ["settings", "settings.jso
 }
 
 // 当前 profile 用哪个 provider / model / 密钥环境变量
-const cfg = JSON.parse(fs.readFileSync(path.join(dir, profile + ".json"), "utf8"));
-const baseUrl = (cfg.BASE_URL || "").trim();
+const cur = JSON.parse(fs.readFileSync(path.join(dir, profile + ".json"), "utf8"));
+const curBase = (cur.BASE_URL || "").trim();
 const line = (k, v) => process.stdout.write(k + "=" + v + "\n");
-if (baseUrl) {
-  line("PI_PROVIDER", profile);
-} else {
+if (!curBase) {
   // 官方 Anthropic：走 pi 内置 provider，凭据来自 ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN
   line("PI_PROVIDER", "anthropic");
+} else {
+  // 映射上内置 provider 就用它的 id；没映射上就是自造的那个（恰好 = profile id）
+  line("PI_PROVIDER", mapped[profile] || profile);
 }
-line("PI_MODEL", (cfg.DEFAULT_MODEL || "").trim());
+line("PI_MODEL", (cur.DEFAULT_MODEL || "").trim());
 line("PI_KEY_ENV", envName(profile));
-' "$SCRIPT_DIR/data/configs" "$PI_AGENT_DIR" "$PROFILE")"
+// 让 launcher 能对「catalog 没读到 → 全体退回兜底」出声，而不是静默降级
+line("PI_CATALOG", catalogRead ? "ok" : "missing");
+' "$SCRIPT_DIR/data/configs" "$PI_AGENT_DIR" "$PROFILE" "$PI_PKG_ROOT")"
 
 PI_PROVIDER="$(printf '%s\n' "$PI_META" | sed -n 's/^PI_PROVIDER=//p')"
 PI_MODEL="$(printf '%s\n' "$PI_META" | sed -n 's/^PI_MODEL=//p')"
 PI_KEY_ENV="$(printf '%s\n' "$PI_META" | sed -n 's/^PI_KEY_ENV=//p')"
+PI_CATALOG="$(printf '%s\n' "$PI_META" | sed -n 's/^PI_CATALOG=//p')"
+if [ "$PI_CATALOG" != "ok" ]; then
+    echo "[Nexus] 读不到 pi 的内置 catalog，本次所有 profile 退回自造 provider（老行为，功能完整，只是能力字段要手抄）。"
+fi
 
 # ── 读取 profile 字段 ─────────────────────────────────────────────────────
 cfg() {

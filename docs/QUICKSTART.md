@@ -243,6 +243,17 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 Pi 的配置目录固定在 **`~/.pi/agent-nexus`**（由 `nexus-run-pi.sh` 生成 `models.json`），
 **与手工使用的 `~/.pi/agent` 完全隔离**，两边互不影响。密钥不落盘：启动时以环境变量注入。
 
+**profile 怎么变成 pi 的 provider**：如果 profile 的 `BASE_URL` 指向的 endpoint 是 pi 本来就认识的
+（按 host 匹配，如 DeepSeek / Moonshot / OpenRouter），生成器就**只写一条 `apiKey`**，
+provider 的地址、协议、模型清单与全部能力字段都交给 pi 自带的那份用 ——
+所以 `pi --list-models` 里的 `context` / `max-out` / `thinking` / `images` 与官方目录逐字段一致，
+pi 升级加字段也自动跟上。catalog 里没有的 endpoint（公司网关、自建反代）才回退成自建的 provider，
+那时要在 `nexus-run-pi.sh` 的兜底分支里自己写全能力字段（脚本内有注释说明为什么必须写全）。
+
+**改完 `models.json` 怎么让开着的窗口生效**：不用重启 —— 在那个 pi 窗口里敲 `/model` 再直接回车
+（选回原来那个模型）即可，页脚会出现思考档位。漏这一步，窗口会用着启动时读进内存的旧配置。
+会话里按 `Shift+Tab` 循环思考档位，`/thinking` 看/选完整列表。
+
 ### 4. 移动端访问（同一 WiFi 下）
 
 ```bash
