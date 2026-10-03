@@ -234,10 +234,15 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   const busy = round?.state === 'waiting'
   useEffect(() => {
     let alive = true
-    const tick = () => { if (alive) void pollStream() }
+    // **切到后台就停**。原来是不管有没有人在看，每 5 秒问一次服务端 —— 装在手机上
+    // 就是一个常驻的唤醒源 + 电台占用，一天下来是实打实的电。回来时立刻补一次，
+    // 所以"塞回兜里再掏出来"看到的一定是新的。
+    const tick = () => { if (alive && !document.hidden) void pollStream() }
     tick()
     const t = window.setInterval(tick, busy ? POLL_STREAM_BUSY_MS : POLL_STREAM_MS)
-    return () => { alive = false; clearInterval(t) }
+    const onVis = () => { if (alive && !document.hidden) void pollStream() }
+    document.addEventListener('visibilitychange', onVis)
+    return () => { alive = false; clearInterval(t); document.removeEventListener('visibilitychange', onVis) }
   }, [pollStream, busy])
 
   useEffect(() => { void attachAudioUnlock() }, [])
@@ -334,6 +339,9 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   const startPoll = useCallback((r0: Round) => {
     if (pollRef.current) clearInterval(pollRef.current)
     const tick = async () => {
+      // 后台不追。这一轮跑完时反正会进流，回来那一下的流刷新就把它带回来了 ——
+      // 而 1.2 秒一次的轮询留在后台，是这一屏最贵的一笔电。
+      if (document.hidden) return
       let r: ReplyState
       try { r = await getReply(token, r0.project, r0.window) } catch { return }
       const cur = roundRef.current

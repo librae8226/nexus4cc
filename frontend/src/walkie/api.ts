@@ -106,20 +106,57 @@ export interface ReplyState {
   now?: WalkieNow | null
 }
 
+const TOKEN_KEY = 'nexus_token'
+
+/**
+ * 服务端不认这个 token 了（30 天到期 / 换了密钥 / 服务端重装）。
+ *
+ * **这一屏没有别的出路** —— 它连自己的设置页都没有，所以必须把用户送回登录页，
+ * 否则 App 会永远停在一句"连不上这台机器"上，看起来像坏了，其实是该重新登录。
+ * 加一个标志：多个并发请求同时 401 时只刷一次。
+ */
+let signingOut = false
+function authLost(): never {
+  if (!signingOut) {
+    signingOut = true
+    try { localStorage.removeItem(TOKEN_KEY) } catch { /* 隐私模式 */ }
+    location.reload()
+  }
+  throw new Error('登录已过期，重新登录一下')
+}
+
+/** 后端返回的是给机器看的码，这一屏是给人看的。 */
+const HUMAN: Record<string, string> = {
+  'project not found': '这一格已经不在了（那个 tmux 窗口被关掉了）—— 换一个地方再发',
+  'invalid project': '目标不合法，换一个地方再发',
+  'invalid window': '目标不合法，换一个地方再发',
+  'empty text': '没有内容可发',
+  'text too long': '这段话太长了',
+  'not-a-claude-channel': '这一格不是 Claude —— 发过去会被它当命令执行',
+  'empty file': '这个附件是空的',
+  'asr-unavailable': '本机转写服务没在跑',
+}
+
 async function req<T>(path: string, token: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...(init?.headers || {}),
-    },
-  })
+  let res: Response
+  try {
+    res = await fetch(path, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        ...(init?.headers || {}),
+      },
+    })
+  } catch {
+    // fetch 自己抛的时候（断网、服务器不在）消息是 "Failed to fetch" 这种英文
+    throw new Error('连不上这台机器 —— 检查一下网络，或者它没在跑')
+  }
+  if (res.status === 401) authLost()
   const data = await res.json().catch(() => null)
   if (!res.ok) {
-    const err = new Error((data && (data.hint || data.error)) || `HTTP ${res.status}`) as Error & { code?: number; hint?: string }
-    err.code = res.status
-    throw err
+    const raw = (data && (data.error || data.hint)) || `HTTP ${res.status}`
+    throw new Error(HUMAN[String(raw)] || (data && data.hint) || String(raw))
   }
   return data as T
 }
@@ -131,13 +168,22 @@ export const getStream = (token: string) => req<StreamState>('/api/walkie/stream
 
 /** 附件：把文件交出去，拿回它的绝对路径（那句话里会带上） */
 export async function uploadAttachment(token: string, file: File): Promise<{ path: string; name: string }> {
-  const res = await fetch(`/api/walkie/upload?name=${encodeURIComponent(file.name || 'file')}`, {
-    method: 'POST',
-    headers: { 'Content-Type': file.type || 'application/octet-stream', Authorization: `Bearer ${token}` },
-    body: file,
-  })
+  let res: Response
+  try {
+    res = await fetch(`/api/walkie/upload?name=${encodeURIComponent(file.name || 'file')}`, {
+      method: 'POST',
+      headers: { 'Content-Type': file.type || 'application/octet-stream', Authorization: `Bearer ${token}` },
+      body: file,
+    })
+  } catch {
+    throw new Error('传不上去 —— 连不上这台机器')
+  }
+  if (res.status === 401) authLost()
   const data = await res.json().catch(() => null)
-  if (!res.ok) throw new Error((data && (data.hint || data.error)) || `HTTP ${res.status}`)
+  if (!res.ok) {
+    const raw = (data && (data.error || data.hint)) || `HTTP ${res.status}`
+    throw new Error(HUMAN[String(raw)] || String(raw))
+  }
   return data as { path: string; name: string }
 }
 

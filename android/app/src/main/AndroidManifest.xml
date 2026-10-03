@@ -40,14 +40,15 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- 按住说话：App 里录音（MediaRecorder）→ 上传给 Nexus 本机转写。
-         Capacitor 的 BridgeWebChromeClient.onPermissionRequest 会把 WebView 的
-         AUDIO_CAPTURE 请求映射到 RECORD_AUDIO + MODIFY_AUDIO_SETTINGS，
-         两个都得声明，否则 getUserMedia 直接被拒。 -->
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- 【v4.14 起这里**故意没有** RECORD_AUDIO / MODIFY_AUDIO_SETTINGS】
+         它们是为「按住说话」在 App 里录音（MediaRecorder → 上传本机转写）声明的。
+         那条链路整个删掉了：转写交给输入法，它比本机小模型好，而那个按钮本来就是
+         别人键盘上的。前端现在**一处 getUserMedia 都没有**，所以这两条是纯粹的死重量 ——
+         留着它，手机上「应用信息」里会写着这个 App 要麦克风，而它根本不要。
+         顺带把 @capacitor-community/speech-recognition 这个依赖也移除了：
+         插件自己的 manifest 会把 RECORD_AUDIO 加回来，只删上面两行是删不掉的。 -->
 
-    <!-- 旋钮转动时每过一格震一下。缺这条 navigator.vibrate 是静默空转 ——
-         上一版"震一下"从来没生效过，就是因为漏了它。 -->
+    <!-- 答完了震一下。缺这条 navigator.vibrate 是静默空转 ——
+         早先版本"震一下"从来没生效过，就是因为漏了它（WebView 里也别用它，见 walkie/feedback.ts）。 -->
     <uses-permission android:name="android.permission.VIBRATE" />
 </manifest>

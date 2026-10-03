@@ -1,6 +1,6 @@
 {
   "name": "nexus",
-  "version": "4.16.0",
+  "version": "4.17.0",
   "type": "module",
   "scripts": {
     "start": "node server.js",
@@ -8,7 +8,6 @@
     "setup": "node scripts/setup.js"
   },
   "dependencies": {
-    "@capacitor-community/speech-recognition": "^7.0.1",
     "@capacitor-community/text-to-speech": "^8.0.2",
     "@capacitor/haptics": "^8.0.2",
     "bcrypt": "^6.0.0",
