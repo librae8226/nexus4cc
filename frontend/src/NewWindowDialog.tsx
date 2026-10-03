@@ -11,12 +11,12 @@ interface Config {
 interface Props {
   token: string
   onClose: () => void
-  onConfirm: (shellType: 'claude' | 'bash', profile?: string) => void
+  onConfirm: (shellType: 'claude' | 'pi' | 'bash', profile?: string) => void
 }
 
 export default function NewWindowDialog({ token, onClose, onConfirm }: Props) {
   const { t } = useTranslation()
-  const [shellType, setShellType] = useState<'claude' | 'bash'>('claude')
+  const [shellType, setShellType] = useState<'claude' | 'pi' | 'bash'>('claude')
   const [configs, setConfigs] = useState<Config[]>([])
   const [selectedProfile, setSelectedProfile] = useState<string>(() => localStorage.getItem('nexus_last_profile') || '')
 
@@ -33,7 +33,7 @@ export default function NewWindowDialog({ token, onClose, onConfirm }: Props) {
   }, [token])
 
   function handleConfirm() {
-    const profile = shellType === 'claude' && selectedProfile ? selectedProfile : undefined
+    const profile = (shellType === 'claude' || shellType === 'pi') && selectedProfile ? selectedProfile : undefined
     if (profile) localStorage.setItem('nexus_last_profile', profile)
     onConfirm(shellType, profile)
   }
@@ -77,6 +77,16 @@ export default function NewWindowDialog({ token, onClose, onConfirm }: Props) {
                 <input
                   type="radio"
                   name="shellType"
+                  value="pi"
+                  checked={shellType === 'pi'}
+                  onChange={() => setShellType('pi')}
+                />
+                <span>Pi</span>
+              </label>
+              <label className="flex items-center gap-2 text-nexus-text text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="shellType"
                   value="bash"
                   checked={shellType === 'bash'}
                   onChange={() => setShellType('bash')}
@@ -87,7 +97,7 @@ export default function NewWindowDialog({ token, onClose, onConfirm }: Props) {
           </div>
 
           {/* Profile */}
-          {shellType === 'claude' && configs.length > 0 && (
+          {(shellType === 'claude' || shellType === 'pi') && configs.length > 0 && (
             <div>
               <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-2">{t('newChannel.profile')}</div>
               <select

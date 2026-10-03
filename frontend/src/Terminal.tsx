@@ -699,7 +699,7 @@ export default function Terminal({ token }: Props) {
     }
   }
 
-  async function createSession(relPath: string, shellType: 'claude' | 'bash' = 'claude', profile?: string) {
+  async function createSession(relPath: string, shellType: 'claude' | 'pi' | 'bash' = 'claude', profile?: string) {
     try {
       // F-20: 使用 /api/projects 创建新的 project（tmux session）
       const r = await fetch('/api/projects', {
@@ -718,7 +718,7 @@ export default function Terminal({ token }: Props) {
   }
 
   // F-19: 创建新窗口（继承当前项目目录）
-  async function createWindow(shellType: 'claude' | 'bash' = 'claude', profile?: string) {
+  async function createWindow(shellType: 'claude' | 'pi' | 'bash' = 'claude', profile?: string) {
     try {
       const session = activeTmuxSessionRef.current
       // 获取当前 project 的路径
@@ -756,7 +756,7 @@ export default function Terminal({ token }: Props) {
     setShowNewSession(true)
   }
 
-  function handleCreateSession(path: string, shellType: 'claude' | 'bash', profile?: string) {
+  function handleCreateSession(path: string, shellType: 'claude' | 'pi' | 'bash', profile?: string) {
     setShowNewSession(false)
     createSession(path, shellType, profile)
   }
@@ -766,7 +766,7 @@ export default function Terminal({ token }: Props) {
     setShowNewWindow(true)
   }
 
-  function handleNewWindowConfirm(shellType: 'claude' | 'bash', profile?: string) {
+  function handleNewWindowConfirm(shellType: 'claude' | 'pi' | 'bash', profile?: string) {
     setShowNewWindow(false)
     createWindow(shellType, profile)
     setTimeout(() => sessionManagerRef.current?.refresh(), 500)

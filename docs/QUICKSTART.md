@@ -224,6 +224,25 @@ http://localhost:59000
 
 现在可以直接在终端里和 Claude 对话了。
 
+### 4. 三种 Shell 类型
+
+新建 Project / Channel 时可以选三种：
+
+| 类型 | 启动什么 | 说明 |
+|---|---|---|
+| **Claude** | `nexus-run-claude.sh`（claude CLI） | 默认。profile 决定 API key 与模型 |
+| **Pi** | `nexus-run-pi.sh`（[pi](https://pi.dev)） | 第三方 endpoint 走 `data/configs/*.json`，与 Claude 共用同一套 profile |
+| **Zsh** | 本地交互 shell | 不用 AI 时开一个普通终端 |
+
+**Pi 的安装**（可选，不装则 Pi 类型不可用）：
+
+```bash
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+```
+
+Pi 的配置目录固定在 **`~/.pi/agent-nexus`**（由 `nexus-run-pi.sh` 生成 `models.json`），
+**与手工使用的 `~/.pi/agent` 完全隔离**，两边互不影响。密钥不落盘：启动时以环境变量注入。
+
 ### 4. 移动端访问（同一 WiFi 下）
 
 ```bash

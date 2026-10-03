@@ -102,6 +102,7 @@ Expose securely without port forwarding via [Cloudflare Tunnel](https://develope
 | Node.js | 20+ | |
 | tmux | any recent | |
 | Claude Code CLI | any recent | 自动探测安装位置；特殊装法可用 `CLAUDE_BIN` 指定 |
+| Pi CLI（可选） | 1.x | `npm i -g @earendil-works/pi-coding-agent`；不装则 Pi shell 类型不可用，配置目录 `~/.pi/agent-nexus`，可用 `PI_BIN` 指定 |
 | PM2 | any recent | auto-installed by `setup.js` |
 | OS | Linux / macOS / WSL2 | 不再依赖 `python3`（macOS 与最小化 Debian 都没有） |
 

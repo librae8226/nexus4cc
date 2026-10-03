@@ -58,6 +58,7 @@
     "shellType": "Shell Type",
     "shellClaude": "Claude",
     "shellZsh": "Zsh",
+    "shellPi": "Pi",
     "profileLabel": "Config Profile (optional)",
     "profileDefault": "Default (no profile)",
     "profileHelp": "Profile sets the API key and model. Data is isolated per project directory.",

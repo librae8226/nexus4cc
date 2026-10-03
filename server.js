@@ -170,6 +170,39 @@ if (!CLAUDE_BIN) {
   console.warn('[Nexus] 请安装 https://docs.claude.com/en/docs/claude-code，或用 CLAUDE_BIN=/path/to/claude 指定。');
 }
 
+// ── pi CLI 定位 ────────────────────────────────────────────────────────────
+// 与 claude 同理：npm -g 装的 pi 落在 node 版本目录的 bin 下，未必在 tmux 的 PATH 上。
+// 允许用 PI_BIN 环境变量显式覆盖。
+function resolvePiBin() {
+  let fromPath = '';
+  try {
+    fromPath = execSync('command -v pi 2>/dev/null').toString().trim();
+  } catch { /* 不在 PATH 上 */ }
+
+  const candidates = [
+    process.env.PI_BIN || '',
+    fromPath,
+    process.execPath ? join(dirname(process.execPath), 'pi') : '',
+    join(os.homedir(), '.local', 'bin', 'pi'),
+    '/usr/local/bin/pi',
+    '/opt/homebrew/bin/pi',
+  ].filter(Boolean);
+
+  for (const c of candidates) {
+    try { if (existsSync(c)) return c; } catch { /* 忽略不可读的候选 */ }
+  }
+  return '';
+}
+
+const PI_BIN = resolvePiBin();
+const PI_CMD = PI_BIN ? `"${PI_BIN}"` : 'pi';
+// pi 的 profile 映射（models.json 生成、密钥注入）在 nexus-run-pi.sh 里，见该文件头部注释。
+
+if (!PI_BIN) {
+  console.warn('[Nexus] 未在常见位置找到 pi CLI —— Pi 会话可能无法启动。');
+  console.warn('[Nexus] 请安装：npm install -g --ignore-scripts @earendil-works/pi-coding-agent，或用 PI_BIN=/path/to/pi 指定。');
+}
+
 // ── tmux 会话环境 ──────────────────────────────────────────────────────────
 // tmux 新窗口继承 session 级环境。把 claude 所在目录前置进 PATH：
 // npm/nvm/homebrew 装的 claude 是个 JS 启动器，shebang 为 `#!/usr/bin/env node`，
@@ -184,12 +217,13 @@ function buildLaunchEnv() {
     ...(CLAUDE_PROXY ? { ALL_PROXY: CLAUDE_PROXY, HTTPS_PROXY: CLAUDE_PROXY, HTTP_PROXY: CLAUDE_PROXY, NEXUS_PROXY: CLAUDE_PROXY } : {}),
   };
 
-  if (CLAUDE_BIN) {
-    const dir = dirname(CLAUDE_BIN);
-    const current = process.env.PATH || '';
-    if (!current.split(':').includes(dir)) {
-      proxyVars.PATH = `${dir}:${current}`;
-    }
+  // claude 和 pi 都是 JS 启动器（shebang `#!/usr/bin/env node`），只有它们自己的目录
+  // 在 PATH 上时才能顺带找到同目录的 node。
+  const binDirs = [CLAUDE_BIN, PI_BIN].filter(Boolean).map((b) => dirname(b));
+  const currentPath = process.env.PATH || '';
+  const missingDirs = binDirs.filter((d) => !currentPath.split(':').includes(d));
+  if (missingDirs.length) {
+    proxyVars.PATH = `${missingDirs.join(':')}:${currentPath}`;
   }
 
   // 让 nexus-run-claude.sh 复用正在跑 nexus 的这个 node：
@@ -440,6 +474,13 @@ app.post('/api/windows', authMiddleware, (req, res) => {
   let shellCmd;
   if (shell_type === 'bash') {
     shellCmd = buildInteractiveShellCmd(proxyPrefix);
+  } else if (shell_type === 'pi') {
+    if (profile) {
+      const runScript = join(__dirname, 'nexus-run-pi.sh');
+      shellCmd = `${proxyPrefix}bash "${runScript}" ${profile} ${cwd}`;
+    } else {
+      shellCmd = `${proxyPrefix}${PI_CMD}; ${INTERACTIVE_SHELL_CMD}`;
+    }
   } else {
     if (profile) {
       const runScript = join(__dirname, 'nexus-run-claude.sh');
@@ -475,8 +516,9 @@ app.post('/api/windows', authMiddleware, (req, res) => {
 
 // POST /api/sessions — 在 tmux 中创建新 window
 // body: { rel_path, shell_type?, profile?, session? }
-//   shell_type: 'claude' | 'bash' (default: 'claude')
+//   shell_type: 'claude' | 'pi' | 'bash' (default: 'claude')
 //   当 shell_type='claude' 时，profile 可选，使用 nexus-run-claude.sh 启动
+//   当 shell_type='pi' 时，profile 可选，使用 nexus-run-pi.sh 启动
 //   当 shell_type='bash' 时，启动本地 shell（优先 zsh，不存在时回退 bash）
 app.post('/api/sessions', authMiddleware, (req, res) => {
   const { rel_path, shell_type = 'claude', profile, session } = req.body || {};
@@ -491,6 +533,13 @@ app.post('/api/sessions', authMiddleware, (req, res) => {
   let shellCmd;
   if (shell_type === 'bash') {
     shellCmd = buildInteractiveShellCmd(proxyPrefix);
+  } else if (shell_type === 'pi') {
+    if (profile) {
+      const runScript = join(__dirname, 'nexus-run-pi.sh');
+      shellCmd = `${proxyPrefix}bash "${runScript}" ${profile} ${cwd}`;
+    } else {
+      shellCmd = `${proxyPrefix}${PI_CMD}; ${INTERACTIVE_SHELL_CMD}`;
+    }
   } else {
     if (profile) {
       const runScript = join(__dirname, 'nexus-run-claude.sh');
@@ -1604,6 +1653,13 @@ app.post('/api/projects', authMiddleware, (req, res) => {
   let shellCmd
   if (shell_type === 'bash') {
     shellCmd = buildInteractiveShellCmd(proxyPrefix)
+  } else if (shell_type === 'pi') {
+    if (profile) {
+      const runScript = join(__dirname, 'nexus-run-pi.sh')
+      shellCmd = `${proxyPrefix}bash '${runScript}' ${profile} '${cwd}' || echo; echo '[Nexus] pi 退出或启动失败，fallback 到 ${INTERACTIVE_SHELL}（可直接输入 pi 重试）'; ${INTERACTIVE_SHELL_CMD}`
+    } else {
+      shellCmd = `${proxyPrefix}${PI_CMD} || echo; echo '[Nexus] pi 退出或启动失败，fallback 到 ${INTERACTIVE_SHELL}（可直接输入 pi 重试）'; ${INTERACTIVE_SHELL_CMD}`
+    }
   } else {
     if (profile) {
       const runScript = join(__dirname, 'nexus-run-claude.sh')
@@ -1682,6 +1738,13 @@ app.post('/api/projects/:name/channels', authMiddleware, (req, res) => {
   let shellCmd
   if (shell_type === 'bash') {
     shellCmd = buildInteractiveShellCmd(proxyPrefix)
+  } else if (shell_type === 'pi') {
+    if (profile) {
+      const runScript = join(__dirname, 'nexus-run-pi.sh')
+      shellCmd = `${proxyPrefix}bash '${runScript}' ${profile} '${cwd}' || echo; echo '[Nexus] pi 退出或启动失败，fallback 到 ${INTERACTIVE_SHELL}（可直接输入 pi 重试）'; ${INTERACTIVE_SHELL_CMD}`
+    } else {
+      shellCmd = `${proxyPrefix}${PI_CMD} || echo; echo '[Nexus] pi 退出或启动失败，fallback 到 ${INTERACTIVE_SHELL}（可直接输入 pi 重试）'; ${INTERACTIVE_SHELL_CMD}`
+    }
   } else {
     if (profile) {
       const runScript = join(__dirname, 'nexus-run-claude.sh')

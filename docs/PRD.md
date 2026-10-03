@@ -171,6 +171,8 @@ POST /api/projects/:name/channels → 新建 Channel
   body: { shell_type, profile? }
   → 在当前 session 内 tmux new-window -c "$NEXUS_CWD"
 
+shell_type: 'claude'（默认，nexus-run-claude.sh）| 'pi'（nexus-run-pi.sh）| 'bash'（本地 shell）
+
 POST /api/projects/:name/activate → 切换到指定 Project
   → 切换 active tmux session（attach-client 或设置 target）
 

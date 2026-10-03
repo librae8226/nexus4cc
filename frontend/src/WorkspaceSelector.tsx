@@ -17,7 +17,7 @@ interface Config {
 interface Props {
   token: string
   onClose: () => void
-  onConfirm: (path: string, shellType: 'claude' | 'bash', profile?: string) => void
+  onConfirm: (path: string, shellType: 'claude' | 'pi' | 'bash', profile?: string) => void
 }
 
 // 检测是否为 PC 端（>= 768px）
@@ -36,7 +36,7 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
   const isDesktop = useIsDesktop()
   const [selectedPath, setSelectedPath] = useState(() => localStorage.getItem('nexus_last_path') || '/workspace')
   const [inputPath, setInputPath] = useState(() => localStorage.getItem('nexus_last_path') || '/workspace')
-  const [shellType, setShellType] = useState<'claude' | 'bash'>('claude')
+  const [shellType, setShellType] = useState<'claude' | 'pi' | 'bash'>('claude')
   const [configs, setConfigs] = useState<Config[]>([])
   const [selectedProfile, setSelectedProfile] = useState<string>(() => localStorage.getItem('nexus_last_profile') || '')
 
@@ -105,7 +105,7 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
   function handleConfirm() {
     const path = inputPath.trim()
     if (!path) return
-    const profile = shellType === 'claude' && selectedProfile ? selectedProfile : undefined
+    const profile = (shellType === 'claude' || shellType === 'pi') && selectedProfile ? selectedProfile : undefined
     localStorage.setItem('nexus_last_path', path)
     if (profile) localStorage.setItem('nexus_last_profile', profile)
     onConfirm(path, shellType, profile)
@@ -179,6 +179,16 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
                 <input
                   type="radio"
                   name="shellType"
+                  value="pi"
+                  checked={shellType === 'pi'}
+                  onChange={() => setShellType('pi')}
+                />
+                <span>{t('workspace.shellPi')}</span>
+              </label>
+              <label className="flex items-center gap-2 text-nexus-text text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="shellType"
                   value="bash"
                   checked={shellType === 'bash'}
                   onChange={() => setShellType('bash')}
@@ -189,7 +199,7 @@ export default function WorkspaceSelector({ token, onClose, onConfirm }: Props) 
           </div>
 
           {/* Profile 选择 (仅 claude 模式) */}
-          {shellType === 'claude' && (
+          {(shellType === 'claude' || shellType === 'pi') && (
             <div className="px-4 py-3 border-b border-nexus-border">
               <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-0">{t('workspace.profileLabel')}</div>
               <select
