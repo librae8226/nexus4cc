@@ -30,10 +30,19 @@
   flex: 0 0 auto;
 }
 .walkie-top-title {
+  font: inherit;
   font-size: 13px;
   letter-spacing: .12em;
   color: var(--nexus-text2);
+  background: transparent;
+  border: none;
+  padding: 6px 2px;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  text-align: left;
 }
+.walkie-top-title:active { opacity: .7; }
 .walkie-top-actions { display: flex; gap: 8px; align-items: center; }
 .walkie-icon-btn {
   width: 34px; height: 34px;
@@ -166,14 +175,41 @@
 .walkie-hint-bad { margin: 8px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--nexus-warning); }
 .walkie-error {
   margin: 0 14px 8px;
-  padding: 9px 12px;
+  padding: 10px 12px;
   border-radius: 10px;
   background: color-mix(in srgb, var(--nexus-error) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--nexus-error) 40%, transparent);
   color: var(--nexus-text);
   font-size: 12.5px;
   line-height: 1.5;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 5px;
 }
+.walkie-error b { font-size: 13px; }
+.walkie-error span { color: var(--nexus-text2); word-break: break-word; }
+/* 目标不是 Claude。**在输入框正上方说清楚**，不是只在标签上挂一个 ⚠ ——
+   你按下发送的那一下，眼睛在这里。 */
+.walkie-blocked {
+  margin: 0 14px 8px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nexus-warning) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nexus-warning) 38%, transparent);
+  color: var(--nexus-text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+/* 你不在的时候 */
+.walkie-absent {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  width: 100%; text-align: left; cursor: pointer;
+  margin: 10px 0 4px; padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nexus-accent) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nexus-accent) 30%, transparent);
+  color: var(--nexus-text);
+}
+.walkie-absent b { font-size: 13.5px; }
+.walkie-absent span { font-size: 11.5px; color: var(--nexus-text2); }
 
 /* ── 输入框：这一屏唯一的入口 ───────────────────────── */
 .walkie-compose {

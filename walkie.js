@@ -176,6 +176,16 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
   const transcriptDir = (cwd) =>
     join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects', cwd.replace(/\//g, '-'))
 
+  /**
+   * 解析过的 transcript 缓存：`file -> {key, turns, lastAt, lastText}`。
+   *
+   * 为什么要它：流是**被轮询**的，每个频道每次要读最多 256KB。十几个频道 × 每 5 秒
+   * 就是常驻几百 KB/s 的读 —— 对一个自用服务来说是不必要的开销。
+   * 键用 `size:mtimeMs`：追加一定会改 size，所以内容变了必然失效；
+   * 反过来 mtime 变了而内容没变（这个文件系统上真的会发生）只会导致多读一次，方向是安全的。
+   */
+  const turnCache = new Map()
+
   /** 这个频道的 transcript 文件在哪。认过的优先；没认过的退化成"这个目录下最新的那个"。 */
   function transcriptFor(key, cwd) {
     const remembered = sessions[key]
@@ -230,6 +240,11 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
         // （`/context` 那一整张表就是这么进来的）。它不是你"说"的话，别放进流里。
         if (e.isMeta) continue
         if (e.origin && e.origin.kind !== 'human') continue
+        // 还有一类**没有 isMeta 标记**的注入：斜杠命令本身和它的回显
+        // （`<command-name>/goal</command-name>`、`<local-command-stdout>…`）、
+        // `<system-reminder>`。它们的共同点是**整条以尖括号标签开头** ——
+        // 人自己说的话几乎不会这样开头，而这些放进流里就是让你看见自己的命令行。
+        if (/^\s*<[a-z][a-z-]*>/.test(c)) continue
         if (cur) turns.push(cur)
         cur = { you: humanText(c), at: ts, reply: '', repliedAt: 0, done: false }
         continue
@@ -247,6 +262,22 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
     }
     if (cur) turns.push(cur)
     return { turns: turns.slice(-maxTurns), lastAt, lastText }
+  }
+
+  /** readTurns 的带缓存版本。文件没变就不重解析。 */
+  function readTurnsCached(file, maxTurns) {
+    let key = ''
+    try {
+      const st = statSync(file)
+      key = `${st.size}:${st.mtimeMs}`
+      const hit = turnCache.get(file)
+      if (hit && hit.key === key) return hit.val
+    } catch { return { turns: [], lastAt: 0, lastText: '' } }
+    const val = readTurns(file, maxTurns)
+    // 别让它无限长：只留最近 64 个文件
+    if (turnCache.size > 64) turnCache.clear()
+    turnCache.set(file, { key, val })
+    return val
   }
 
   /**
@@ -361,7 +392,7 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
         let turns = []
         let lastAt = 0
         let lastText = ''
-        try { ({ turns, lastAt, lastText } = readTurns(file, STREAM_TURNS_PER_CHANNEL)) } catch { continue }
+        try { ({ turns, lastAt, lastText } = readTurnsCached(file, STREAM_TURNS_PER_CHANNEL)) } catch { continue }
         const last = turns[turns.length - 1]
         // 没有 turn_duration 只是"这一轮没写结束标记"，**不等于现在还在跑** ——
         // 被打断的回合、早退的会话都长这样。所以再加一道新鲜度门槛，

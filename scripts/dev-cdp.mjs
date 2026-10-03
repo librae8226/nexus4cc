@@ -96,7 +96,9 @@ class Session {
           this.pending.delete(id)
           reject(new Error(`CDP 超时：${method}`))
         }
-      }, 30000)
+        // 默认 30 秒。要在 --eval 里等一件事自己发生（等 AI 答完、等一轮转写落地），
+        // 就用 CDP_TIMEOUT_MS 调大 —— 别去改这个数本身，那是所有调用的默认值。
+      }, Number(process.env.CDP_TIMEOUT_MS) || 30000)
     })
   }
 
