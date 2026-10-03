@@ -67,7 +67,9 @@ frontend/src/
   GhostShield.tsx          # 覆盖层守卫（防止意外 keyboard 弹出）
   toolbarDefaults.ts       # 按键定义与出厂配置
   walkie/                  # 对讲机模式（F-24）：双旋钮 + 按住说话，实验特性
-    WalkieApp.tsx          #   根状态机；ChannelDial.tsx 双旋钮；speech.ts 语音转写
+    WalkieApp.tsx          #   根状态机；ChannelDial.tsx 双旋钮（拟物 + 咔嗒声 + 震动）
+    audio.ts               #   PCM 采集 + 静音切段 + WAV 编码（边说边出字的地基）
+    speech.ts              #   逐段送本机 ASR；feedback.ts 咔嗒声与震动
     api.ts / tts.ts / mode.ts / walkie.css
   windowStatus.ts          # 窗口状态检测（Terminal + TabBar 共享）
   icons.tsx                # 图标组件

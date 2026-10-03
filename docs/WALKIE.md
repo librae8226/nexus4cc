@@ -47,42 +47,59 @@ Claude 会话**，而不是去操作一个终端面板。
 外圈是 project（tmux session），内圈是 channel（tmux window）。手指在圈上划圈，**刻度跟着
 手指走**（物理旋钮的心智模型），松手吸附到最近一格并震一下；直接点某个标签就是跳过去。
 
-用 HTML + CSS transform 而不是 SVG 画的：标签必须始终正着（中文倒着没法读），而
-`rotate(θ) translateY(-R) rotate(-θ)` 这组变换正好把标签摆到圆周上并保持水平。半径必须写成
+**两个圈各自有颜色**：外圈 PROJECT 是琥珀，内圈 CHANNEL 是蓝。旋钮上的齿纹、刻度、
+选中标记，以及上方读数前面的小色块，全用同一套色 —— 这是"哪个是外圈哪个是内圈"的答案。
+名字只在**上方**显示：中文绕在圆周上必然被截断，而且两个圈的字混在一起根本分不清。
+圈上只留刻度，旋钮自己靠**齿纹转动**表达"它在转"（静止的刻度看不出动）。
+
+**手感**：每过一格合成一声"咔"（WebAudio，噪声瞬态 + 三个不同衰减的谐振，每声有微扰，
+不是循环同一个采样）+ 一次 `Haptics.selectionChanged()`；松手吸附时一声低沉的"咚" +
+`Haptics.impact(Medium)`。
+
+> 震动**不能**用 `navigator.vibrate`：它在 Android WebView 里存在、调用还返回 `true`，
+> 但 Chromium 的 WebView 没实现 VibrationManager，是静默空转。必须走 Capacitor 的
+> Haptics，那才是真的在驱动马达。
+
+用 HTML + CSS transform 而不是 SVG：标签要始终正着，而
+`rotate(θ) translateY(-R) rotate(-θ)` 正好把刻度摆到圆周上并保持水平。半径必须写成
 `calc(var(--walkie-dial) * k)` 的**绝对量** —— `translateY` 的百分比是相对元素自身高度算的，
-拿它当半径会把标签全堆到圆心。
+拿它当半径会把刻度全堆到圆心。
 
-### 2. 说话 → 文字（v2：录音 + 本机转写）
+### 2. 说话 → 文字（按住说话的实时转写）
 
-**v1 走的是 Android 原生 `SpeechRecognizer`，真机上废了。** 症状：权限给了、按下去也进了
-"松手结束"状态，但**一个字都不吐**。原因是国产 ROM 上没有可用的 Google 语音服务，而该插件
-`partialResults: true` 时 `start()` 立即 resolve，之后 `onError` 里的 `call.reject()` 打在
-一个已 resolve 的 call 上 —— **JS 侧收不到任何错误**，`listeningState` 也不发。于是按住说话
-变成按住没反应，且没有任何提示。
+**不是 Android 的 `SpeechRecognizer`。** 真机实测过：权限给了、按下去也进了"松手结束"
+状态，但**一个字都不吐** —— 国产 ROM 上没有可用的 Google 语音服务，而那个插件出错是
+静默的（`partialResults` 模式下 `onError` 的 `reject()` 打在了一个已 resolve 的 call 上，
+JS 侧什么都收不到，`listeningState` 也不发）。按住说话于是变成按住没反应，且没有任何提示。
 
-现在改成：
+现在走的是：
 
 ```
-按住 → MediaRecorder 录音（WebView 内）
-松手 → POST /api/walkie/transcribe（音频 blob）
-     → Nexus 转发给本机 intake（:59011）
-     → sherpa-onnx SenseVoice-small-int8 转写
-     → 文本回到 App
+按住 → getUserMedia（带 AEC/降噪）→ AudioContext → ScriptProcessor → Float32 样本
+     → 按静音切段（最简 VAD）→ 每段编成 WAV 单独 POST
+     → Nexus 转给本机 intake（:59011）→ sherpa-onnx SenseVoice-small-int8 转写
+     → 文本按段落顺序拼起来，边说边冒出来
+松手 → 只等最后一段落地（约 1.5 秒）→ 全文
 ```
 
-好处：
+**为什么能"边说边出字"**：本机 ASR 的耗时几乎全是模型加载的固定开销 —— 实测
+1 秒的片段 1364ms，3 秒的片段 1402ms。所以切成小段分别转几乎不额外花钱。切段只发生在
+**能量低谷**（静音持续 420ms 之后），段尾天然落在自然停顿上，不会把词切坏。
 
-- **不依赖任何云端语音服务**，国产 ROM / 无 Google 服务 / 离线都能用；
-- **音频不出本机** —— 转写跑在 `~/work/intake`，与会议录音共用同一套 ASR，只有一份实现；
-- 出错能报：录不到、权限被拒、转写服务没起，各有明确文案（v1 全是静默）。
+**两道防幻觉的门**（都踩过）：
+- 阈值自适应。底噪高的设备上固定阈值会永远不"静音"，只能靠上限硬切；
+- 一段里"有声"的部分不足 0.25 秒就整段丢掉。只按长度过滤的话，**纯噪声会被送去转写，
+  而 SenseVoice 会一本正经地为它编出一句话**（模拟器上静音输入转出过 6 个字的幻觉）。
 
-代价：**失去"边说边出字"的实时预览**，松手后约 1.5–2 秒出结果。对讲机本来就是"说完再看到"，
-这个取舍可以接受；界面用一条随时间起伏的波形表示"确实在录"，而不是让你对着静止文字猜。
+**为什么不用 MediaRecorder**：它只能整段拿走音频，中间插不进去，想要边说边出字就必须
+能按段切。顺带也省掉了 MediaRecorder 那套容器格式协商（不同 WebView 支持的 MIME 不一样，
+是个静默的坑）。代价是 `ScriptProcessorNode` 是废弃 API 且跑在主线程 —— 但它到处都有，
+而 AudioWorklet 要单独加载模块文件，在 WebView 里多一层不确定性。
 
-真机上要能录音，`AndroidManifest.xml` 必须声明 `RECORD_AUDIO` 与 `MODIFY_AUDIO_SETTINGS`
-（Capacitor 的 `BridgeWebChromeClient.onPermissionRequest` 会把 WebView 的 AUDIO_CAPTURE
-请求映射到这两个权限）。另外页面必须是 secure context —— Capacitor 的本地服务在
-`http://localhost`，Chrome 视其为可信来源。
+> 音频不出本机：转写跑在 `~/work/intake`，与会议录音共用同一套 ASR，只有一份实现。
+> 首次按下会弹系统的麦克风权限框，界面会先显示「正在打开麦克风…」（权限框期间
+> getUserMedia 还没 resolve，不提示的话就是一个看起来按了没反应的死按钮）。
+
 
 ### 3. 口语 → 精确指令（松手即自动精炼）
 
@@ -173,6 +190,7 @@ cd frontend && npm run build          # 先出 web 产物
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `WALKIE_LLM_PROFILE` | `deepseek` | 精炼/摘要用 `data/configs/` 下哪个 profile |
+| `WALKIE_ASR_URL` | `http://127.0.0.1:59011` | 本机转写服务（`~/work/intake`）的地址 |
 
 不配也能用：精炼降级成「原文直发」，摘要降级成「截前 120 字」，投递与回复追踪不受影响。
 
@@ -188,41 +206,61 @@ cd frontend && npm run build          # 先出 web 产物
 
 ---
 
-## 当前进度与待办（2026-10-03）
+## 回复为什么不会再"卡住"
+
+第一版真机上栽过一次：**内容发出去了、界面显示"AI 在干活"，然后永远没有结果**。根因是
+追踪器是内存态 —— 进程重启或超过 `KEEP_DONE_MS` 被回收之后，`/reply` 返回一个空的
+`{state:'idle'}`，前端就一直转到自己 10 分钟超时。真机上就是这么栽的。
+
+现在三道防线：
+
+1. **没有活跃追踪时一律回看该频道上一次的回复**（读 `data/walkie-sessions.json` 记下的
+   transcript 文件），而不是只在 `peek=1` 时回看；
+2. **认领会话失败也有退路**：发送后 10 秒还认不出是哪个 transcript，就退一步认"长得最多的
+   那个文件"，并在界面上标明 `（靠文件增长猜的，可能不是这一条）`——这是猜的，不装作确定；
+3. **把过程摊开**：等待时透出目标 pane 的当前几行（`● Bash(sleep 5) ⎿ Running…`），
+   认领失败时给出具体提示（比如"这个频道的目录还没被 Claude 信任，它在等确认"）。
+
+第 3 条是**"不知道它在干嘛"本身就是 bug** 这个判断的落地：看不见的过程等于没有过程。
+
+---
+
+## 已验证 / 未验证（2026-10-03，v4.9.1）
 
 测试环境见 [`DEV-TESTENV.md`](DEV-TESTENV.md)（无头模拟器 + WebView devtools）。
 
-### 已改完并在模拟器上验证
+### 在 Android 模拟器上真跑过
 
-| 项 | 状态 |
+| 项 | 怎么验的 |
 |---|---|
-| 按住说话能录音 | ✅ 录音状态、走秒、波形正常；`audit.log` 里有 `walkie-transcribe`，字节数非零 |
-| 录音 → 上传 → 本机转写整链路 | ✅ 端到端跑通（`bytes: 12345, ms: 3347`） |
-| 旋钮外观（名字移到上方、内外圈可分辨） | ✅ 桌面 Chrome + 真机 WebView 都看过 |
-| 旋钮刻度跟手、选中格在指针下 | ✅ 修了旋转叠加两次的 bug，截图确认 |
+| App 起来、旋钮转、读数跟着变 | CDP 派发**可信触摸**划弧，读数从 APK 换到对讲机测试 |
+| 按住说话 → 录音状态 / 走秒 / 音量条 | 真实触摸长按，`录音中 1.2s · 松手结束` |
+| 麦克风权限流程 | 首次按下弹系统权限框，界面显示「正在打开麦克风…」 |
+| 录音 → 上传 → 本机转写 | `audit.log` 里的 `walkie-transcribe`，字节数非零 |
+| 噪声不被误转写 | 模拟器静音输入 → 不给幻觉文字，给「没识别出内容」的明确提示 |
+| 发送 → 直达输入框 → 回复 | 走完 `已发出 → 已投递，等它开口… → AI 回复` |
+| **等待过程可见** | 等待卡里出现 `● Bash(sleep 5) ⎿ Running… ✻ Accomplishing…` |
+| TTS 播报 | logcat 里 `TextToSpeech.speak` 被调用，`AudioTrack` 输出 148 万帧音频 |
+| 震动链路 | logcat 里每格一次 `Haptics.selectionChanged`、吸附一次 `impact MEDIUM` |
+| 非 claude 频道拒发 | `main:0`（shell）返回 409 |
 
-### 改完了但**还没在真机/模拟器上验证**
+### 在桌面 Chrome 里真跑过（喂真实语音音频）
 
-| 项 | 怎么验 |
+| 项 | 怎么验的 |
 |---|---|
-| 咔嗒声 | 模拟器**没有扬声器**，听不到。要真机，或桌面 Chrome 里手动拖旋钮 |
-| 震动 | 模拟器没有马达。要真机（manifest 已补 VIBRATE） |
-| 转写内容的**准确率** | 模拟器麦克风是静音的，只能验通路。要真机说话，或直接打 `intake` 的 `/transcribe` 喂音频文件 |
-| **发出去之后回复能不能正常显示** | 上一轮的修复（`/reply` 无追踪时回看上次结果 + 阶段透出）**还没跑过一次完整的发送→回复**。见下 |
+| **边说边出字** | `--use-file-for-fake-audio-capture` 喂一段中文语音，第 9 秒文字冒出来 |
+| 音量条是真实音量 | 条高随注入音频起伏，静音段回落 |
+| 多段拼接 | 两段音频 → 原文完整包含两句（`开饭时间…。开放时间…。`） |
+| 精炼 | 松手后约 0.7 秒替换成精炼稿，可「还原原文」 |
+| 浏览器里的模式往返 | `?ui=walkie` / 点「经典」/ 点浮标回来 |
 
-### 下一步（按优先级）
+### 只有真机能验的
 
-1. **验一次完整的发送 → 回复**：在模拟器上选一个 claude 频道，按住说话（或用 ⌨ 输入法
-   输入一段文字）→ 发送 → 看等待卡片是否显示阶段（"已投领会话…" → "正在输出…"）→
-   是否出现「AI 回复」卡片。这是上一轮真机上坏掉的那条路。
-2. **真机回归**：装 `app-walkie-debug.apk`，说话验准确率 + 听咔嗒声 + 感受震动。
-3. 若震动偏强/偏弱，调 `frontend/src/walkie/feedback.ts` 的 `haptic(ms)` 与
-   `ChannelDial.tsx` 里各处毫秒数。
-4. 若咔嗒声不对（太尖/太闷），调 `feedback.ts` 里 `bp.frequency`（现在 2300–2800Hz）
-   与两个谐振频率（1750/3300Hz）。
-
-### 已知取舍
-
-- **没有"边说边出字"**：本机转写是整段转，松手后约 1.5–2 秒出结果。这是为了不依赖
-  Google 语音服务而付的代价，见上面「说话 → 文字」一节。
-- **转写依赖 `intake` 服务**（PM2 `intake`，:59011）。它没跑时按住说话会明确报错。
+- **咔嗒声的音色**：模拟器没有扬声器。`AudioContext` 确实进到了 `running`（
+  在用户手势里创建、可 resume），但好不好听得你自己听。要调就改
+  `frontend/src/walkie/feedback.ts` 里 `tick()` 的三个谐振频率（1250/2500/4300Hz）和
+  噪声带通中心（1650–2200Hz）。
+- **震动的力度**：模拟器没有马达。要调就改 `ChannelDial.tsx` 里 `hapticTick()` /
+  `hapticSnap()` 的调用点，或 `feedback.ts` 里的 `ImpactStyle`。
+- **转写的识别准确率**：模拟器麦克风是静音的，只验了通路。要单独验 ASR 就拿音频文件直接打
+  `POST /api/walkie/transcribe`。
