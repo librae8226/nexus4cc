@@ -6,7 +6,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import { createServer } from 'node:http';
 import os from 'node:os';
-import { exec, spawn, execSync, execFileSync } from 'child_process';
+import { exec, execFile, spawn, execSync, execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join, normalize, isAbsolute, basename } from 'path';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, statSync, rmdirSync, renameSync, cpSync, rmSync } from 'fs';
@@ -1198,6 +1198,7 @@ app.post('/api/sessions/:id/rename', authMiddleware, (req, res) => {
   try {
     execFileSync('tmux', ['rename-window', '-t', `${session}:${index}`, '--', safeName], { stdio: 'pipe' })
     audit('channel-renamed', req, { target: `${session}:${index}`, name: safeName })
+    snapshotNow('channel-renamed')
     res.json({ ok: true, name: safeName })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -1368,6 +1369,26 @@ app.get('/api/session-cwd', authMiddleware, (req, res) => {
 let restoreInFlight = false
 let rescueInFlight = false
 const RESURRECT_DIR = join(process.env.HOME || '', '.tmux', 'resurrect')
+const SNAPSHOT_SAVE = join(process.env.HOME || '', '.tmux', 'plugins', 'tmux-resurrect', 'scripts', 'save.sh')
+
+// 期望状态的即时对齐。
+// 「恢复是否完整」的唯一判据是「快照里有、线上没有」（missingSessions()，与 nexus-restore-tmux.sh
+// 的闭环核对同规则）。快照平时只由 nexus-tmux-snapshot.timer 每 5 分钟存一次，天然滞后：用户删掉
+// 一个频道或改个名之后，快照还记着它 → 面板轮询与恢复脚本都会判「恢复不完整」，误亮救援横幅并推
+// 微信（2026-10-03 21:40：手机删 main:2 后 want=12/have=11）。删除/改名是常规操作，不该触发救援。
+// 所以：凡让线上「变少或改名」的用户操作成功后，立刻存一次快照，让期望状态跟上用户意图。
+// 5s 节流——连删多个时只存最后一次；存完面板下一轮轮询就干净了。
+let lastSnapshotAt = 0
+function snapshotNow(reason) {
+  if (!existsSync(SNAPSHOT_SAVE)) return // 没装 tmux-resurrect：快照链路本就不存在
+  const now = Date.now()
+  if (now - lastSnapshotAt < 5000) return
+  lastSnapshotAt = now
+  execFile('tmux', ['run-shell', SNAPSHOT_SAVE], (err) => {
+    if (err) console.warn(`[snapshot] 即时快照失败（${reason}）: ${err.message}`)
+    else console.log(`[snapshot] 即时快照（${reason}）`)
+  })
+}
 
 /** 返回最新一份「含 nexus-run-claude 频道」的快照；无则 null。与 nexus-restore-tmux.sh 选择器同规则。 */
 function findRestoreSnapshot() {
@@ -1761,6 +1782,7 @@ app.post('/api/projects/:name/rename', authMiddleware, (req, res) => {
     execFileSync('tmux', ['rename-session', '-t', oldName, '--', sanitizedNewName], { stdio: 'pipe' })
 
     audit('session-renamed', req, { target: oldName, name: sanitizedNewName })
+    snapshotNow('session-renamed')
     res.json({ ok: true, oldName, newName: sanitizedNewName })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -1780,6 +1802,7 @@ app.delete('/api/projects/:name', authMiddleware, (req, res) => {
   exec(`tmux kill-session -t ${sessionName}`, (err) => {
     audit('session-deleted', req, { target: sessionName, result: err ? `failed: ${err.message}` : 'ok' })
     if (err) return res.status(500).json({ error: err.message })
+    snapshotNow('session-deleted')
     res.json({ ok: true })
   })
 })
@@ -1816,6 +1839,7 @@ app.delete('/api/sessions/:id', authMiddleware, (req, res) => {
         exec(`tmux kill-window -t ${session}:${index}`, (err) => {
           audit('channel-deleted', req, { target: `${session}:${index}`, result: err ? `failed: ${err.message}` : 'ok' })
           if (err) return res.status(500).json({ error: err.message })
+          snapshotNow('channel-deleted')
           res.json({ ok: true })
         })
       })
@@ -1823,6 +1847,7 @@ app.delete('/api/sessions/:id', authMiddleware, (req, res) => {
       exec(`tmux kill-window -t ${session}:${index}`, (err) => {
         audit('channel-deleted', req, { target: `${session}:${index}`, result: err ? `failed: ${err.message}` : 'ok' })
         if (err) return res.status(500).json({ error: err.message })
+        snapshotNow('channel-deleted')
         res.json({ ok: true })
       })
     }

@@ -240,6 +240,9 @@
   },
   "rescue": {
     "title": "救援模式",
+    "driftTitle": "与快照不一致",
+    "snapshotAt": "快照 {{time}}",
+    "driftHint": "刚删/改过频道时属正常",
     "tmuxDown": "tmux server 不可用（状态：{{state}}，unit：{{unit}}）—— 会话可能没恢复回来。",
     "missingChannels": "有 {{n}} 个频道没恢复回来：{{list}}",
     "missing": "有 {{n}} 个会话没恢复回来：{{list}}",

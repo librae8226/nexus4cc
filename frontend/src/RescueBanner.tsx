@@ -2,11 +2,16 @@ import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 /**
- * 救援横幅：tmux 不可用、或快照里有 session 没恢复回来时出现（最坏情况下的入口）。
+ * 救援横幅：tmux 不可用、或快照里有 session/频道没恢复回来时出现（最坏情况下的入口）。
  * 三条出路，都不依赖 tmux 里的会话：
  *   · 救援 shell —— 后端裸 PTY，直接给一个能敲命令的终端
  *   · recovery agent —— 同一个裸 PTY 里拉起带预置任务的 claude，让它自己去修
  *   · 一键救援 —— POST /api/rescue/run 跑 scripts/nexus-rescue.sh（零 root）
+ *
+ * 两种情况要分清，说法不一样（2026-10-03）：
+ *   · tmux 挂了 —— 真·救援模式。
+ *   · 「快照里有、线上没有」—— 多数是刚删/改过频道留下的时间差（快照 5 分钟一存）。
+ *     所以标题写「与快照不一致」，并把快照时间摆出来，别让人误以为系统坏了。
  */
 interface RescueStatus {
   tmux: { state: string; up: boolean; socketDir: string; socketDirExists: boolean }
@@ -64,17 +69,26 @@ export default function RescueBanner({ token, onOpenConsole }: Props) {
   const down = !status.tmux.up
   const missing = status.missingSessions > 0 || status.missingChannels > 0
   if (!down && !missing) return null
+  const drifted = !down // 走到这里又不是 tmux 挂了，就是「快照 vs 线上」不一致
 
   return (
     <div className="flex-shrink-0 border-b px-3 py-2 text-xs" style={{ background: '#7c2d12', borderColor: '#f97316', color: '#fed7aa' }}>
       <div className="flex items-center gap-3 flex-wrap">
-        <span className="font-semibold">{t('rescue.title')}</span>
+        <span className="font-semibold">{down ? t('rescue.title') : t('rescue.driftTitle')}</span>
         <span className="flex-1 min-w-[12rem]">
           {down
             ? t('rescue.tmuxDown', { state: status.tmux.state, unit: status.unit })
             : status.missingSessions > 0
               ? t('rescue.missing', { n: status.missingSessions, list: status.missingList.join(', ') })
               : t('rescue.missingChannels', { n: status.missingChannels, list: (status.missingChannelsList || []).join(', ') })}
+          {drifted && status.snapshotTime && (
+            <span className="opacity-80">
+              {' · '}
+              {t('rescue.snapshotAt', { time: new Date(status.snapshotTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })}
+              {' · '}
+              {t('rescue.driftHint')}
+            </span>
+          )}
         </span>
         <button className="bg-transparent border-none underline cursor-pointer p-0" style={{ color: '#fed7aa' }} onClick={() => onOpenConsole(false)}>
           {t('rescue.shell')}

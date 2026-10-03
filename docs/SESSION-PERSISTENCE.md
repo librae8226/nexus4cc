@@ -514,7 +514,7 @@ GRUB `TIMEOUT=5`（引导菜单不会卡着等人）。Nexus 永不 exit（探�
 **遗留**：快照选择器的「健康」判据（≥2 条 claude 频道）偏弱 —— 故障中途存下的 3 频道快照
 （16:02 那份）也会被当成健康恢复源。等下一份健康快照落地即自愈；彻底修法另议。
 
-## 17. 真机掉电演练结果（2026-10-02 晚，用户手动断电三次）
+## 18. 真机掉电演练结果（2026-10-02 晚，用户手动断电三次）
 
 **结论：三次硬掉电、三次全自动恢复，用户定义的底线（页面可达 + 页内可起 recovery agent）成立。**
 
@@ -548,3 +548,30 @@ shell」。三环根因：① resurrect 建窗不带命令 → `automatic-rename
 **仍未闭合的一项**：断电后机器是**自己开机**还是**手动按电源键**（三次开机分别在断后 48/19/4 分钟）
 → 若必须手动按，就是 BIOS 的 AC Power Recovery 未设为 Power On，需要进 BIOS（或加 UPS）。这一条
 只能人到现场确认，Linux 侧看不到。
+
+## 19. 误报修复 — 删/改频道后被判「恢复不完整」（2026-10-03）
+
+**现象**：21:40 用户在手机上删掉 `main:2` 后，面板亮「救援模式」并尝试推微信，但系统一切正常
+（tmux server 自 10-02 17:07 起没重启、5 个 session 全在、`missingSessions=0`）；点「一键救援」
+的结果是 `restored_sessions=0` —— 本来就没东西可恢复。
+
+**根因**：闭环核对的判据是「快照里有、线上没有」（`server.js` 的 `missingSessions()` 与
+`nexus-restore-tmux.sh` 的 `channels_in_snapshot` vs `count_live_channels`），而快照只由
+`nexus-tmux-snapshot.timer` 每 5 分钟存一次 —— **天然滞后**。于是「删除/改名」这种常规操作会在
+滞后窗口里被读成「没恢复回来」：21:37 的快照还记着 `main:2` → 21:39:20 删掉 → 21:40 对账
+`want=12 / have=11` → `restore-incomplete`。删除越勤，误报越多。（同类旧账：10-03 04:10 那条
+`快照里有 1 个 session 不在线上`，来源是测试残留 session `chanprobe`。）
+
+**修法（最小，两处）**
+- `server.js` 新增 `snapshotNow(reason)`：让线上「变少或改名」的用户操作成功后立刻
+  `tmux run-shell save.sh`（5s 节流，连删只存一次），期望状态跟上用户意图。挂点：
+  `session-deleted` / `session-renamed` / `channel-deleted` / `channel-renamed`。
+  创建不需要（线上比快照多，判据不看）。
+- 前端 `RescueBanner`：这种情况不再叫「救援模式」，标题改「与快照不一致」，并摆出
+  `快照 HH:MM · 刚删/改过频道时属正常`；tmux 真挂时仍显示「救援模式」。**别让误报吓到人。**
+
+**验证（本机线上，2026-10-03 21:43）**
+- 正向：经 API 建频道→删频道，快照 2s 内重存，新快照不含已删窗口，`/api/rescue/status`
+  的 `missingChannels=0` —— 横幅不再出现。
+- 反向对照：先存一次快照把探针窗口「烙进期望」，再绕过 Nexus 直接 `tmux kill-window`
+  → `missingChannels=1 list=["main:tmp-snapfix-probe"]` —— 正是修复前那条误报，确认根因成立。

@@ -240,6 +240,9 @@
   },
   "rescue": {
     "title": "Rescue mode",
+    "driftTitle": "Snapshot mismatch",
+    "snapshotAt": "snapshot {{time}}",
+    "driftHint": "normal right after deleting/renaming channels",
     "tmuxDown": "tmux server unavailable (state: {{state}}, unit: {{unit}}) — sessions may not be restored.",
     "missingChannels": "{{n}} channel(s) not restored: {{list}}",
     "missing": "{{n}} session(s) not restored: {{list}}",
