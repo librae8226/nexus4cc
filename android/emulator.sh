@@ -15,6 +15,7 @@
 #   android/emulator.sh install <apk>  装 APK
 #   android/emulator.sh shot <out.png> 截屏到宿主文件
 #   android/emulator.sh tap <x> <y>    点一下
+#   android/emulator.sh hold <x> <y> <ms>  长按（按住说话用这个）
 #   android/emulator.sh swipe <x1> <y1> <x2> <y2> [ms]
 #   android/emulator.sh logcat [grep]  看日志
 #
@@ -111,6 +112,11 @@ case "${1:-}" in
     echo "截图 → $out"
     ;;
   tap)   shift; in_container bash -lc "export ANDROID_HOME=/opt/android-sdk; adb shell input tap $*" ;;
+  # 长按：起点终点同一个点、给足 duration，就是按住不放（按住说话要这个）
+  hold)
+    x="${2:?用法：emulator.sh hold <x> <y> <ms>}"; y="${3:?}"; ms="${4:-1500}"
+    in_container bash -lc "export ANDROID_HOME=/opt/android-sdk; adb shell input swipe $x $y $x $y $ms"
+    ;;
   swipe) shift; in_container bash -lc "export ANDROID_HOME=/opt/android-sdk; adb shell input swipe $*" ;;
   text)  shift; in_container bash -lc "export ANDROID_HOME=/opt/android-sdk; adb shell input text '$*'" ;;
   logcat)
