@@ -156,6 +156,9 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   const lastLevelAt = useRef(0)
   const liveRef = useRef('')
   const deliverRef = useRef<((override?: string) => void) | null>(null)
+  // peekInto 要能在"恢复一轮还在干活的过程"时把轮询接回来，但 startPoll 定义在它后面
+  // （依赖 autoSpeak）。用 ref 兜一层，别为了这个把整个组件的定义顺序翻过来。
+  const startPollRef = useRef<((key: string, proj: string, win: number, sent: string, offsetMs?: number) => void) | null>(null)
   const storeRef = useRef<Persisted>({ drafts: {} })
   const draftStateRef = useRef<DraftState>({ draft: '', raw: '', refined: false })
   const stageRef = useRef<HTMLDivElement | null>(null)
@@ -229,10 +232,30 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   /** 转到哪一格，就把那一格**上一次答了什么**取回来铺在屏上 ——
       不用重问，也不用面对一块空白。开场那一次也走这条路。 */
   const peekInto = useCallback((projName: string, win: number, key: string) => {
+    const cached = cacheRef.current.get(key)
+    if (cached) {
+      setSent(cached.sent); setReply(cached.reply); setSummary(cached.summary); setPhase('reply')
+      return
+    }
     getReply(token, projName, win, true).then((r) => {
-      if (chanKeyRef.current !== key || !r.text || cacheRef.current.has(key)) return
-      cacheRef.current.set(key, { reply: r, summary: '', sent: '' })
-      setReply(r); setSteps(r.steps || []); setPhase('reply'); setExpanded(false)
+      if (chanKeyRef.current !== key || cacheRef.current.has(key)) return
+      // 【还在干活那一轮】不能拿 text 当门槛 —— running 时 text 本来就是空的
+      // （它还在说），只有 steps 和 paneTail。老代码在这里 `if (!r.text) return`，
+      // 于是切走再切回来，一整屏的动作流全没了，只剩台面上一个"工作中"（真机反馈）。
+      // 恢复的是**过程**：把这句话、动作流、阶段文案、已经走了多少秒都摆回去，
+      // 并把轮询接回来 —— 否则界面会停在"等待中"再也不动。
+      if (r.state === 'running') {
+        const said = r.sent || ''
+        setSent(said); setReply(null); setSummary(''); setErr('')
+        setSteps(r.steps || []); setPaneTail(r.paneTail || []); setHint(r.hint || '')
+        setStage(r.stage || ''); setPhase('waiting')
+        startPollRef.current?.(key, projName, win, said, r.elapsedMs || 0)
+        return
+      }
+      // 答完了（哪怕这一轮一个字没说、只动了文件）：恢复成回复态。
+      // 空正文也认 —— 卡片自己会说「（这一轮没有说话，可能只动了文件）」。
+      cacheRef.current.set(key, { reply: r, summary: '', sent: r.sent || '' })
+      setSent(r.sent || ''); setReply(r); setSteps(r.steps || []); setPhase('reply'); setExpanded(false)
     }).catch(() => { /* peek 失败无所谓 */ })
   }, [token])
 
@@ -430,9 +453,11 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
   }, [token, play])
 
   // ── 发送 + 追回复 ────────────────────────────────────────
-  const startPoll = useCallback((key: string, projName: string, win: number, sentText: string) => {
+  const startPoll = useCallback((key: string, projName: string, win: number, sentText: string, offsetMs = 0) => {
     clearPoll(key)
-    const started = Date.now()
+    // offsetMs：接管一轮**已经跑了很久**的追踪时（切走再切回来），秒表要接着走，
+    // 不能从 0 重新数 —— 那样你会看见"45s"跳回"0s"，像是它重头开始了。
+    const started = Date.now() - offsetMs
     const tick = async () => {
       let r: ReplyState
       try {
@@ -477,6 +502,7 @@ export default function WalkieApp({ token, onExit }: { token: string; onExit?: (
     pollsRef.current.set(key, window.setInterval(tick, POLL_MS))
     void tick()
   }, [token, clearPoll, autoSpeak])
+  startPollRef.current = startPoll
 
   const deliver = useCallback(async (override?: string) => {
     if (!project || !channel) return

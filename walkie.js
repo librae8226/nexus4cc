@@ -535,6 +535,9 @@ export function createWalkieRouter({ authMiddleware, dataDir, tmuxSession, audit
       state: t.state,                       // running | done | timeout
       stage: stageOf(t),
       text: t.reply || '',
+      // 这一轮是谁要的。前端切走再切回来时要拿它把「你说 · X」那条补回去 ——
+      // 没有它，恢复出来的过程就是一堆不知道在回答什么的动作。
+      sent: t.sentText || '',
       partial: t.replyParts.join(''),
       done: t.state === 'done',
       error: t.error || null,

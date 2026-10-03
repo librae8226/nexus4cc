@@ -41,6 +41,8 @@ export interface ReplyState {
   state: 'idle' | 'running' | 'done' | 'timeout'
   /** 后端给的阶段文案（认领会话 / 正在输出 / 已完成）——直接显示给用户 */
   stage?: string
+  /** 这一轮是谁要的。切走再切回来要靠它把「你说 · X」补回去 */
+  sent?: string
   text: string
   partial?: string
   done?: boolean
