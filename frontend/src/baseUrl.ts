@@ -38,6 +38,81 @@ const ACTIVE_KEY = 'nexus_active_profile'
 /** 变更通知：同页面内的组件（登录页/设置页）靠它刷新 */
 export const PROFILES_CHANGED_EVENT = 'nexus-profiles-changed'
 
+// ── 实时加载（本地壳 → 远端服务器）─────────────────────────────────────────
+//
+// APK 里本地壳（assets 里的这份）只负责「选服务器 + 探测可达」，通了就把
+// WebView 整个交给服务器上的最新前端 —— 于是 Web 侧改动不用再重新打包。
+//
+// 跳转时在 URL 上带一个标记（`?nexus_shell=1`），它有两处用途：
+//   1. 原生层只放行「带标记的那一次导航」以及之后同 host 的导航进 WebView，
+//      其余外链仍旧交给系统浏览器（见 android/.../MainActivity.java）。
+//      没有这个标记就没法把它和「用户点了一个外链」区分开。
+//   2. 远端那份 app 靠它知道自己跑在 App 里 —— 关掉 Service Worker、露出「刷新」。
+//
+// 远端 origin 与本地壳不同源，localStorage 传不过去；sessionStorage 是能跨
+// 同源刷新存活的最轻载体，且用户拿浏览器打开同一个地址时互不影响（每个标签
+// 页各一份）。
+export const SHELL_MARK = 'nexus_shell'
+
+const SHELL_FLAG_KEY = 'nexus_shell_mode'
+/** 本次启动是否已经自动跳过一次。用途见 App.tsx：从远端退回本地壳时不该再被弹回去。 */
+const SHELL_JUMPED_KEY = 'nexus_shell_jumped'
+
+/** 启动时调用一次：把 URL 上的标记收进 sessionStorage，并把标记从地址栏抹掉。 */
+export function captureShellMark(): void {
+  try {
+    const url = new URL(location.href)
+    if (url.searchParams.get(SHELL_MARK) !== '1') return
+    sessionStorage.setItem(SHELL_FLAG_KEY, '1')
+    url.searchParams.delete(SHELL_MARK)
+    history.replaceState(null, '', url.pathname + url.search + url.hash)
+  } catch {
+    /* 地址不合法就当没这回事 */
+  }
+}
+
+/** 本页是不是「从本地壳跳到远端服务器」加载来的。 */
+export function isShellMode(): boolean {
+  try {
+    return sessionStorage.getItem(SHELL_FLAG_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+/** 本地壳已经自动跳过（或用户手动连过）一次。 */
+export function hasJumped(): boolean {
+  try {
+    return sessionStorage.getItem(SHELL_JUMPED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function markJumped(): void {
+  try {
+    sessionStorage.setItem(SHELL_JUMPED_KEY, '1')
+  } catch {
+    /* 存不了就算了，最坏结果是退回本地壳时又被弹回服务器 */
+  }
+}
+
+/**
+ * 本地壳（Capacitor assets）的地址。
+ *
+ * Capacitor 用 `androidScheme` 决定它：http → `http://localhost`。这个 origin
+ * 是 Capacitor 自己认的 appUrl，所以从远端导航回这里**不需要**任何额外放行
+ * （见 Bridge.launchIntent：host + scheme 都和 appUrl 相同就直接放行）。
+ * 远端页面上「服务器选择」用的就是这个地址。
+ */
+export const LOCAL_SHELL_ORIGIN = 'http://localhost'
+
+/** 本地壳要跳去的地址：服务器地址 + 那个标记。 */
+export function liveUrl(profile: ServerProfile): string {
+  const base = (profile.url || '').replace(/\/+$/, '')
+  return `${base}/?${SHELL_MARK}=1`
+}
+
 // 需要加上 base 前缀的路径。前端对后端只有两类请求：
 //   /api/*         REST 接口
 //   /workspace?…   工作区文件直链（WorkspaceBrowser 用它拼 <a href>）

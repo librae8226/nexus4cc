@@ -1,10 +1,28 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import Terminal from './Terminal'
 import ServerSettings from './ServerSettings'
-import { getApiBase, needsServerConfig, getActiveProfile, setActiveProfileUsername } from './baseUrl'
+import LiveShell from './LiveShell'
+import {
+  getApiBase,
+  needsServerConfig,
+  getActiveProfile,
+  setActiveProfileUsername,
+  isNative,
+  liveUrl,
+  hasJumped,
+  markJumped,
+} from './baseUrl'
 
 const STORAGE_KEY = 'nexus_token'
+
+/**
+ * 探测超时。局域网直连通常 <100ms，Tailscale 也就几百毫秒；
+ * 4 秒还没应答，宁可让用户看到「没连上」也不要把人晾在启动画面上。
+ */
+const PROBE_TIMEOUT_MS = 4000
+
+type ShellState = 'inactive' | 'probing' | 'manual'
 
 export default function App() {
   const { t } = useTranslation()
@@ -22,6 +40,57 @@ export default function App() {
   // 一次性判定即可：登录页存活期间不会有人往里加 profile（加了也只能从这个
   // 组件加，而它没渲染就没有入口）。规则见 baseUrl.needsServerConfig()。
   const [showServer] = useState(needsServerConfig)
+
+  // ── 实时加载（F-23.12）────────────────────────────────────────────────────
+  // 装进 APK 的这份前端只是「本地壳」：启动时按激活 profile 探一次，通了就
+  // 整个导航到服务器，由服务器上那份最新的前端接管 —— 从此 Web 侧改动不用
+  // 重新打包。探测不通（或用户从远端退回）就停在本地壳，见 LiveShell.tsx。
+  //
+  // `hasJumped()` 是这次判断的关键：从远端退回本地壳时它已经是 1，于是不会
+  // 立刻又被弹回服务器，用户才真正到得了服务器管理那一屏。
+  //
+  // native 下**一律**走本地壳（哪怕还没配服务器）：这一屏既是「连不上」的
+  // 兜底，也是首次运行添加服务器的地方。登录页在 App 里用不到 —— 登录发生
+  // 在远端那个 origin 上（它有自己的存储）。
+  const [shell, setShell] = useState<ShellState>(() => {
+    if (!isNative()) return 'inactive'
+    if (hasJumped()) return 'manual'
+    return getActiveProfile() ? 'probing' : 'manual'
+  })
+  const [probeError, setProbeError] = useState('')
+  const connecting = useRef(false)
+
+  const connect = useCallback(async () => {
+    const profile = getActiveProfile()
+    if (!profile || connecting.current) return
+    connecting.current = true
+    setShell('probing')
+    setProbeError('')
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS)
+    try {
+      // 这个请求会被 installRequestRewrite 自动定向到激活 profile。
+      // /api/version 不需要 token，所以 401 也算「服务器活着」。
+      const r = await fetch('/api/version', { signal: ctrl.signal })
+      if (!r.ok && r.status !== 401) throw new Error(`HTTP ${r.status}`)
+      // 必须在导航之前写：退回本地壳时靠它判断「别再自动跳」。
+      markJumped()
+      location.replace(liveUrl(profile))
+    } catch (e) {
+      const aborted = e instanceof Error && e.name === 'AbortError'
+      setProbeError(aborted ? t('shell.timeout') : (e as Error).message)
+      setShell('manual')
+      connecting.current = false
+    } finally {
+      clearTimeout(timer)
+    }
+  }, [t])
+
+  // 只在启动时自动探一次；之后都由「连接」按钮触发。
+  useEffect(() => {
+    if (isNative() && getActiveProfile() && !hasJumped()) void connect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -60,6 +129,12 @@ export default function App() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // 本地壳优先于登录页：探测中不渲染登录表单（它会立刻发一个注定失败的请求），
+  // 没连上则给服务器管理 + 重试。
+  if (shell !== 'inactive') {
+    return <LiveShell state={shell} error={probeError} onConnect={() => void connect()} />
   }
 
   if (token) {

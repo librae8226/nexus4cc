@@ -68,6 +68,8 @@ Nexus 的移动端今天是 **PWA**：`public/manifest.json` + `public/sw.js`，
 - 不做离线模式。App 的价值就是连远端，无网即无意义。
 - 不做 FCM 推送。纯本地通知。
 - 不做自更新（OTA）。换版本 = 重新下载 APK。
+  （**Web 侧例外**：F-23.12 之后前端从服务器实时加载，改 Web 只 `npm run build` 即可，
+  不用重出包。原生层改动仍要重新打包。）
 - 不做传感器 / 定位 / NFC / 短信（无场景）。
 
 ---
@@ -104,6 +106,7 @@ Nexus 的移动端今天是 **PWA**：`public/manifest.json` + `public/sw.js`，
 | **F-23.6** | 生物识别门禁 | 冷启动/回前台需指纹或人脸解锁（允许设备 PIN 回退）；JWT 仍由 WebView 沙箱承载，**v1 不做 Keystore 迁移**（理由见 §10） | 关闭指纹则无法进入；多任务卡片里不泄漏终端内容 |
 | **F-23.7** | 桌面快捷方式 | 长按图标直达指定项目/频道 | 生成的快捷方式点击直达 |
 | **F-23.8** | 安全区与折叠屏适配 | `viewport-fit=cover` + 安全区内边距；展开/合上不重建 Activity、不丢 WS | 刘海/挖孔不挡内容；Fold6 开合 10 次连接不断 |
+| **F-23.12** | 实时加载（本地壳 + 服务器前端） | APK 只带一个「选服务器 + 探可达」的本地壳；连上后 WebView 整个切到服务器上那份最新前端，于是 **Web 侧改动免重新打包**。连不上就停在本地壳。附带「刷新页面」入口 | 改一行前端 → 服务器上 `npm run build` → 手机 App 刷新即生效，不动 APK；服务器不可达时停在本地壳且能改地址重试 |
 
 ### 4.2 P1 — 首版后尽快
 
@@ -270,7 +273,8 @@ Nexus 的移动端今天是 **PWA**：`public/manifest.json` + `public/sw.js`，
 
 WebView origin 是安全上下文，`sw.js` 会真的跑起来。它的 cache-first 策略会**跨版本供应旧的哈希 bundle**，造成升级后白屏/行为不一致。
 
-- 用运行期判定而非双构建：`window.Capacitor?.isNativePlatform()` 为真时跳过 `main.tsx:7-11` 和 `App.tsx:16-18` 的注册。**一个 bundle 同时服务浏览器和 App**，符合「最小变更」。
+- 用运行期判定而非双构建：`window.Capacitor?.isNativePlatform()` 为真时跳过 `main.tsx` 里的注册。**一个 bundle 同时服务浏览器和 App**，符合「最小变更」。
+- **F-23.12 之后多一个条件**：实时加载让 App 的 WebView 跑在服务器 origin 上，那里 `isNativePlatform()` 是假。照旧注册的话，「能不能及时看到服务器上的新前端」就取决于服务器那份 `sw.js` 的缓存策略了。所以壳模式（`isShellMode()`）下同样不注册 —— 判定条件写成 `!isNative() && !isShellMode()`。
 
 **改动 C — 安全区与 viewport**
 
@@ -295,6 +299,7 @@ WebView origin 是安全上下文，`sw.js` 会真的跑起来。它的 cache-fi
 | `compileSdk` / `targetSdk` | 36 | Android 16 |
 | `minSdk` | Capacitor 默认 | 两台测试机远超 |
 | ABI | `arm64-v8a` 单 ABI（release） | 体积减半。debug 额外保留 `x86_64` 以便本机模拟器 |
+| `server.allowNavigation` | **不配**（保持空） | 实时加载（F-23.12）需要让 WebView 导航到用户填的服务器 host，但 `"*"` 会把所有外链也留在 WebView 里。改为在 `MainActivity` 里自定义 `BridgeWebViewClient` 精确放行 —— 见 §6.10 |
 
 **M0 必测：混内容与 `ws://`（本方案最大的单一未知）**
 
@@ -419,6 +424,52 @@ android/app/src/main/res/xml/network_security_config.xml
 
 ---
 
+### 6.10 实时加载（F-23.12，2026-10-04）
+
+**问题**：装进 APK 的 `frontend/dist` 是打包那一刻的快照。任何 Web 侧改动
+（改个按钮、修个样式、加个面板）都要 `npm run build` → 重建 APK → 重新侧载。
+对一天改十次的自己来说，这条链路本身就是最大的成本。
+
+**做法**：APK 里那份前端退化成**本地壳**，只负责「选服务器 + 探可达」；通了就把
+WebView 整个导航到服务器，由服务器上那份最新的前端接管。
+
+```
+启动
+ └─ 本地壳（assets）                    isNative() = true
+     ├─ 有激活 profile 且本次启动没跳过 → GET /api/version 探一次（4s 超时）
+     │    ├─ 通   → location.replace(profile.url + '/?nexus_shell=1')
+     │    │         └─ 远端页面接管。isNative() = false，getApiBase() = ''
+     │    │            —— 相对路径天然同源直通，不需要任何改写
+     │    └─ 不通 → 停在本地壳：服务器管理 + 「连接」
+     └─ 没 profile / 用户刚退回来 → 同一屏
+```
+
+**关键设计**
+
+| 点 | 结论 | 理由 |
+|---|---|---|
+| 导航放行 | 自定义 `BridgeWebViewClient`，只放行「带 `nexus_shell=1` 的那次导航」+ 之后同 host 的导航（`MainActivity.java`） | Capacitor 默认把 appUrl 以外的导航丢给系统浏览器（`Bridge.launchIntent`），那样 App 只剩个浏览器壳。改用 `server.allowNavigation: ["*"]` 更省事，但那会让**所有**外链也留在 WebView 里 —— 终端里点一个链接现在是开浏览器、当前页不动（`WebLinksAddon` 走 `window.open('_blank')`，而 Capacitor 没开多窗口，`_blank` 其实是主框架导航），配成 `"*"` 就变成顶掉当前页 |
+| 远端怎么知道自己跑在 App 里 | URL 上的 `?nexus_shell=1` → `captureShellMark()` 收进 sessionStorage 并抹掉 → `isShellMode()` | 远端 origin 与本地壳不同源，localStorage 传不过去；sessionStorage 能跨同源刷新存活，且用户拿浏览器打开同一地址时互不影响 |
+| 登录态 | 远端 origin 自己存 token，允许再登一次 | 不做跨 origin 传参，复杂度不值 |
+| 刷新入口 | 设置里一项「刷新页面」= `location.reload()`，只在壳模式出现 | 实时模式下才有意义；浏览器里整块不渲染 |
+| 回服务器选择 | 设置里一项「服务器选择」= `location.replace(LOCAL_SHELL_ORIGIN + '/')` | 那个 origin 就是 Capacitor 的 appUrl，原生层天然放行，不需要再开口子 |
+| 返回键 | WebView 有历史就 `goBack()`（= 退回本地壳），没有才退出 App | 在远端页面上按返回不至于直接杀掉 App |
+| Service Worker | 壳模式下不注册 | 否则「能不能及时看到新前端」就取决于服务器那份 `sw.js` 的缓存策略了 —— 那不该是 App 行为的一部分 |
+
+**浏览器 / PWA 零影响**（硬约束）：`isNative()` 为假时整条分支不存在 —— 壳界面不渲染、
+实时加载那一段设置不渲染、SW 条件只是多一个恒假的项；`captureShellMark()` 在 URL 上
+没有标记时立即返回。同一份 bundle 继续同时服务浏览器和 App，不需要双构建。
+
+**已知边界**
+- 本地壳的 origin 由 `androidScheme` 决定，当前 `http://localhost`。**改 `androidScheme`
+  必须同步改 `baseUrl.ts` 的 `LOCAL_SHELL_ORIGIN`。**
+- `liveHost` 记在原生层、进程重启即失效；那时会重新从本地壳走一遍，正好。
+- 只解决 **Web 侧**的即时生效。原生层（插件、manifest、图标、`capacitor.config`）改动
+  仍需重新打包 —— §2.2 的「不做自更新（OTA）」依然成立。
+- 首次启动多一步：远端 origin 要重新登录一次（本地壳那份 localStorage 带不过去）。
+
+---
+
 ## 7. 里程碑
 
 **排序原则：先退掉最大的未知，再谈功能。** 两个未知最贵——混内容/`ws://` 能否走通（决定整个网络方案），以及国产 ROM 是否允许前台服务存活（决定通知功能存不存在）。两者都用最小成本先测，测完再投入。
@@ -474,6 +525,7 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 | F-23.6 生物识别 | 关闭指纹验证进不去；指纹与 PIN 回退两条路都试；验证覆盖层不能一闪而过（要挡住首帧内容） |
 | F-23.7 快捷方式 | 长按图标 → 点快捷方式 → 直达指定项目 |
 | F-23.8 折叠屏 | X Fold6 开合 10 次，全程 WS 不断（`adb logcat` 确认无 Activity 重建）；刘海区域无遮挡 |
+| F-23.12 实时加载 | ① 服务器上改一行前端并 build，App 内「刷新」即变，**不换 APK**；② 关掉服务器 → 冷启动停在本地壳、能改地址、能重连；③ 远端页面上按返回键回到本地壳；④ 终端里点一个外链仍旧开系统浏览器（不被顶掉当前页） |
 
 **调试手段**
 - `chrome://inspect`（release 构建已关调试，用 debug 包）

@@ -49,6 +49,15 @@
     "wrongPassword": "密码错误",
     "connectionFailed": "连接失败"
   },
+  "shell": {
+    "connecting": "正在连接 {{name}}…",
+    "connectingNoServer": "正在启动…",
+    "offlineTitle": "没连上服务器",
+    "offlineHint": "{{name}} 没有响应。检查地址和网络后重试。",
+    "offlineNoServer": "还没有配置服务器，在下面添加一个。",
+    "connect": "连接",
+    "timeout": "连接超时"
+  },
   "workspace": {
     "title": "选择工作目录",
     "currentSelection": "当前选择",
@@ -207,7 +216,11 @@
     "viewRelease": "查看 Release →",
     "copyUpdateCmd": "复制更新命令",
     "dirtyWarning": "本地有未提交的修改，请先处理后再升级。",
-    "checkFailed": "无法连接 GitHub"
+    "checkFailed": "无法连接 GitHub",
+    "liveSection": "实时加载",
+    "refresh": "刷新页面",
+    "backToShell": "服务器选择",
+    "liveHint": "这一页是从你的服务器上加载的，Web 侧的改动刷新即可生效。「服务器选择」回到 App 自己的那一屏（Android 返回键同样是这个作用）。"
   },
   "apiConfig": {
     "title": "API 配置管理",

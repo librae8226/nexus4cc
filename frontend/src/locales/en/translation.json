@@ -49,6 +49,15 @@
     "wrongPassword": "Wrong password",
     "connectionFailed": "Connection failed"
   },
+  "shell": {
+    "connecting": "Connecting to {{name}}…",
+    "connectingNoServer": "Starting…",
+    "offlineTitle": "Cannot reach the server",
+    "offlineHint": "{{name}} did not answer. Check the address and your network, then try again.",
+    "offlineNoServer": "No server configured yet. Add one below.",
+    "connect": "Connect",
+    "timeout": "Timed out"
+  },
   "workspace": {
     "title": "Select Workspace",
     "currentSelection": "Current Selection",
@@ -207,7 +216,11 @@
     "viewRelease": "View Release →",
     "copyUpdateCmd": "Copy Update Command",
     "dirtyWarning": "Local changes detected — please commit or stash before updating.",
-    "checkFailed": "Could not reach GitHub"
+    "checkFailed": "Could not reach GitHub",
+    "liveSection": "Live frontend",
+    "refresh": "Refresh page",
+    "backToShell": "Server selection",
+    "liveHint": "This page is loaded from your server, so web changes apply on the next refresh. \"Server selection\" goes back to the app's own screen (the Android back button does the same)."
   },
   "apiConfig": {
     "title": "API Config Management",

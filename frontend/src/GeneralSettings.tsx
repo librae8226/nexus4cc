@@ -3,6 +3,7 @@ import AuditLog from './AuditLog'
 import { useTranslation } from 'react-i18next'
 import GhostShield from './GhostShield'
 import { Icon } from './icons'
+import { isShellMode, LOCAL_SHELL_ORIGIN } from './baseUrl'
 
 interface Props {
   token: string
@@ -34,6 +35,12 @@ export default function GeneralSettings({ token, themeMode, onToggleTheme, onClo
   const [restoring, setRestoring] = useState(false)
   const [restoreMsg, setRestoreMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const fmtTime = (iso?: string) => (iso ? new Date(iso).toLocaleString() : '')
+
+  // 实时加载（F-23.12）：刷新 = 重新向服务器要一次前端；返回 = 回到本地壳
+  // （服务器管理那一屏）。回本地壳走的是 Capacitor 的 appUrl（http://localhost），
+  // 与壳同源，原生层不需要为它额外放行。
+  const handleRefresh = () => location.reload()
+  const handleBackToShell = () => location.replace(`${LOCAL_SHELL_ORIGIN}/`)
 
   useEffect(() => {
     fetch('/api/version', { headers: { Authorization: `Bearer ${token}` } })
@@ -158,6 +165,36 @@ export default function GeneralSettings({ token, themeMode, onToggleTheme, onClo
               </div>
             </div>
           </div>
+
+          {/* 实时加载（F-23.12）。只有「App 的本地壳跳到服务器」加载来的这份
+              页面才显示 —— 它是 App 里唯一一处能主动要个新前端的地方。
+              浏览器/PWA 里 isShellMode() 恒为假，这一段整块不出现。 */}
+          {isShellMode() && (
+            <div className="border-t border-nexus-border pt-4">
+              <div className="text-[11px] text-nexus-text-2 tracking-wider uppercase mb-3">
+                {t('settings.liveSection')}
+              </div>
+              <div className="flex flex-col gap-2">
+                <button
+                  className="flex items-center gap-1.5 bg-transparent border border-nexus-border rounded-md text-nexus-text text-sm px-3 py-2 cursor-pointer"
+                  onPointerDown={handleRefresh}
+                >
+                  <Icon name="refresh" size={14} />
+                  <span>{t('settings.refresh')}</span>
+                </button>
+                <button
+                  className="flex items-center gap-1.5 bg-transparent border border-nexus-border rounded-md text-nexus-text text-sm px-3 py-2 cursor-pointer"
+                  onPointerDown={handleBackToShell}
+                >
+                  <Icon name="arrowRight" size={14} />
+                  <span>{t('settings.backToShell')}</span>
+                </button>
+              </div>
+              <p className="text-sm text-nexus-text-2 mt-2 leading-relaxed">
+                {t('settings.liveHint')}
+              </p>
+            </div>
+          )}
 
           {/* API Config Profiles section */}
           <div className="border-t border-nexus-border pt-4">
